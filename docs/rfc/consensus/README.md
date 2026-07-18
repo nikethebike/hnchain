@@ -22,3 +22,4 @@ Current RFC drafts:
 - [Validator Set](validator-set.md)
 - [Leader Selection](leader-selection.md)
 - [Vote Messages And Quorum Certificates](vote-messages-and-quorum-certificates.md)
+- [Finality Rules](finality-rules.md)

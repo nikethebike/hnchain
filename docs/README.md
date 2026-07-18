@@ -28,6 +28,7 @@ docs/
     ADR-0010-validator-set-model.md
     ADR-0011-leader-election.md
     ADR-0012-vote-messages-and-quorum-certificates.md
+    ADR-0013-finality-rules.md
 
   specs/
     core/
@@ -47,6 +48,7 @@ docs/
       validator-set.md
       leader-selection.md
       vote-messages-and-quorum-certificates.md
+      finality-rules.md
     networking/
     storage/
     rpc/

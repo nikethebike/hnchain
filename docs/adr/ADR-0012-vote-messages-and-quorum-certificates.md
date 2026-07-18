@@ -366,3 +366,4 @@ compatibility analysis.
 ## Related Specifications
 
 - `docs/rfc/consensus/vote-messages-and-quorum-certificates.md`
+- `docs/rfc/consensus/finality-rules.md`

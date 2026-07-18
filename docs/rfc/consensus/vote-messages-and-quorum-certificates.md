@@ -14,6 +14,7 @@ Depends On:
 - `docs/adr/ADR-0010-validator-set-model.md`
 - `docs/adr/ADR-0011-leader-election.md`
 - `docs/adr/ADR-0012-vote-messages-and-quorum-certificates.md`
+- `docs/adr/ADR-0013-finality-rules.md`
 
 ## 1. Purpose
 

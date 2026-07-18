@@ -37,6 +37,7 @@ Core documents:
 - [Validator Set Model](docs/adr/ADR-0010-validator-set-model.md)
 - [Leader Election](docs/adr/ADR-0011-leader-election.md)
 - [Vote Messages And Quorum Certificates](docs/adr/ADR-0012-vote-messages-and-quorum-certificates.md)
+- [Finality Rules](docs/adr/ADR-0013-finality-rules.md)
 
 ## Specification First
 

@@ -44,7 +44,8 @@ Document status summary:
 - Accepted: protocol invariants and extended account model.
 - Proposed: cryptographic identity, address format, canonical serialization,
   hash profiles, transaction format, state tree, block format, consensus
-  architecture, validator set model, leader election, and vote certificates.
+  architecture, validator set model, leader election, vote certificates, and
+  finality rules.
 - Draft: economics, HNVM, P2P, storage, governance, security, standards,
   interoperability, performance, ecosystem, and roadmap.
 
@@ -5973,6 +5974,7 @@ Primary HNChain documents:
 - `docs/adr/ADR-0010-validator-set-model.md`
 - `docs/adr/ADR-0011-leader-election.md`
 - `docs/adr/ADR-0012-vote-messages-and-quorum-certificates.md`
+- `docs/adr/ADR-0013-finality-rules.md`
 - `docs/specs/core/account-state.md`
 - `docs/specs/core/cryptographic-identity.md`
 - `docs/specs/core/address-format.md`
@@ -5986,6 +5988,7 @@ Primary HNChain documents:
 - `docs/rfc/consensus/validator-set.md`
 - `docs/rfc/consensus/leader-selection.md`
 - `docs/rfc/consensus/vote-messages-and-quorum-certificates.md`
+- `docs/rfc/consensus/finality-rules.md`
 - `docs/governance/constitution.md`
 - `docs/security/README.md`
 - `docs/standards/README.md`
@@ -6059,6 +6062,7 @@ Proposed:
 - validator set model
 - leader election
 - vote messages and quorum certificates
+- finality rules
 
 Not yet specified:
 
