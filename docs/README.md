@@ -36,6 +36,7 @@ docs/
     ADR-0018-p2p-protocol-messages.md
     ADR-0019-storage-state-interfaces.md
     ADR-0020-implementation-language.md
+    ADR-0021-rust-workspace-policy.md
 
   specs/
     core/

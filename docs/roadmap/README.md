@@ -38,6 +38,7 @@ implementation direction is Rust.
 Reference:
 
 - `docs/adr/ADR-0020-implementation-language.md`
+- `docs/adr/ADR-0021-rust-workspace-policy.md`
 
 ## Release Flow
 

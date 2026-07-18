@@ -47,7 +47,7 @@ Document status summary:
   architecture, validator set model, leader election, vote certificates,
   finality rules, fork-choice rules, slashing/accountability, synchronization
   checkpoints, light-client finality proofs, P2P protocol messages,
-  storage/state interfaces, and implementation language.
+  storage/state interfaces, implementation language, and Rust workspace policy.
 - Draft: economics, HNVM, P2P, storage, governance, security, standards,
   interoperability, performance, ecosystem, and roadmap.
 
@@ -5984,6 +5984,7 @@ Primary HNChain documents:
 - `docs/adr/ADR-0018-p2p-protocol-messages.md`
 - `docs/adr/ADR-0019-storage-state-interfaces.md`
 - `docs/adr/ADR-0020-implementation-language.md`
+- `docs/adr/ADR-0021-rust-workspace-policy.md`
 - `docs/specs/core/account-state.md`
 - `docs/specs/core/cryptographic-identity.md`
 - `docs/specs/core/address-format.md`
@@ -6085,6 +6086,7 @@ Proposed:
 - P2P protocol messages
 - storage and state interfaces
 - implementation language
+- Rust workspace policy
 
 Not yet specified:
 

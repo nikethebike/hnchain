@@ -45,6 +45,7 @@ Core documents:
 - [P2P Protocol Messages](docs/adr/ADR-0018-p2p-protocol-messages.md)
 - [Storage And State Interfaces](docs/adr/ADR-0019-storage-state-interfaces.md)
 - [Implementation Language](docs/adr/ADR-0020-implementation-language.md)
+- [Rust Workspace Policy](docs/adr/ADR-0021-rust-workspace-policy.md)
 
 ## Specification First
 
