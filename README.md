@@ -10,7 +10,7 @@ The project is currently in the architecture and specification phase.
 
 Status: Draft documentation and architectural specifications.
 
-Protocol implementation has not started.
+Protocol implementation is limited to initial `hn-core` primitive types.
 
 The repository contains an initial Rust workspace scaffold for the future
 reference implementation.

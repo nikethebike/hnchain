@@ -1,0 +1,103 @@
+{
+  "schema": "hnchain.conformance.core.primitive-types",
+  "version": "0.1.0",
+  "status": "proposed",
+  "numeric": {
+    "block_height": {
+      "min": 0,
+      "max": "18446744073709551615",
+      "genesis": 0
+    },
+    "round": {
+      "min": 0,
+      "max": "18446744073709551615",
+      "first": 0
+    },
+    "epoch": {
+      "min": 0,
+      "max": "18446744073709551615",
+      "genesis": 0
+    },
+    "unix_time_millis": {
+      "min": 0,
+      "max": "18446744073709551615",
+      "unix_epoch": 0
+    },
+    "byte_length": {
+      "min": 0,
+      "max": 4294967295
+    },
+    "account_nonce": {
+      "min": 0,
+      "max": "18446744073709551615",
+      "initial": 0
+    }
+  },
+  "protocol_versions": {
+    "ordered": [
+      {
+        "major": 1,
+        "minor": 1,
+        "patch": 65535
+      },
+      {
+        "major": 1,
+        "minor": 2,
+        "patch": 0
+      },
+      {
+        "major": 2,
+        "minor": 0,
+        "patch": 0
+      }
+    ]
+  },
+  "chain_ids": {
+    "valid": [
+      "hn-mainnet",
+      "hn-testnet-1",
+      "hn-devnet-local",
+      "a",
+      "z9",
+      "hn-123"
+    ],
+    "invalid": [
+      {
+        "value": "",
+        "error": "chain_id_empty"
+      },
+      {
+        "value": "1-mainnet",
+        "error": "chain_id_invalid_start"
+      },
+      {
+        "value": "HN-mainnet",
+        "error": "chain_id_invalid_start"
+      },
+      {
+        "value": "hn-mainnet-",
+        "error": "chain_id_invalid_end"
+      },
+      {
+        "value": "hn--mainnet",
+        "error": "chain_id_consecutive_hyphen"
+      },
+      {
+        "value": "hn_mainnet",
+        "error": "chain_id_invalid_byte"
+      },
+      {
+        "value": "hn-mainnet-with-a-name-that-is-too-long",
+        "error": "chain_id_too_long"
+      },
+      {
+        "value": "hn-mainnet-\u03b1",
+        "error": "chain_id_invalid_byte"
+      }
+    ],
+    "byte_order": [
+      "hn-mainnet",
+      "hn-testnet-1"
+    ]
+  }
+}

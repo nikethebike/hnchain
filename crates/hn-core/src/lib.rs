@@ -3,12 +3,26 @@
 
 //! Core domain primitives for HNChain.
 //!
-//! This crate is intentionally limited to the public crate boundary defined by
-//! ADR-0021. Protocol behavior is added only after accepted specifications and
-//! conformance tests exist.
+//! This crate contains small, explicit primitive types shared across HNChain
+//! modules. It does not define consensus behavior, canonical serialization, or
+//! runtime policy by itself.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_boundary_compiles() {}
-}
+mod chain;
+mod epoch;
+mod error;
+mod height;
+mod length;
+mod nonce;
+mod round;
+mod time;
+mod version;
+
+pub use chain::ChainId;
+pub use epoch::Epoch;
+pub use error::{PrimitiveError, PrimitiveResult};
+pub use height::BlockHeight;
+pub use length::ByteLength;
+pub use nonce::AccountNonce;
+pub use round::Round;
+pub use time::UnixTimeMillis;
+pub use version::ProtocolVersion;

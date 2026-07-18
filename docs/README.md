@@ -117,6 +117,8 @@ crates/
 
 tests/
   conformance/
+    core/
+      primitive-types-v0.1.json
   integration/
 ```
 
