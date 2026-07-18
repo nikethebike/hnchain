@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/hn-core",
+    "crates/hn-crypto",
+    "crates/hn-hncs",
+    "crates/hn-state",
+    "crates/hn-storage",
+    "crates/hn-consensus",
+    "crates/hn-network",
+    "crates/hn-node",
+    "crates/hn-rpc",
+    "crates/hn-cli",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97.1"
+license = "Apache-2.0"
+repository = "https://github.com/nikethebike/hnchain"
+authors = ["HNChain Contributors"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+rust_2018_idioms = "deny"
+unused_lifetimes = "deny"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

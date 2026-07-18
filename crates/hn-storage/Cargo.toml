@@ -1,0 +1,16 @@
+[package]
+name = "hn-storage"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "HNChain storage engine abstractions and adapters."
+
+[dependencies]
+hn-core = { path = "../hn-core" }
+hn-state = { path = "../hn-state" }
+
+[lints]
+workspace = true

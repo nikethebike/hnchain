@@ -1,0 +1,15 @@
+[package]
+name = "hn-crypto"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "HNChain cryptographic identity and primitive wrappers."
+
+[dependencies]
+hn-core = { path = "../hn-core" }
+
+[lints]
+workspace = true

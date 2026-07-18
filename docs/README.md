@@ -99,6 +99,22 @@ docs/
 
   developer/
     README.md
+
+crates/
+  hn-core/
+  hn-crypto/
+  hn-hncs/
+  hn-state/
+  hn-storage/
+  hn-consensus/
+  hn-network/
+  hn-node/
+  hn-rpc/
+  hn-cli/
+
+tests/
+  conformance/
+  integration/
 ```
 
 ## Document Families

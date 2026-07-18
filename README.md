@@ -10,7 +10,10 @@ The project is currently in the architecture and specification phase.
 
 Status: Draft documentation and architectural specifications.
 
-Production implementation has not started.
+Protocol implementation has not started.
+
+The repository contains an initial Rust workspace scaffold for the future
+reference implementation.
 
 The current whitepaper candidate is:
 
@@ -57,6 +60,24 @@ architecture -> specifications -> review -> implementation -> testing -> audit
 
 Code must not define protocol behavior by accident. Protocol behavior is defined
 by accepted specifications.
+
+## Development
+
+The Rust workspace is intentionally minimal at this stage.
+
+Required toolchain:
+
+- Rust `1.97.1`
+- `rustfmt`
+- `clippy`
+
+Expected checks:
+
+```text
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets --all-features
+```
 
 ## Licensing
 

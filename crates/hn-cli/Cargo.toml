@@ -1,0 +1,16 @@
+[package]
+name = "hn-cli"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "HNChain command-line interface boundary."
+
+[dependencies]
+hn-node = { path = "../hn-node" }
+hn-rpc = { path = "../hn-rpc" }
+
+[lints]
+workspace = true

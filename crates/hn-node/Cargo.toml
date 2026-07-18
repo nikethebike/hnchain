@@ -1,0 +1,18 @@
+[package]
+name = "hn-node"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "HNChain node composition layer."
+
+[dependencies]
+hn-consensus = { path = "../hn-consensus" }
+hn-core = { path = "../hn-core" }
+hn-network = { path = "../hn-network" }
+hn-storage = { path = "../hn-storage" }
+
+[lints]
+workspace = true
