@@ -352,3 +352,4 @@ major protocol change and requires explicit migration rules.
 ## Related Specifications
 
 - `docs/specs/core/state-tree.md`
+- `docs/specs/core/block-format.md`

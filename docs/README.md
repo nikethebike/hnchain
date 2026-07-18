@@ -23,6 +23,7 @@ docs/
     ADR-0005-hash-algorithms.md
     ADR-0006-transaction-format.md
     ADR-0007-state-tree.md
+    ADR-0008-block-format.md
 
   specs/
     core/
@@ -34,6 +35,7 @@ docs/
       genesis.md
       transaction-format.md
       state-tree.md
+      block-format.md
 
   rfc/
     consensus/

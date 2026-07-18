@@ -16,13 +16,15 @@ commitments, and security requirements.
 
 This document does not define the final block header format, final hash
 algorithm, final serialization encoding, genesis allocation, validator set, or
-state tree structure.
+state tree structure. The final relationship between genesis data and the normal
+block envelope is defined by the block format specification.
 
 This specification is constrained by:
 
 - `docs/adr/ADR-0000-protocol-invariants.md`
 - `docs/adr/ADR-0004-canonical-serialization.md`
 - `docs/adr/ADR-0005-hash-algorithms.md`
+- `docs/adr/ADR-0008-block-format.md`
 
 ## 2. Design Goals
 

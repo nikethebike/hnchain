@@ -32,6 +32,7 @@ Core documents:
 - [Hash Algorithms](docs/adr/ADR-0005-hash-algorithms.md)
 - [Transaction Format](docs/adr/ADR-0006-transaction-format.md)
 - [State Tree](docs/adr/ADR-0007-state-tree.md)
+- [Block Format](docs/adr/ADR-0008-block-format.md)
 
 ## Specification First
 
