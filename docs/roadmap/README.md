@@ -30,6 +30,15 @@ Research
 
 Each phase requires explicit exit criteria.
 
+## Implementation Language
+
+The proposed primary language for the first node prototype and reference
+implementation direction is Rust.
+
+Reference:
+
+- `docs/adr/ADR-0020-implementation-language.md`
+
 ## Release Flow
 
 ```text

@@ -44,6 +44,7 @@ Core documents:
 - [Light-Client Finality Proofs](docs/adr/ADR-0017-light-client-finality-proofs.md)
 - [P2P Protocol Messages](docs/adr/ADR-0018-p2p-protocol-messages.md)
 - [Storage And State Interfaces](docs/adr/ADR-0019-storage-state-interfaces.md)
+- [Implementation Language](docs/adr/ADR-0020-implementation-language.md)
 
 ## Specification First
 

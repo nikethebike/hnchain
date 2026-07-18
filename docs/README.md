@@ -35,6 +35,7 @@ docs/
     ADR-0017-light-client-finality-proofs.md
     ADR-0018-p2p-protocol-messages.md
     ADR-0019-storage-state-interfaces.md
+    ADR-0020-implementation-language.md
 
   specs/
     core/
