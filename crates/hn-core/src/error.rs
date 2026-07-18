@@ -70,7 +70,10 @@ impl fmt::Display for PrimitiveError {
                 "chain id contains invalid byte {byte} at index {index}"
             ),
             Self::ConsecutiveHyphenInChainId { index } => {
-                write!(formatter, "chain id contains consecutive hyphen at index {index}")
+                write!(
+                    formatter,
+                    "chain id contains consecutive hyphen at index {index}"
+                )
             }
             Self::ByteLengthOverflow { value, max } => {
                 write!(formatter, "byte length {value} exceeds maximum {max}")

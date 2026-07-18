@@ -43,7 +43,10 @@ mod tests {
 
     #[test]
     fn checked_next_increments() {
-        assert_eq!(AccountNonce::new(4).checked_next(), Ok(AccountNonce::new(5)));
+        assert_eq!(
+            AccountNonce::new(4).checked_next(),
+            Ok(AccountNonce::new(5))
+        );
     }
 
     #[test]

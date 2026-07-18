@@ -43,7 +43,10 @@ mod tests {
 
     #[test]
     fn checked_next_increments() {
-        assert_eq!(BlockHeight::new(41).checked_next(), Ok(BlockHeight::new(42)));
+        assert_eq!(
+            BlockHeight::new(41).checked_next(),
+            Ok(BlockHeight::new(42))
+        );
     }
 
     #[test]

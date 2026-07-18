@@ -42,9 +42,7 @@ mod tests {
 
     #[test]
     fn orders_lexicographically() {
-        assert!(
-            ProtocolVersion::new(1, 2, 0) > ProtocolVersion::new(1, 1, u16::MAX)
-        );
+        assert!(ProtocolVersion::new(1, 2, 0) > ProtocolVersion::new(1, 1, u16::MAX));
         assert!(ProtocolVersion::new(2, 0, 0) > ProtocolVersion::new(1, u16::MAX, u16::MAX));
     }
 

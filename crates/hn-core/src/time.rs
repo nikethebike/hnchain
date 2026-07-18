@@ -30,6 +30,9 @@ mod tests {
 
     #[test]
     fn exposes_millis() {
-        assert_eq!(UnixTimeMillis::from_millis(1_700_000_000_000).as_millis(), 1_700_000_000_000);
+        assert_eq!(
+            UnixTimeMillis::from_millis(1_700_000_000_000).as_millis(),
+            1_700_000_000_000
+        );
     }
 }

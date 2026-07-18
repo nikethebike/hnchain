@@ -111,19 +111,19 @@ fn validate_chain_id(value: &str) -> PrimitiveResult<()> {
     Ok(())
 }
 
-const fn is_ascii_lowercase_letter(byte: u8) -> bool {
-    matches!(byte, b'a'..=b'z')
+fn is_ascii_lowercase_letter(byte: u8) -> bool {
+    byte.is_ascii_lowercase()
 }
 
-const fn is_ascii_digit(byte: u8) -> bool {
-    matches!(byte, b'0'..=b'9')
+fn is_ascii_digit(byte: u8) -> bool {
+    byte.is_ascii_digit()
 }
 
-const fn is_ascii_lowercase_letter_or_digit(byte: u8) -> bool {
+fn is_ascii_lowercase_letter_or_digit(byte: u8) -> bool {
     is_ascii_lowercase_letter(byte) || is_ascii_digit(byte)
 }
 
-const fn is_valid_chain_id_byte(byte: u8) -> bool {
+fn is_valid_chain_id_byte(byte: u8) -> bool {
     is_ascii_lowercase_letter_or_digit(byte) || byte == b'-'
 }
 
@@ -150,7 +150,10 @@ mod tests {
     fn rejects_too_long_chain_id() {
         assert_eq!(
             ChainId::new("hn-mainnet-with-a-name-that-is-too-long"),
-            Err(PrimitiveError::ChainIdTooLong { actual: 39, max: 32 })
+            Err(PrimitiveError::ChainIdTooLong {
+                actual: 39,
+                max: 32
+            })
         );
     }
 
