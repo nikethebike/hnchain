@@ -375,3 +375,4 @@ explicit migration planning.
 ## Related Specifications
 
 - `docs/rfc/consensus/consensus-architecture.md`
+- `docs/rfc/consensus/validator-set.md`

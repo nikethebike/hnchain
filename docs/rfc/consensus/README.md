@@ -19,3 +19,4 @@ Required future RFCs include:
 Current RFC drafts:
 
 - [Consensus Architecture](consensus-architecture.md)
+- [Validator Set](validator-set.md)

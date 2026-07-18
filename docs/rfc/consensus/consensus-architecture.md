@@ -13,6 +13,7 @@ Depends On:
 - `docs/adr/ADR-0007-state-tree.md`
 - `docs/adr/ADR-0008-block-format.md`
 - `docs/adr/ADR-0009-consensus-architecture.md`
+- `docs/adr/ADR-0010-validator-set-model.md`
 
 ## 1. Purpose
 

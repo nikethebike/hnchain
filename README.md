@@ -34,6 +34,7 @@ Core documents:
 - [State Tree](docs/adr/ADR-0007-state-tree.md)
 - [Block Format](docs/adr/ADR-0008-block-format.md)
 - [Consensus Architecture](docs/adr/ADR-0009-consensus-architecture.md)
+- [Validator Set Model](docs/adr/ADR-0010-validator-set-model.md)
 
 ## Specification First
 

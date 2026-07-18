@@ -25,6 +25,7 @@ docs/
     ADR-0007-state-tree.md
     ADR-0008-block-format.md
     ADR-0009-consensus-architecture.md
+    ADR-0010-validator-set-model.md
 
   specs/
     core/
@@ -41,6 +42,7 @@ docs/
   rfc/
     consensus/
       consensus-architecture.md
+      validator-set.md
     networking/
     storage/
     rpc/
