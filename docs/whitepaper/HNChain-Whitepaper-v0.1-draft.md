@@ -45,8 +45,8 @@ Document status summary:
 - Proposed: cryptographic identity, address format, canonical serialization,
   hash profiles, transaction format, state tree, block format, consensus
   architecture, validator set model, leader election, vote certificates,
-  finality rules, fork-choice rules, slashing/accountability, and
-  synchronization checkpoints.
+  finality rules, fork-choice rules, slashing/accountability, synchronization
+  checkpoints, and light-client finality proofs.
 - Draft: economics, HNVM, P2P, storage, governance, security, standards,
   interoperability, performance, ecosystem, and roadmap.
 
@@ -5979,6 +5979,7 @@ Primary HNChain documents:
 - `docs/adr/ADR-0014-fork-choice-rules.md`
 - `docs/adr/ADR-0015-slashing-and-accountability.md`
 - `docs/adr/ADR-0016-synchronization-checkpoints.md`
+- `docs/adr/ADR-0017-light-client-finality-proofs.md`
 - `docs/specs/core/account-state.md`
 - `docs/specs/core/cryptographic-identity.md`
 - `docs/specs/core/address-format.md`
@@ -5996,6 +5997,7 @@ Primary HNChain documents:
 - `docs/rfc/consensus/fork-choice-rules.md`
 - `docs/rfc/consensus/slashing-and-accountability.md`
 - `docs/rfc/consensus/synchronization-checkpoints.md`
+- `docs/rfc/consensus/light-client-finality-proofs.md`
 - `docs/governance/constitution.md`
 - `docs/security/README.md`
 - `docs/standards/README.md`
@@ -6073,6 +6075,7 @@ Proposed:
 - fork-choice rules
 - slashing and accountability
 - synchronization checkpoints
+- light-client finality proofs
 
 Not yet specified:
 

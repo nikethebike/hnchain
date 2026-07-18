@@ -26,3 +26,4 @@ Current RFC drafts:
 - [Fork-Choice Rules](fork-choice-rules.md)
 - [Slashing And Accountability](slashing-and-accountability.md)
 - [Synchronization Checkpoints](synchronization-checkpoints.md)
+- [Light-Client Finality Proofs](light-client-finality-proofs.md)

@@ -32,6 +32,7 @@ docs/
     ADR-0014-fork-choice-rules.md
     ADR-0015-slashing-and-accountability.md
     ADR-0016-synchronization-checkpoints.md
+    ADR-0017-light-client-finality-proofs.md
 
   specs/
     core/
@@ -55,6 +56,7 @@ docs/
       fork-choice-rules.md
       slashing-and-accountability.md
       synchronization-checkpoints.md
+      light-client-finality-proofs.md
     networking/
     storage/
     rpc/

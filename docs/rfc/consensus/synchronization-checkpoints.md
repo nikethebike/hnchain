@@ -16,6 +16,7 @@ Depends On:
 - `docs/adr/ADR-0013-finality-rules.md`
 - `docs/adr/ADR-0015-slashing-and-accountability.md`
 - `docs/adr/ADR-0016-synchronization-checkpoints.md`
+- `docs/adr/ADR-0017-light-client-finality-proofs.md`
 
 ## 1. Purpose
 

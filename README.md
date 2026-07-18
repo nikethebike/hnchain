@@ -41,6 +41,7 @@ Core documents:
 - [Fork-Choice Rules](docs/adr/ADR-0014-fork-choice-rules.md)
 - [Slashing And Accountability](docs/adr/ADR-0015-slashing-and-accountability.md)
 - [Synchronization Checkpoints](docs/adr/ADR-0016-synchronization-checkpoints.md)
+- [Light-Client Finality Proofs](docs/adr/ADR-0017-light-client-finality-proofs.md)
 
 ## Specification First
 

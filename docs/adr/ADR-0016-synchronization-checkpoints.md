@@ -274,3 +274,4 @@ storage specifications.
 ## Related Specifications
 
 - `docs/rfc/consensus/synchronization-checkpoints.md`
+- `docs/rfc/consensus/light-client-finality-proofs.md`
