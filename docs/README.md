@@ -34,6 +34,7 @@ docs/
     ADR-0016-synchronization-checkpoints.md
     ADR-0017-light-client-finality-proofs.md
     ADR-0018-p2p-protocol-messages.md
+    ADR-0019-storage-state-interfaces.md
 
   specs/
     core/
@@ -61,6 +62,7 @@ docs/
     networking/
       p2p-protocol-messages.md
     storage/
+      storage-state-interfaces.md
     rpc/
     wallet/
     explorer/

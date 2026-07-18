@@ -43,6 +43,7 @@ Core documents:
 - [Synchronization Checkpoints](docs/adr/ADR-0016-synchronization-checkpoints.md)
 - [Light-Client Finality Proofs](docs/adr/ADR-0017-light-client-finality-proofs.md)
 - [P2P Protocol Messages](docs/adr/ADR-0018-p2p-protocol-messages.md)
+- [Storage And State Interfaces](docs/adr/ADR-0019-storage-state-interfaces.md)
 
 ## Specification First
 

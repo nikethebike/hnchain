@@ -46,7 +46,8 @@ Document status summary:
   hash profiles, transaction format, state tree, block format, consensus
   architecture, validator set model, leader election, vote certificates,
   finality rules, fork-choice rules, slashing/accountability, synchronization
-  checkpoints, light-client finality proofs, and P2P protocol messages.
+  checkpoints, light-client finality proofs, P2P protocol messages, and
+  storage/state interfaces.
 - Draft: economics, HNVM, P2P, storage, governance, security, standards,
   interoperability, performance, ecosystem, and roadmap.
 
@@ -5981,6 +5982,7 @@ Primary HNChain documents:
 - `docs/adr/ADR-0016-synchronization-checkpoints.md`
 - `docs/adr/ADR-0017-light-client-finality-proofs.md`
 - `docs/adr/ADR-0018-p2p-protocol-messages.md`
+- `docs/adr/ADR-0019-storage-state-interfaces.md`
 - `docs/specs/core/account-state.md`
 - `docs/specs/core/cryptographic-identity.md`
 - `docs/specs/core/address-format.md`
@@ -6000,6 +6002,7 @@ Primary HNChain documents:
 - `docs/rfc/consensus/synchronization-checkpoints.md`
 - `docs/rfc/consensus/light-client-finality-proofs.md`
 - `docs/rfc/networking/p2p-protocol-messages.md`
+- `docs/rfc/storage/storage-state-interfaces.md`
 - `docs/governance/constitution.md`
 - `docs/security/README.md`
 - `docs/standards/README.md`
@@ -6079,6 +6082,7 @@ Proposed:
 - synchronization checkpoints
 - light-client finality proofs
 - P2P protocol messages
+- storage and state interfaces
 
 Not yet specified:
 

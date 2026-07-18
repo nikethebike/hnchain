@@ -11,6 +11,7 @@ Depends On:
 - `docs/adr/ADR-0004-canonical-serialization.md`
 - `docs/adr/ADR-0005-hash-algorithms.md`
 - `docs/adr/ADR-0006-transaction-format.md`
+- `docs/adr/ADR-0019-storage-state-interfaces.md`
 
 ## 1. Purpose
 
@@ -379,4 +380,3 @@ Test vectors are mandatory before production implementation.
 - rollback window
 - storage backend layout recommendations
 - state rent economics
-

@@ -353,3 +353,4 @@ major protocol change and requires explicit migration rules.
 
 - `docs/specs/core/state-tree.md`
 - `docs/specs/core/block-format.md`
+- `docs/rfc/storage/storage-state-interfaces.md`
