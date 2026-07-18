@@ -49,6 +49,7 @@ Core documents:
 - [Storage And State Interfaces](docs/adr/ADR-0019-storage-state-interfaces.md)
 - [Implementation Language](docs/adr/ADR-0020-implementation-language.md)
 - [Rust Workspace Policy](docs/adr/ADR-0021-rust-workspace-policy.md)
+- [Core Primitive Types RFC](docs/rfc/core/primitive-types.md)
 
 ## Specification First
 

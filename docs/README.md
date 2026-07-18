@@ -51,6 +51,9 @@ docs/
       block-format.md
 
   rfc/
+    core/
+      README.md
+      primitive-types.md
     consensus/
       consensus-architecture.md
       validator-set.md
