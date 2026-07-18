@@ -326,6 +326,12 @@ Adding a new hash profile can be backward-compatible only if:
 Changing the hash profile for an existing consensus object version is a major
 protocol change.
 
+## Related Specifications
+
+- `docs/adr/ADR-0006-transaction-format.md`
+- `docs/specs/core/hash-algorithms.md`
+- `docs/specs/core/transaction-format.md`
+
 ## Open Decisions
 
 - final primary consensus hash profile

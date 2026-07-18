@@ -21,6 +21,7 @@ docs/
     ADR-0003-address-format.md
     ADR-0004-canonical-serialization.md
     ADR-0005-hash-algorithms.md
+    ADR-0006-transaction-format.md
 
   specs/
     core/
@@ -30,6 +31,7 @@ docs/
       canonical-serialization.md
       hash-algorithms.md
       genesis.md
+      transaction-format.md
 
   rfc/
     consensus/
