@@ -285,3 +285,4 @@ Changing validator set update rules requires explicit light-client migration.
 ## Related Specifications
 
 - `docs/rfc/consensus/light-client-finality-proofs.md`
+- `docs/rfc/networking/p2p-protocol-messages.md`

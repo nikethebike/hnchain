@@ -4,6 +4,7 @@ Networking RFCs define peer-to-peer protocols and network behavior.
 
 Required future RFCs include:
 
+- P2P protocol messages
 - transport abstraction
 - peer identity
 - handshake protocol
@@ -16,3 +17,7 @@ Required future RFCs include:
 - compression profiles
 - encryption profiles
 - DoS protection
+
+Current RFC drafts:
+
+- [P2P Protocol Messages](p2p-protocol-messages.md)

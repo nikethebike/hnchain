@@ -33,6 +33,7 @@ docs/
     ADR-0015-slashing-and-accountability.md
     ADR-0016-synchronization-checkpoints.md
     ADR-0017-light-client-finality-proofs.md
+    ADR-0018-p2p-protocol-messages.md
 
   specs/
     core/
@@ -58,6 +59,7 @@ docs/
       synchronization-checkpoints.md
       light-client-finality-proofs.md
     networking/
+      p2p-protocol-messages.md
     storage/
     rpc/
     wallet/
