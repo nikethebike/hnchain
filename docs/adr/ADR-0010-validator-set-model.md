@@ -368,3 +368,4 @@ rules and light-client compatibility analysis.
 ## Related Specifications
 
 - `docs/rfc/consensus/validator-set.md`
+- `docs/rfc/consensus/leader-selection.md`

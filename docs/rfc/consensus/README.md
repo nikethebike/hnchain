@@ -20,3 +20,4 @@ Current RFC drafts:
 
 - [Consensus Architecture](consensus-architecture.md)
 - [Validator Set](validator-set.md)
+- [Leader Selection](leader-selection.md)

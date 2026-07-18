@@ -26,6 +26,7 @@ docs/
     ADR-0008-block-format.md
     ADR-0009-consensus-architecture.md
     ADR-0010-validator-set-model.md
+    ADR-0011-leader-election.md
 
   specs/
     core/
@@ -43,6 +44,7 @@ docs/
     consensus/
       consensus-architecture.md
       validator-set.md
+      leader-selection.md
     networking/
     storage/
     rpc/
