@@ -24,3 +24,4 @@ Current RFC drafts:
 - [Vote Messages And Quorum Certificates](vote-messages-and-quorum-certificates.md)
 - [Finality Rules](finality-rules.md)
 - [Fork-Choice Rules](fork-choice-rules.md)
+- [Slashing And Accountability](slashing-and-accountability.md)

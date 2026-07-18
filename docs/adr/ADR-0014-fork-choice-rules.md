@@ -296,3 +296,4 @@ pre-finality mode is specified.
 ## Related Specifications
 
 - `docs/rfc/consensus/fork-choice-rules.md`
+- `docs/rfc/consensus/slashing-and-accountability.md`

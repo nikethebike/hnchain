@@ -30,6 +30,7 @@ docs/
     ADR-0012-vote-messages-and-quorum-certificates.md
     ADR-0013-finality-rules.md
     ADR-0014-fork-choice-rules.md
+    ADR-0015-slashing-and-accountability.md
 
   specs/
     core/
@@ -51,6 +52,7 @@ docs/
       vote-messages-and-quorum-certificates.md
       finality-rules.md
       fork-choice-rules.md
+      slashing-and-accountability.md
     networking/
     storage/
     rpc/

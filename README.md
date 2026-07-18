@@ -39,6 +39,7 @@ Core documents:
 - [Vote Messages And Quorum Certificates](docs/adr/ADR-0012-vote-messages-and-quorum-certificates.md)
 - [Finality Rules](docs/adr/ADR-0013-finality-rules.md)
 - [Fork-Choice Rules](docs/adr/ADR-0014-fork-choice-rules.md)
+- [Slashing And Accountability](docs/adr/ADR-0015-slashing-and-accountability.md)
 
 ## Specification First
 
