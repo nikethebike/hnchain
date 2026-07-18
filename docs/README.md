@@ -22,6 +22,7 @@ docs/
     ADR-0004-canonical-serialization.md
     ADR-0005-hash-algorithms.md
     ADR-0006-transaction-format.md
+    ADR-0007-state-tree.md
 
   specs/
     core/
@@ -32,6 +33,7 @@ docs/
       hash-algorithms.md
       genesis.md
       transaction-format.md
+      state-tree.md
 
   rfc/
     consensus/

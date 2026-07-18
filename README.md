@@ -31,6 +31,7 @@ Core documents:
 - [Canonical Serialization](docs/adr/ADR-0004-canonical-serialization.md)
 - [Hash Algorithms](docs/adr/ADR-0005-hash-algorithms.md)
 - [Transaction Format](docs/adr/ADR-0006-transaction-format.md)
+- [State Tree](docs/adr/ADR-0007-state-tree.md)
 
 ## Specification First
 

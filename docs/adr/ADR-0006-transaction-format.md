@@ -313,3 +313,4 @@ change.
 ## Related Specifications
 
 - `docs/specs/core/transaction-format.md`
+- `docs/specs/core/state-tree.md`
