@@ -13,6 +13,7 @@ Depends On:
 - `docs/adr/ADR-0009-consensus-architecture.md`
 - `docs/adr/ADR-0010-validator-set-model.md`
 - `docs/adr/ADR-0011-leader-election.md`
+- `docs/adr/ADR-0012-vote-messages-and-quorum-certificates.md`
 
 ## 1. Purpose
 

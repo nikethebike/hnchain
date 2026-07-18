@@ -21,3 +21,4 @@ Current RFC drafts:
 - [Consensus Architecture](consensus-architecture.md)
 - [Validator Set](validator-set.md)
 - [Leader Selection](leader-selection.md)
+- [Vote Messages And Quorum Certificates](vote-messages-and-quorum-certificates.md)

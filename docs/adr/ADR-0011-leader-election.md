@@ -344,3 +344,4 @@ requires migration analysis.
 ## Related Specifications
 
 - `docs/rfc/consensus/leader-selection.md`
+- `docs/rfc/consensus/vote-messages-and-quorum-certificates.md`

@@ -27,6 +27,7 @@ docs/
     ADR-0009-consensus-architecture.md
     ADR-0010-validator-set-model.md
     ADR-0011-leader-election.md
+    ADR-0012-vote-messages-and-quorum-certificates.md
 
   specs/
     core/
@@ -45,6 +46,7 @@ docs/
       consensus-architecture.md
       validator-set.md
       leader-selection.md
+      vote-messages-and-quorum-certificates.md
     networking/
     storage/
     rpc/
