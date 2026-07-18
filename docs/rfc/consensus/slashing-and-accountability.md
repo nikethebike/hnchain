@@ -16,6 +16,7 @@ Depends On:
 - `docs/adr/ADR-0013-finality-rules.md`
 - `docs/adr/ADR-0014-fork-choice-rules.md`
 - `docs/adr/ADR-0015-slashing-and-accountability.md`
+- `docs/adr/ADR-0016-synchronization-checkpoints.md`
 
 ## 1. Purpose
 

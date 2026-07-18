@@ -331,3 +331,4 @@ algorithm migrations.
 ## Related Specifications
 
 - `docs/rfc/consensus/slashing-and-accountability.md`
+- `docs/rfc/consensus/synchronization-checkpoints.md`
