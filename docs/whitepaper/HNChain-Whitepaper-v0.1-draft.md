@@ -43,9 +43,10 @@ Document status summary:
 
 - Accepted: protocol invariants and extended account model.
 - Proposed: cryptographic identity, address format, canonical serialization,
-  hash profiles.
-- Draft: economics, consensus, HNVM, P2P, storage, governance, security,
-  standards, interoperability, performance, ecosystem, and roadmap.
+  hash profiles, transaction format, state tree, block format, and consensus
+  architecture.
+- Draft: economics, HNVM, P2P, storage, governance, security, standards,
+  interoperability, performance, ecosystem, and roadmap.
 
 ## Table Of Contents
 
@@ -1041,7 +1042,7 @@ The current research direction remains:
 HN Consensus
   -> Leader Selection
   -> Fast Voting
-  -> Instant Finality
+  -> Finality Proof
   -> Checkpoints
 ```
 
@@ -5965,12 +5966,20 @@ Primary HNChain documents:
 - `docs/adr/ADR-0003-address-format.md`
 - `docs/adr/ADR-0004-canonical-serialization.md`
 - `docs/adr/ADR-0005-hash-algorithms.md`
+- `docs/adr/ADR-0006-transaction-format.md`
+- `docs/adr/ADR-0007-state-tree.md`
+- `docs/adr/ADR-0008-block-format.md`
+- `docs/adr/ADR-0009-consensus-architecture.md`
 - `docs/specs/core/account-state.md`
 - `docs/specs/core/cryptographic-identity.md`
 - `docs/specs/core/address-format.md`
 - `docs/specs/core/canonical-serialization.md`
 - `docs/specs/core/hash-algorithms.md`
 - `docs/specs/core/genesis.md`
+- `docs/specs/core/transaction-format.md`
+- `docs/specs/core/state-tree.md`
+- `docs/specs/core/block-format.md`
+- `docs/rfc/consensus/consensus-architecture.md`
 - `docs/governance/constitution.md`
 - `docs/security/README.md`
 - `docs/standards/README.md`
@@ -6037,13 +6046,14 @@ Proposed:
 - address format
 - canonical serialization
 - hash algorithms
-
-Not yet specified:
-
 - transaction format
 - state tree
 - block format
-- consensus protocol
+- consensus architecture
+
+Not yet specified:
+
+- final consensus protocol
 - storage layout
 - P2P protocol
 - RPC API

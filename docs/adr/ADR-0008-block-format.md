@@ -381,3 +381,4 @@ New body sections may be backward-compatible only if:
 ## Related Specifications
 
 - `docs/specs/core/block-format.md`
+- `docs/rfc/consensus/consensus-architecture.md`

@@ -24,6 +24,7 @@ docs/
     ADR-0006-transaction-format.md
     ADR-0007-state-tree.md
     ADR-0008-block-format.md
+    ADR-0009-consensus-architecture.md
 
   specs/
     core/
@@ -39,6 +40,7 @@ docs/
 
   rfc/
     consensus/
+      consensus-architecture.md
     networking/
     storage/
     rpc/

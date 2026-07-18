@@ -33,6 +33,7 @@ Core documents:
 - [Transaction Format](docs/adr/ADR-0006-transaction-format.md)
 - [State Tree](docs/adr/ADR-0007-state-tree.md)
 - [Block Format](docs/adr/ADR-0008-block-format.md)
+- [Consensus Architecture](docs/adr/ADR-0009-consensus-architecture.md)
 
 ## Specification First
 
