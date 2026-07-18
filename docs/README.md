@@ -29,6 +29,7 @@ docs/
     ADR-0011-leader-election.md
     ADR-0012-vote-messages-and-quorum-certificates.md
     ADR-0013-finality-rules.md
+    ADR-0014-fork-choice-rules.md
 
   specs/
     core/
@@ -49,6 +50,7 @@ docs/
       leader-selection.md
       vote-messages-and-quorum-certificates.md
       finality-rules.md
+      fork-choice-rules.md
     networking/
     storage/
     rpc/

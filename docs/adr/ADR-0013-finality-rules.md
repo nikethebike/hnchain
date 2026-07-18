@@ -316,3 +316,4 @@ bridges, exchanges, and archival services.
 ## Related Specifications
 
 - `docs/rfc/consensus/finality-rules.md`
+- `docs/rfc/consensus/fork-choice-rules.md`
