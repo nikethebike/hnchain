@@ -11,5 +11,8 @@ description = "HNChain canonical serialization implementation."
 [dependencies]
 hn-core = { path = "../hn-core" }
 
+[dev-dependencies]
+serde_json = "1.0"
+
 [lints]
 workspace = true
