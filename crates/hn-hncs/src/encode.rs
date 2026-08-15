@@ -1,4 +1,4 @@
-use crate::{HncsError, HncsResult};
+use crate::{HncsError, HncsResult, validate_length};
 
 /// Writes a canonical HNCS boolean value.
 pub fn write_bool(out: &mut Vec<u8>, value: bool) {
@@ -72,21 +72,6 @@ pub fn write_string(out: &mut Vec<u8>, value: &str, max_len: usize) -> HncsResul
     write_bytes(out, value.as_bytes(), max_len)
 }
 
-fn validate_length(length: usize, max_len: usize) -> HncsResult<()> {
-    if length > max_len {
-        return Err(HncsError::LengthLimitExceeded {
-            length,
-            max: max_len,
-        });
-    }
-
-    if length > u32::MAX as usize {
-        return Err(HncsError::LengthFieldOverflow { length });
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -152,6 +137,15 @@ mod tests {
     }
 
     #[test]
+    fn writes_empty_bytes() {
+        let mut out = Vec::new();
+
+        assert_eq!(write_bytes(&mut out, b"", 0), Ok(()));
+
+        assert_eq!(out, [0, 0, 0, 0]);
+    }
+
+    #[test]
     fn rejects_too_long_bytes() {
         let mut out = Vec::new();
 
@@ -169,5 +163,26 @@ mod tests {
         assert_eq!(write_string(&mut out, "hn", 2), Ok(()));
 
         assert_eq!(out, [2, 0, 0, 0, b'h', b'n']);
+    }
+
+    #[test]
+    fn writes_empty_string() {
+        let mut out = Vec::new();
+
+        assert_eq!(write_string(&mut out, "", 0), Ok(()));
+
+        assert_eq!(out, [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn does_not_normalize_unicode_strings() {
+        let mut precomposed = Vec::new();
+        let mut decomposed = Vec::new();
+
+        assert_eq!(write_string(&mut precomposed, "\u{00e9}", 2), Ok(()));
+        assert_eq!(write_string(&mut decomposed, "e\u{0301}", 3), Ok(()));
+
+        assert_eq!(precomposed, [2, 0, 0, 0, 0xc3, 0xa9]);
+        assert_eq!(decomposed, [3, 0, 0, 0, 0x65, 0xcc, 0x81]);
     }
 }

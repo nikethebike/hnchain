@@ -1,4 +1,4 @@
-use crate::{HncsError, HncsResult};
+use crate::{HncsError, HncsResult, validate_bool_byte, validate_length, validate_string_bytes};
 
 /// HNCS decoder for a single input byte slice.
 #[derive(Debug)]
@@ -39,11 +39,9 @@ impl<'a> Decoder<'a> {
 
     /// Reads a canonical HNCS boolean.
     pub fn read_bool(&mut self) -> HncsResult<bool> {
-        match self.read_u8()? {
-            0x00 => Ok(false),
-            0x01 => Ok(true),
-            value => Err(HncsError::InvalidBool { value }),
-        }
+        let value = self.read_u8()?;
+        validate_bool_byte(value)?;
+        Ok(value == 0x01)
     }
 
     /// Reads an unsigned 8-bit integer.
@@ -100,12 +98,7 @@ impl<'a> Decoder<'a> {
     pub fn read_bytes(&mut self, max_len: usize) -> HncsResult<&'a [u8]> {
         let length = self.read_u32()? as usize;
 
-        if length > max_len {
-            return Err(HncsError::LengthLimitExceeded {
-                length,
-                max: max_len,
-            });
-        }
+        validate_length(length, max_len)?;
 
         self.read_exact(length)
     }
@@ -113,7 +106,7 @@ impl<'a> Decoder<'a> {
     /// Reads a bounded UTF-8 string encoded as `u32_length || utf8_bytes`.
     pub fn read_string(&mut self, max_len: usize) -> HncsResult<&'a str> {
         let bytes = self.read_bytes(max_len)?;
-        core::str::from_utf8(bytes).map_err(|_| HncsError::InvalidUtf8)
+        validate_string_bytes(bytes, max_len)
     }
 
     fn read_array<const N: usize>(&mut self) -> HncsResult<[u8; N]> {
@@ -210,6 +203,14 @@ mod tests {
     }
 
     #[test]
+    fn reads_empty_bytes() {
+        let mut decoder = Decoder::new(&[0, 0, 0, 0]);
+
+        assert_eq!(decoder.read_bytes(0), Ok(&b""[..]));
+        assert_eq!(decoder.finish(), Ok(()));
+    }
+
+    #[test]
     fn rejects_too_long_bytes_before_payload_read() {
         let mut decoder = Decoder::new(&[4, 0, 0, 0, b'a', b'b', b'c', b'd']);
 
@@ -226,6 +227,23 @@ mod tests {
 
         assert_eq!(decoder.read_string(2), Ok("hn"));
         assert_eq!(decoder.finish(), Ok(()));
+    }
+
+    #[test]
+    fn reads_empty_string() {
+        let mut decoder = Decoder::new(&[0, 0, 0, 0]);
+
+        assert_eq!(decoder.read_string(0), Ok(""));
+        assert_eq!(decoder.finish(), Ok(()));
+    }
+
+    #[test]
+    fn preserves_distinct_unicode_representations() {
+        let mut precomposed = Decoder::new(&[2, 0, 0, 0, 0xc3, 0xa9]);
+        let mut decomposed = Decoder::new(&[3, 0, 0, 0, 0x65, 0xcc, 0x81]);
+
+        assert_eq!(precomposed.read_string(2), Ok("\u{00e9}"));
+        assert_eq!(decomposed.read_string(3), Ok("e\u{0301}"));
     }
 
     #[test]

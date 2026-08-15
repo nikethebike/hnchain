@@ -55,6 +55,10 @@ Compound
 
 HNCS does not support consensus floating point values.
 
+HNCS does not define accounts, addresses, transactions, blocks, consensus
+messages, validators, economics, RPC, P2P behavior, database schemas, or
+application data models.
+
 ## 4. Encoding Rules
 
 ### 4.1 Boolean
@@ -115,7 +119,9 @@ Rules:
 - bytes must be valid UTF-8
 - maximum length is defined by schema
 - no locale-sensitive comparison is allowed
-- normalization behavior must be defined by schema if normalization is accepted
+- Unicode normalization is not performed by the initial HNCS profile
+- schemas that require normalized text must define that requirement before HNCS
+  encoding
 
 Consensus schemas should avoid strings where byte identifiers are sufficient.
 

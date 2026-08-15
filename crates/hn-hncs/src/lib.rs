@@ -10,6 +10,7 @@
 mod decode;
 mod encode;
 mod error;
+mod validate;
 
 pub use decode::Decoder;
 pub use encode::{
@@ -17,3 +18,4 @@ pub use encode::{
     write_u8, write_u16, write_u32, write_u64, write_u128,
 };
 pub use error::{HncsError, HncsResult};
+pub use validate::{validate_bool_byte, validate_length, validate_string_bytes};

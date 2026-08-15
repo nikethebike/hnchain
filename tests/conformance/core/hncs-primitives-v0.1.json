@@ -1,79 +1,253 @@
-﻿{
+{
   "schema": "hnchain.conformance.core.hncs-primitives",
   "version": "0.1.0",
   "status": "draft",
   "byte_order": "little-endian",
-  "booleans": [
-    {
-      "value": false,
-      "hex": "00"
-    },
-    {
-      "value": true,
-      "hex": "01"
-    }
-  ],
-  "invalid_booleans": [
-    {
-      "hex": "02",
-      "error": "invalid_bool"
-    }
-  ],
-  "unsigned_integers": {
-    "u8": {
-      "value": "171",
-      "hex": "ab"
-    },
-    "u16": {
-      "value": "4660",
-      "hex": "3412"
-    },
-    "u32": {
-      "value": "305419896",
-      "hex": "78563412"
-    },
-    "u64": {
-      "value": "81985529216486895",
-      "hex": "efcdab8967452301"
-    },
-    "u128": {
-      "value": "1512366075204170929049582354406559216",
-      "hex": "1032547698badcfeefcdab8967452301"
-    }
+  "scope": {
+    "included": [
+      "bool",
+      "fixed_width_integers",
+      "bounded_bytes",
+      "bounded_utf8_strings"
+    ],
+    "excluded": [
+      "address",
+      "transaction",
+      "block",
+      "consensus",
+      "validator",
+      "economics",
+      "rpc",
+      "p2p",
+      "database"
+    ]
   },
-  "bounded_bytes": [
-    {
-      "value_hex": "616263",
-      "max_len": 3,
-      "hex": "03000000616263"
-    }
+  "properties": [
+    "decode(encode(x)) == x",
+    "each valid value has exactly one canonical byte representation",
+    "decoders reject malformed primitive encodings",
+    "top-level decoders reject trailing bytes"
   ],
-  "bounded_strings": [
-    {
-      "value": "hn",
-      "max_len": 2,
-      "hex": "02000000686e"
-    }
-  ],
-  "invalid_lengths": [
-    {
-      "hex": "0400000061626364",
-      "max_len": 3,
-      "error": "length_limit_exceeded"
-    }
-  ],
-  "invalid_utf8": [
-    {
-      "hex": "01000000ff",
-      "max_len": 1,
-      "error": "invalid_utf8"
-    }
-  ],
-  "trailing_bytes": [
-    {
-      "hex": "01ff",
-      "decoded_value": true,
-      "error": "trailing_bytes"
-    }
-  ]
+  "booleans": {
+    "canonical": [
+      {
+        "name": "false",
+        "value": false,
+        "hex": "00"
+      },
+      {
+        "name": "true",
+        "value": true,
+        "hex": "01"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "invalid-02",
+        "hex": "02",
+        "error": "invalid_bool"
+      },
+      {
+        "name": "invalid-ff",
+        "hex": "ff",
+        "error": "invalid_bool"
+      }
+    ]
+  },
+  "integers": {
+    "canonical": [
+      {
+        "type": "u8",
+        "name": "zero",
+        "value": "0",
+        "hex": "00"
+      },
+      {
+        "type": "u8",
+        "name": "one",
+        "value": "1",
+        "hex": "01"
+      },
+      {
+        "type": "u8",
+        "name": "max",
+        "value": "255",
+        "hex": "ff"
+      },
+      {
+        "type": "u16",
+        "name": "boundary",
+        "value": "4660",
+        "hex": "3412"
+      },
+      {
+        "type": "u32",
+        "name": "boundary",
+        "value": "305419896",
+        "hex": "78563412"
+      },
+      {
+        "type": "u64",
+        "name": "boundary",
+        "value": "81985529216486895",
+        "hex": "efcdab8967452301"
+      },
+      {
+        "type": "u128",
+        "name": "boundary",
+        "value": "1512366075204170929049582354406559216",
+        "hex": "1032547698badcfeefcdab8967452301"
+      },
+      {
+        "type": "i8",
+        "name": "minus-one",
+        "value": "-1",
+        "hex": "ff"
+      },
+      {
+        "type": "i16",
+        "name": "minus-two",
+        "value": "-2",
+        "hex": "feff"
+      },
+      {
+        "type": "i32",
+        "name": "minus-three",
+        "value": "-3",
+        "hex": "fdffffff"
+      },
+      {
+        "type": "i64",
+        "name": "minus-four",
+        "value": "-4",
+        "hex": "fcffffffffffffff"
+      },
+      {
+        "type": "i128",
+        "name": "minus-five",
+        "value": "-5",
+        "hex": "fbffffffffffffffffffffffffffffff"
+      }
+    ],
+    "invalid": [
+      {
+        "type": "u16",
+        "name": "too-short",
+        "hex": "01",
+        "error": "unexpected_eof"
+      },
+      {
+        "type": "u16",
+        "name": "trailing-byte",
+        "hex": "010000",
+        "decoded_value": "1",
+        "error": "trailing_bytes"
+      },
+      {
+        "type": "u32",
+        "name": "too-short",
+        "hex": "010203",
+        "error": "unexpected_eof"
+      }
+    ]
+  },
+  "bytes": {
+    "canonical": [
+      {
+        "name": "empty",
+        "value_hex": "",
+        "max_len": 0,
+        "hex": "00000000"
+      },
+      {
+        "name": "one-byte",
+        "value_hex": "ab",
+        "max_len": 1,
+        "hex": "01000000ab"
+      },
+      {
+        "name": "short",
+        "value_hex": "616263",
+        "max_len": 3,
+        "hex": "03000000616263"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "length-limit-exceeded",
+        "hex": "0400000061626364",
+        "max_len": 3,
+        "error": "length_limit_exceeded"
+      },
+      {
+        "name": "payload-too-short",
+        "hex": "04000000616263",
+        "max_len": 4,
+        "error": "unexpected_eof"
+      },
+      {
+        "name": "trailing-byte",
+        "hex": "00000000ff",
+        "max_len": 0,
+        "decoded_value_hex": "",
+        "error": "trailing_bytes"
+      }
+    ]
+  },
+  "strings": {
+    "normalization": "none",
+    "canonical": [
+      {
+        "name": "empty",
+        "value": "",
+        "max_len": 0,
+        "hex": "00000000"
+      },
+      {
+        "name": "ascii",
+        "value": "hn",
+        "max_len": 2,
+        "hex": "02000000686e"
+      },
+      {
+        "name": "unicode-precomposed",
+        "value": "\u00e9",
+        "max_len": 2,
+        "hex": "02000000c3a9"
+      },
+      {
+        "name": "unicode-decomposed",
+        "value": "e\u0301",
+        "max_len": 3,
+        "hex": "0300000065cc81"
+      },
+      {
+        "name": "multibyte-cyrillic",
+        "value": "\u0445\u043d",
+        "max_len": 4,
+        "hex": "04000000d185d0bd"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "invalid-utf8",
+        "hex": "01000000ff",
+        "max_len": 1,
+        "error": "invalid_utf8"
+      },
+      {
+        "name": "length-limit-exceeded",
+        "hex": "03000000686e63",
+        "max_len": 2,
+        "error": "length_limit_exceeded"
+      },
+      {
+        "name": "trailing-byte",
+        "hex": "02000000686eff",
+        "max_len": 2,
+        "decoded_value": "hn",
+        "error": "trailing_bytes"
+      }
+    ]
+  }
 }
