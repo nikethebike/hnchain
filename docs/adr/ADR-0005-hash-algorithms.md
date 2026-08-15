@@ -11,10 +11,13 @@ Depends On:
 - ADR-0000: Protocol Invariants
 - ADR-0001: Extended Account-Based State Model
 - ADR-0002: Cryptographic Identity
-- ADR-0003: Address Format
 - ADR-0004: Canonical Serialization
 
 Supersedes: None
+
+Referenced By:
+
+- ADR-0003: Address Format
 
 ## Context
 
@@ -28,6 +31,11 @@ must be computed over canonical bytes.
 The protocol must define not only hash algorithms, but also domain separation,
 hash profile identifiers, digest lengths, upgrade rules, and object-specific
 hashing contexts.
+
+Address derivation is a consumer of this hash profile, but the hash profile does
+not depend on the final address text encoding, checksum scheme, or address
+payload layout. ADR-0003 may wrap, encode, or further constrain address digests
+without changing the accepted hash profile.
 
 ## Decision
 
