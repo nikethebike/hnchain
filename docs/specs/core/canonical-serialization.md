@@ -263,7 +263,67 @@ When nested compound types are accepted by a future profile, every nested
 collection must have explicit bounds, canonical ordering rules, duplicate
 rejection rules, and conformance vectors.
 
-## 5. Object Versioning
+## 5. HNCS Profile Versioning
+
+HNCS itself is versioned as a consensus-critical protocol profile.
+
+Initial profile:
+
+```text
+HNCS v0.1
+```
+
+An HNCS profile version defines:
+
+- supported primitive types
+- supported compound types
+- byte order
+- length and count field encoding
+- canonical ordering rules
+- duplicate rejection rules
+- UTF-8 and string normalization rules
+- decoder rejection requirements
+- conformance vector format
+
+Changing canonical bytes for any previously valid value is a breaking protocol
+change.
+
+Breaking changes include:
+
+- changing byte order
+- changing integer widths
+- changing boolean or optional marker bytes
+- changing length or count field encoding
+- changing list, set, or map encoding
+- changing set or map ordering
+- changing duplicate rejection behavior
+- changing string normalization behavior
+- accepting previously invalid consensus encodings
+- rejecting previously valid consensus encodings unless required by a scheduled
+  protocol upgrade
+
+Compatible changes may include:
+
+- adding new conformance vectors for existing rules
+- adding clearer rejection examples for already invalid encodings
+- adding non-consensus documentation
+- adding new schema-level types only if no existing canonical bytes change and
+  the type is gated by an explicit protocol schema version
+
+Future protocol object schemas must declare the HNCS profile version used for
+their canonical bytes.
+
+Example:
+
+```text
+TransactionV1
+  serialization_profile = HNCS v0.1
+```
+
+Nodes must never infer the HNCS profile version from local software version,
+crate version, SDK version, or build date.
+
+## 6. Object Versioning
 
 Every top-level consensus object includes an explicit object version.
 
@@ -276,7 +336,7 @@ The object specification defines:
 - hashing behavior
 - signing behavior
 
-## 6. Extension Encoding
+## 7. Extension Encoding
 
 Extension payloads are encoded as versioned, length-delimited records.
 
@@ -300,7 +360,7 @@ Rules:
 - payload bytes are included in hashing only as defined by the owning object
   specification
 
-## 7. Decoder Requirements
+## 8. Decoder Requirements
 
 HNCS decoders must:
 
@@ -316,7 +376,7 @@ HNCS decoders must:
 - reject unsupported object versions
 - enforce resource limits before allocation where possible
 
-## 8. Module Boundaries
+## 9. Module Boundaries
 
 ```text
 Protocol Schema
@@ -339,7 +399,7 @@ Boundary rules:
 - RPC specifications define external JSON/gRPC views.
 - Storage specifications define physical persistence layout.
 
-## 9. Security Requirements
+## 10. Security Requirements
 
 - HNCS must not accept multiple encodings for the same consensus value.
 - HNCS must not depend on reflection order from a programming language.
@@ -349,7 +409,7 @@ Boundary rules:
 - HNCS must not silently discard unknown critical data.
 - HNCS test vectors are mandatory before implementation.
 
-## 10. Open Architecture Decisions
+## 11. Open Architecture Decisions
 
 - final byte order confirmation
 - schema definition language

@@ -1,4 +1,7 @@
-use crate::{HncsError, HncsResult, validate_bool_byte, validate_length, validate_string_bytes};
+use crate::{
+    HncsError, HncsResult, validate_bool_byte, validate_count, validate_length,
+    validate_presence_byte, validate_string_bytes,
+};
 
 /// HNCS decoder for a single input byte slice.
 #[derive(Debug)]
@@ -107,6 +110,105 @@ impl<'a> Decoder<'a> {
     pub fn read_string(&mut self, max_len: usize) -> HncsResult<&'a str> {
         let bytes = self.read_bytes(max_len)?;
         validate_string_bytes(bytes, max_len)
+    }
+
+    /// Reads an optional value encoded as `presence || value_if_present`.
+    pub fn read_optional<T>(
+        &mut self,
+        mut read_value: impl FnMut(&mut Self) -> HncsResult<T>,
+    ) -> HncsResult<Option<T>> {
+        let presence = self.read_u8()?;
+        validate_presence_byte(presence)?;
+
+        if presence == 0x00 {
+            return Ok(None);
+        }
+
+        Ok(Some(read_value(self)?))
+    }
+
+    /// Reads a bounded list preserving encoded order.
+    pub fn read_list<T>(
+        &mut self,
+        max_count: usize,
+        mut read_element: impl FnMut(&mut Self) -> HncsResult<T>,
+    ) -> HncsResult<Vec<T>> {
+        let count = self.read_count(max_count)?;
+        let mut values = Vec::with_capacity(count);
+
+        for _ in 0..count {
+            values.push(read_element(self)?);
+        }
+
+        Ok(values)
+    }
+
+    /// Reads a bounded set and rejects unsorted or duplicate element encodings.
+    pub fn read_set<T>(
+        &mut self,
+        max_count: usize,
+        mut read_element: impl FnMut(&mut Self) -> HncsResult<T>,
+    ) -> HncsResult<Vec<T>> {
+        let count = self.read_count(max_count)?;
+        let mut values = Vec::with_capacity(count);
+        let mut previous: Option<&'a [u8]> = None;
+
+        for _ in 0..count {
+            let start = self.offset;
+            let value = read_element(self)?;
+            let encoded = &self.input[start..self.offset];
+
+            if let Some(previous) = previous {
+                match previous.cmp(encoded) {
+                    core::cmp::Ordering::Greater => return Err(HncsError::UnsortedSet),
+                    core::cmp::Ordering::Equal => return Err(HncsError::DuplicateSetElement),
+                    core::cmp::Ordering::Less => {}
+                }
+            }
+
+            previous = Some(encoded);
+            values.push(value);
+        }
+
+        Ok(values)
+    }
+
+    /// Reads a bounded map and rejects unsorted or duplicate key encodings.
+    pub fn read_map<K, V>(
+        &mut self,
+        max_count: usize,
+        mut read_key: impl FnMut(&mut Self) -> HncsResult<K>,
+        mut read_value: impl FnMut(&mut Self) -> HncsResult<V>,
+    ) -> HncsResult<Vec<(K, V)>> {
+        let count = self.read_count(max_count)?;
+        let mut values = Vec::with_capacity(count);
+        let mut previous_key: Option<&'a [u8]> = None;
+
+        for _ in 0..count {
+            let key_start = self.offset;
+            let key = read_key(self)?;
+            let encoded_key = &self.input[key_start..self.offset];
+
+            if let Some(previous_key) = previous_key {
+                match previous_key.cmp(encoded_key) {
+                    core::cmp::Ordering::Greater => return Err(HncsError::UnsortedMap),
+                    core::cmp::Ordering::Equal => return Err(HncsError::DuplicateMapKey),
+                    core::cmp::Ordering::Less => {}
+                }
+            }
+
+            previous_key = Some(encoded_key);
+            let value = read_value(self)?;
+            values.push((key, value));
+        }
+
+        Ok(values)
+    }
+
+    fn read_count(&mut self, max_count: usize) -> HncsResult<usize> {
+        let count = self.read_u32()? as usize;
+        validate_count(count, max_count)?;
+        Ok(count)
     }
 
     fn read_array<const N: usize>(&mut self) -> HncsResult<[u8; N]> {
@@ -275,5 +377,94 @@ mod tests {
                 remaining: 1
             })
         );
+    }
+
+    #[test]
+    fn reads_optional_values() {
+        let mut none = Decoder::new(&[0x00]);
+        let mut some = Decoder::new(&[0x01, 0x07]);
+
+        assert_eq!(none.read_optional(read_u8_value), Ok(None));
+        assert_eq!(some.read_optional(read_u8_value), Ok(Some(7)));
+    }
+
+    #[test]
+    fn rejects_invalid_presence_byte() {
+        let mut decoder = Decoder::new(&[0x02]);
+
+        assert_eq!(
+            decoder.read_optional(read_u8_value),
+            Err(HncsError::InvalidPresence { value: 0x02 })
+        );
+    }
+
+    #[test]
+    fn reads_list_order_as_semantic() {
+        let mut ordered = Decoder::new(&[2, 0, 0, 0, 1, 2]);
+        let mut reversed = Decoder::new(&[2, 0, 0, 0, 2, 1]);
+
+        assert_eq!(ordered.read_list(2, read_u8_value), Ok(vec![1, 2]));
+        assert_eq!(reversed.read_list(2, read_u8_value), Ok(vec![2, 1]));
+    }
+
+    #[test]
+    fn reads_sorted_sets() {
+        let mut decoder = Decoder::new(&[3, 0, 0, 0, 1, 2, 3]);
+
+        assert_eq!(decoder.read_set(3, read_u8_value), Ok(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn rejects_unsorted_sets() {
+        let mut decoder = Decoder::new(&[3, 0, 0, 0, 3, 1, 2]);
+
+        assert_eq!(
+            decoder.read_set(3, read_u8_value),
+            Err(HncsError::UnsortedSet)
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_set_elements() {
+        let mut decoder = Decoder::new(&[2, 0, 0, 0, 1, 1]);
+
+        assert_eq!(
+            decoder.read_set(2, read_u8_value),
+            Err(HncsError::DuplicateSetElement)
+        );
+    }
+
+    #[test]
+    fn reads_sorted_maps() {
+        let mut decoder = Decoder::new(&[2, 0, 0, 0, 1, 10, 2, 20]);
+
+        assert_eq!(
+            decoder.read_map(2, read_u8_value, read_u8_value),
+            Ok(vec![(1, 10), (2, 20)])
+        );
+    }
+
+    #[test]
+    fn rejects_unsorted_maps() {
+        let mut decoder = Decoder::new(&[2, 0, 0, 0, 2, 20, 1, 10]);
+
+        assert_eq!(
+            decoder.read_map(2, read_u8_value, read_u8_value),
+            Err(HncsError::UnsortedMap)
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_map_keys() {
+        let mut decoder = Decoder::new(&[2, 0, 0, 0, 1, 1, 1, 2]);
+
+        assert_eq!(
+            decoder.read_map(2, read_u8_value, read_u8_value),
+            Err(HncsError::DuplicateMapKey)
+        );
+    }
+
+    fn read_u8_value(decoder: &mut Decoder<'_>) -> crate::HncsResult<u8> {
+        decoder.read_u8()
     }
 }

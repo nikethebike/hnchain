@@ -255,10 +255,16 @@ fn error_code<T>(result: Result<T, HncsError>) -> &'static str {
 fn hncs_error_code(error: &HncsError) -> &'static str {
     match error {
         HncsError::InvalidBool { .. } => "invalid_bool",
+        HncsError::InvalidPresence { .. } => "invalid_presence",
         HncsError::UnexpectedEof { .. } => "unexpected_eof",
         HncsError::LengthLimitExceeded { .. } => "length_limit_exceeded",
+        HncsError::CountLimitExceeded { .. } => "count_limit_exceeded",
         HncsError::LengthFieldOverflow { .. } => "length_field_overflow",
         HncsError::InvalidUtf8 => "invalid_utf8",
+        HncsError::UnsortedSet => "unsorted_set",
+        HncsError::DuplicateSetElement => "duplicate_set_element",
+        HncsError::UnsortedMap => "unsorted_map",
+        HncsError::DuplicateMapKey => "duplicate_map_key",
         HncsError::TrailingBytes { .. } => "trailing_bytes",
     }
 }

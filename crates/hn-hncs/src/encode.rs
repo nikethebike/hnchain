@@ -1,4 +1,4 @@
-use crate::{HncsError, HncsResult, validate_length};
+use crate::{HncsError, HncsResult, validate_count, validate_length};
 
 /// Writes a canonical HNCS boolean value.
 pub fn write_bool(out: &mut Vec<u8>, value: bool) {
@@ -72,11 +72,118 @@ pub fn write_string(out: &mut Vec<u8>, value: &str, max_len: usize) -> HncsResul
     write_bytes(out, value.as_bytes(), max_len)
 }
 
+/// Writes an optional value as `presence || value_if_present`.
+pub fn write_optional<T: ?Sized>(
+    out: &mut Vec<u8>,
+    value: Option<&T>,
+    mut write_value: impl FnMut(&mut Vec<u8>, &T) -> HncsResult<()>,
+) -> HncsResult<()> {
+    match value {
+        None => write_bool(out, false),
+        Some(value) => {
+            write_bool(out, true);
+            write_value(out, value)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Writes a bounded list as `u32_count || elements` preserving input order.
+pub fn write_list<T>(
+    out: &mut Vec<u8>,
+    values: &[T],
+    max_count: usize,
+    mut write_element: impl FnMut(&mut Vec<u8>, &T) -> HncsResult<()>,
+) -> HncsResult<()> {
+    validate_count(values.len(), max_count)?;
+    write_u32_count(out, values.len())?;
+
+    for value in values {
+        write_element(out, value)?;
+    }
+
+    Ok(())
+}
+
+/// Writes a bounded set sorted by canonical encoded element bytes.
+pub fn write_set<T>(
+    out: &mut Vec<u8>,
+    values: &[T],
+    max_count: usize,
+    mut write_element: impl FnMut(&mut Vec<u8>, &T) -> HncsResult<()>,
+) -> HncsResult<()> {
+    validate_count(values.len(), max_count)?;
+
+    let mut elements = Vec::with_capacity(values.len());
+    for value in values {
+        let mut encoded = Vec::new();
+        write_element(&mut encoded, value)?;
+        elements.push(encoded);
+    }
+
+    elements.sort();
+    if elements.windows(2).any(|window| window[0] == window[1]) {
+        return Err(HncsError::DuplicateSetElement);
+    }
+
+    write_u32_count(out, elements.len())?;
+    for element in elements {
+        out.extend_from_slice(&element);
+    }
+
+    Ok(())
+}
+
+/// Writes a bounded map sorted by canonical encoded key bytes.
+pub fn write_map<K, V>(
+    out: &mut Vec<u8>,
+    entries: &[(K, V)],
+    max_count: usize,
+    mut write_key: impl FnMut(&mut Vec<u8>, &K) -> HncsResult<()>,
+    mut write_value: impl FnMut(&mut Vec<u8>, &V) -> HncsResult<()>,
+) -> HncsResult<()> {
+    validate_count(entries.len(), max_count)?;
+
+    let mut encoded_entries = Vec::with_capacity(entries.len());
+    for (key, value) in entries {
+        let mut encoded_key = Vec::new();
+        let mut encoded_value = Vec::new();
+        write_key(&mut encoded_key, key)?;
+        write_value(&mut encoded_value, value)?;
+        encoded_entries.push((encoded_key, encoded_value));
+    }
+
+    encoded_entries.sort_by(|left, right| left.0.cmp(&right.0));
+    if encoded_entries
+        .windows(2)
+        .any(|window| window[0].0 == window[1].0)
+    {
+        return Err(HncsError::DuplicateMapKey);
+    }
+
+    write_u32_count(out, encoded_entries.len())?;
+    for (key, value) in encoded_entries {
+        out.extend_from_slice(&key);
+        out.extend_from_slice(&value);
+    }
+
+    Ok(())
+}
+
+fn write_u32_count(out: &mut Vec<u8>, count: usize) -> HncsResult<()> {
+    let encoded_count =
+        u32::try_from(count).map_err(|_| HncsError::LengthFieldOverflow { length: count })?;
+    write_u32(out, encoded_count);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        write_bool, write_bytes, write_i8, write_i16, write_i32, write_i64, write_i128,
-        write_string, write_u8, write_u16, write_u32, write_u64, write_u128,
+        write_bool, write_bytes, write_i8, write_i16, write_i32, write_i64, write_i128, write_list,
+        write_map, write_optional, write_set, write_string, write_u8, write_u16, write_u32,
+        write_u64, write_u128,
     };
     use crate::HncsError;
 
@@ -184,5 +291,121 @@ mod tests {
 
         assert_eq!(precomposed, [2, 0, 0, 0, 0xc3, 0xa9]);
         assert_eq!(decomposed, [3, 0, 0, 0, 0x65, 0xcc, 0x81]);
+    }
+
+    #[test]
+    fn writes_optional_values() {
+        let mut none = Vec::new();
+        let mut some = Vec::new();
+
+        assert_eq!(
+            write_optional::<u8>(&mut none, None, write_u8_value),
+            Ok(())
+        );
+        assert_eq!(
+            write_optional(&mut some, Some(&7_u8), write_u8_value),
+            Ok(())
+        );
+
+        assert_eq!(none, [0x00]);
+        assert_eq!(some, [0x01, 0x07]);
+    }
+
+    #[test]
+    fn writes_lists_in_input_order() {
+        let mut ordered = Vec::new();
+        let mut reversed = Vec::new();
+
+        assert_eq!(
+            write_list(&mut ordered, &[1_u8, 2_u8], 2, write_u8_value),
+            Ok(())
+        );
+        assert_eq!(
+            write_list(&mut reversed, &[2_u8, 1_u8], 2, write_u8_value),
+            Ok(())
+        );
+
+        assert_eq!(ordered, [2, 0, 0, 0, 1, 2]);
+        assert_eq!(reversed, [2, 0, 0, 0, 2, 1]);
+        assert_ne!(ordered, reversed);
+    }
+
+    #[test]
+    fn writes_sets_in_canonical_order() {
+        let mut first = Vec::new();
+        let mut second = Vec::new();
+
+        assert_eq!(
+            write_set(&mut first, &[3_u8, 1_u8, 2_u8], 3, write_u8_value),
+            Ok(())
+        );
+        assert_eq!(
+            write_set(&mut second, &[2_u8, 3_u8, 1_u8], 3, write_u8_value),
+            Ok(())
+        );
+
+        assert_eq!(first, [3, 0, 0, 0, 1, 2, 3]);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn rejects_duplicate_set_elements() {
+        let mut out = Vec::new();
+
+        assert_eq!(
+            write_set(&mut out, &[1_u8, 1_u8], 2, write_u8_value),
+            Err(HncsError::DuplicateSetElement)
+        );
+    }
+
+    #[test]
+    fn writes_maps_in_canonical_key_order() {
+        let mut first = Vec::new();
+        let mut second = Vec::new();
+
+        assert_eq!(
+            write_map(
+                &mut first,
+                &[(2_u8, 20_u8), (1_u8, 10_u8)],
+                2,
+                write_u8_value,
+                write_u8_value
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            write_map(
+                &mut second,
+                &[(1_u8, 10_u8), (2_u8, 20_u8)],
+                2,
+                write_u8_value,
+                write_u8_value
+            ),
+            Ok(())
+        );
+
+        assert_eq!(first, [2, 0, 0, 0, 1, 10, 2, 20]);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn rejects_duplicate_map_keys() {
+        let mut out = Vec::new();
+
+        assert_eq!(
+            write_map(
+                &mut out,
+                &[(1_u8, 1_u8), (1_u8, 2_u8)],
+                2,
+                write_u8_value,
+                write_u8_value
+            ),
+            Err(HncsError::DuplicateMapKey)
+        );
+    }
+
+    fn write_u8_value(out: &mut Vec<u8>, value: &u8) -> crate::HncsResult<()> {
+        write_u8(out, *value);
+        Ok(())
     }
 }
