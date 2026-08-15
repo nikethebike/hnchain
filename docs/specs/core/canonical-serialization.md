@@ -164,6 +164,14 @@ Presence values:
 
 Any other presence byte is invalid.
 
+If the presence byte is `0x00`, no value bytes may follow for that optional
+value.
+
+If the presence byte is `0x01`, exactly one value of the schema-defined inner
+type follows.
+
+The inner type is part of the schema. It is not inferred from bytes.
+
 ### 4.9 Lists
 
 Lists are encoded as:
@@ -176,12 +184,28 @@ The schema defines maximum count.
 
 List order is consensus-relevant.
 
+Two lists with the same elements in different order are different consensus
+values and produce different HNCS bytes.
+
 ### 4.10 Sets
 
 Sets are encoded as lists sorted by bytewise ascending canonical element
 encoding.
 
 Duplicates are invalid.
+
+Set semantic order is not consensus-relevant, but encoded order is mandatory.
+
+Rules:
+
+- each element is first encoded using its own schema-defined canonical HNCS
+  encoding
+- encoded elements are sorted by bytewise ascending order
+- the set is encoded as `u32_count || sorted_element_0 || ... || sorted_element_n`
+- duplicate canonical element encodings are invalid
+- decoders must reject unsorted set encodings
+- ordering must not use locale, display text, host comparison functions, hashes,
+  or source-language container iteration order
 
 ### 4.11 Maps
 
@@ -196,6 +220,48 @@ Entries are sorted by bytewise ascending canonical key encoding.
 Duplicate keys are invalid.
 
 The schema defines maximum count.
+
+Map semantic insertion order is not consensus-relevant, but encoded order is
+mandatory.
+
+Rules:
+
+- each key is first encoded using its schema-defined canonical HNCS encoding
+- entries are sorted by bytewise ascending canonical key encoding
+- values are not used for ordering
+- the map is encoded as
+  `u32_count || sorted_key_0 || value_0 || ... || sorted_key_n || value_n`
+- duplicate canonical key encodings are invalid
+- decoders must reject unsorted map encodings
+- ordering must not use locale, display text, host comparison functions, hashes,
+  or source-language container iteration order
+
+For example, `map<string, u8>` is sorted by encoded string bytes, including the
+HNCS length prefix, not by human lexical order.
+
+### 4.12 Compound Type Parameters
+
+HNCS compound types are schema-parameterized.
+
+The initial HNCS v0.1 compound profile defines conformance vectors only for:
+
+- `optional<T>` where `T` is an HNCS primitive type
+- `list<T>` where `T` is an HNCS primitive type
+- `set<T>` where `T` is an HNCS primitive type
+- `map<K, V>` where `K` and `V` are HNCS primitive types
+
+Nested compound types require an explicit schema decision before becoming part
+of consensus-critical objects.
+
+Examples requiring additional specification before use:
+
+- `set<set<u64>>`
+- `map<bytes, list<string>>`
+- deeply nested or recursively defined compound structures
+
+When nested compound types are accepted by a future profile, every nested
+collection must have explicit bounds, canonical ordering rules, duplicate
+rejection rules, and conformance vectors.
 
 ## 5. Object Versioning
 

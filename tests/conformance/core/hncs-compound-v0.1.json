@@ -1,0 +1,287 @@
+{
+  "schema": "hnchain.conformance.core.hncs-compound",
+  "version": "0.1.0",
+  "status": "draft",
+  "depends_on": [
+    "hnchain.conformance.core.hncs-primitives@0.1.0"
+  ],
+  "scope": {
+    "included": [
+      "optional_of_primitives",
+      "list_of_primitives",
+      "set_of_primitives",
+      "map_of_primitive_keys_to_primitive_values"
+    ],
+    "excluded": [
+      "nested_compound_types",
+      "address",
+      "transaction",
+      "block",
+      "consensus",
+      "state"
+    ]
+  },
+  "ordering": {
+    "set": "bytewise_ascending_canonical_element_encoding",
+    "map": "bytewise_ascending_canonical_key_encoding",
+    "not_used": [
+      "source_language_container_order",
+      "locale_order",
+      "display_order",
+      "hash_order"
+    ]
+  },
+  "properties": [
+    "different semantic input orders for sets encode to the same canonical bytes",
+    "different semantic input orders for maps encode to the same canonical bytes",
+    "different list orders encode to different bytes",
+    "decoders reject unsorted set encodings",
+    "decoders reject duplicate set elements",
+    "decoders reject unsorted map encodings",
+    "decoders reject duplicate map keys",
+    "top-level decoders reject trailing bytes"
+  ],
+  "optional": {
+    "canonical": [
+      {
+        "name": "none-u8",
+        "type": "optional<u8>",
+        "value": null,
+        "hex": "00"
+      },
+      {
+        "name": "some-u8",
+        "type": "optional<u8>",
+        "value": "7",
+        "hex": "0107"
+      },
+      {
+        "name": "some-string",
+        "type": "optional<string>",
+        "value": "hn",
+        "max_len": 2,
+        "hex": "0102000000686e"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "invalid-presence",
+        "type": "optional<u8>",
+        "hex": "02",
+        "error": "invalid_presence"
+      },
+      {
+        "name": "some-u16-too-short",
+        "type": "optional<u16>",
+        "hex": "0101",
+        "error": "unexpected_eof"
+      },
+      {
+        "name": "none-with-trailing-byte",
+        "type": "optional<u8>",
+        "hex": "0001",
+        "error": "trailing_bytes"
+      }
+    ]
+  },
+  "lists": {
+    "canonical": [
+      {
+        "name": "empty-u8",
+        "type": "list<u8>",
+        "max_count": 0,
+        "value": [],
+        "hex": "00000000"
+      },
+      {
+        "name": "ordered-u8",
+        "type": "list<u8>",
+        "max_count": 2,
+        "value": [
+          "1",
+          "2"
+        ],
+        "hex": "020000000102"
+      },
+      {
+        "name": "reversed-u8-is-distinct",
+        "type": "list<u8>",
+        "max_count": 2,
+        "value": [
+          "2",
+          "1"
+        ],
+        "hex": "020000000201"
+      }
+    ],
+    "inequality": [
+      {
+        "name": "list-order-is-semantic",
+        "type": "list<u8>",
+        "left_hex": "020000000102",
+        "right_hex": "020000000201",
+        "expected_equal": false
+      }
+    ],
+    "invalid": [
+      {
+        "name": "count-limit-exceeded",
+        "type": "list<u8>",
+        "max_count": 2,
+        "hex": "03000000010203",
+        "error": "count_limit_exceeded"
+      },
+      {
+        "name": "payload-too-short",
+        "type": "list<u8>",
+        "max_count": 2,
+        "hex": "0200000001",
+        "error": "unexpected_eof"
+      },
+      {
+        "name": "trailing-byte",
+        "type": "list<u8>",
+        "max_count": 0,
+        "hex": "00000000ff",
+        "error": "trailing_bytes"
+      }
+    ]
+  },
+  "sets": {
+    "canonical": [
+      {
+        "name": "sorted-u8",
+        "type": "set<u8>",
+        "max_count": 3,
+        "semantic_inputs": [
+          [
+            "3",
+            "1",
+            "2"
+          ],
+          [
+            "2",
+            "3",
+            "1"
+          ],
+          [
+            "1",
+            "2",
+            "3"
+          ]
+        ],
+        "hex": "03000000010203"
+      },
+      {
+        "name": "bytes-sorted-by-canonical-encoding",
+        "type": "set<bytes>",
+        "max_count": 2,
+        "element_max_len": 3,
+        "semantic_inputs": [
+          [
+            "6161",
+            "62"
+          ],
+          [
+            "62",
+            "6161"
+          ]
+        ],
+        "hex": "020000000100000062020000006161"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "unsorted-u8",
+        "type": "set<u8>",
+        "max_count": 3,
+        "hex": "03000000030102",
+        "error": "unsorted_set"
+      },
+      {
+        "name": "duplicate-u8",
+        "type": "set<u8>",
+        "max_count": 2,
+        "hex": "020000000101",
+        "error": "duplicate_set_element"
+      }
+    ]
+  },
+  "maps": {
+    "canonical": [
+      {
+        "name": "u8-to-u8",
+        "type": "map<u8,u8>",
+        "max_count": 2,
+        "semantic_inputs": [
+          [
+            [
+              "2",
+              "20"
+            ],
+            [
+              "1",
+              "10"
+            ]
+          ],
+          [
+            [
+              "1",
+              "10"
+            ],
+            [
+              "2",
+              "20"
+            ]
+          ]
+        ],
+        "hex": "02000000010a0214"
+      },
+      {
+        "name": "bytes-to-u8-sorted-by-canonical-key-encoding",
+        "type": "map<bytes,u8>",
+        "max_count": 2,
+        "key_max_len": 3,
+        "semantic_inputs": [
+          [
+            [
+              "6161",
+              "10"
+            ],
+            [
+              "62",
+              "20"
+            ]
+          ],
+          [
+            [
+              "62",
+              "20"
+            ],
+            [
+              "6161",
+              "10"
+            ]
+          ]
+        ],
+        "hex": "020000000100000062140200000061610a"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "unsorted-u8-keys",
+        "type": "map<u8,u8>",
+        "max_count": 2,
+        "hex": "020000000214010a",
+        "error": "unsorted_map"
+      },
+      {
+        "name": "duplicate-u8-key",
+        "type": "map<u8,u8>",
+        "max_count": 2,
+        "hex": "0200000001010102",
+        "error": "duplicate_map_key"
+      }
+    ]
+  }
+}
