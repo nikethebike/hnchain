@@ -1,6 +1,6 @@
 # ADR-0005: Hash Algorithms
 
-Status: Proposed
+Status: Accepted
 
 Date: 2026-07-18
 
@@ -61,6 +61,35 @@ Protocol code must not call a bare hash function for consensus data.
 Every consensus hash must be computed through a named hash profile over
 canonical HNCS bytes.
 
+The initial HNChain v0.1 consensus hash profile is:
+
+```text
+Hash Profile ID:     0x0001
+Profile Name:        hn-sha512-256-v1
+Algorithm:           SHA-512/256
+Digest Length:       32 bytes
+Lifecycle:           Active
+Specification:       NIST FIPS 180-4
+Input Encoding:      HNCS DomainSeparatedHashInput v1
+Truncation:          Forbidden
+```
+
+SHA-512/256 is the primary hash for consensus object identifiers,
+domain-separated signing payload digests where a digest is required, state
+commitments, block identifiers, transaction identifiers, receipt identifiers,
+and protocol registries in the v0.1 profile.
+
+Reserved profiles:
+
+```text
+0x0002 = hn-sha256-compat-v1      Proposed
+0x0003 = hn-sha3-256-v1           Proposed
+0x0004 = hn-shake256-v1           Proposed
+0x0005 = hn-blake3-nonconsensus   Proposed
+```
+
+`Proposed` hash profiles are not valid for consensus commitments.
+
 ## Normative Rules
 
 ### Hash Only Canonical Bytes
@@ -90,6 +119,36 @@ Initial conceptual domain tags:
 
 Domain tags are protocol constants. They are not user input.
 
+Initial domain tag binary representation:
+
+```text
+DomainTag
+  u16 domain_tag_version = 1
+  bounded UTF-8 string domain_name
+```
+
+Rules:
+
+- `domain_name` must be ASCII lowercase.
+- Allowed characters are `a-z`, `0-9`, and `.`.
+- `domain_name` maximum length is 128 bytes.
+- Domain tags are encoded with HNCS before hashing.
+- Domain tag comparison is bytewise and case-sensitive.
+- Domain names must not be normalized, case-folded, localized, or inferred from
+  display text.
+
+The complete v0.1 hash input is:
+
+```text
+DomainSeparatedHashInputV1
+  u16 hash_profile_id
+  DomainTag domain_tag
+  bytes canonical_payload
+```
+
+`canonical_payload` is the HNCS encoding of the object being committed to. It
+is length-delimited inside the hash input to avoid concatenation ambiguity.
+
 ### No Cross-Domain Hash Reuse
 
 A digest produced for one domain must not be accepted as a digest for another
@@ -108,6 +167,29 @@ Digest length is part of the hash profile.
 
 Truncation is forbidden unless the profile explicitly defines truncation,
 security rationale, and collision risk.
+
+The initial v0.1 digest length is 32 bytes for every active consensus hash
+domain.
+
+Initial domain digest lengths:
+
+```text
+address account          32 bytes
+address contract         32 bytes
+transaction id           32 bytes
+transaction signing      32 bytes
+receipt id               32 bytes
+state leaf               32 bytes
+state node               32 bytes
+block header             32 bytes
+block id                 32 bytes
+p2p message id           32 bytes
+algorithm registry       32 bytes
+```
+
+Address display length and checksum rules are not defined in this ADR. ADR-0003
+may wrap or encode the 32-byte address digest, but it must not silently change
+the underlying hash profile.
 
 ### Algorithm Lifecycle
 
@@ -137,7 +219,7 @@ separate wallet security specification.
 
 ## Initial Algorithm Candidates
 
-This ADR does not yet accept a final primary hash suite.
+This section records evaluated alternatives and non-active reserved profiles.
 
 ### SHA-256
 
@@ -233,23 +315,35 @@ Recommended role if selected:
   review
 - possible future consensus profile only after formal acceptance
 
-## Recommended Direction
+## Accepted Initial Direction
 
-HNChain should use hash profile agility from genesis.
+HNChain adopts hash profile agility from genesis.
 
-The recommended initial direction is:
+For the initial v0.1 profile:
 
-- SHA-512/256 or SHA3-256 as the conservative primary consensus digest
-  candidate.
-- SHA-256 retained as a compatibility profile where ecosystem integration
-  requires it.
-- SHAKE256 reserved for future proof systems or variable-output commitments.
-- BLAKE3 considered for non-consensus performance-sensitive content addressing
-  first, and only later for consensus if benchmarks, audits, and governance
-  accept the trade-off.
+- SHA-512/256 is the only active consensus hash algorithm.
+- SHA-256 is reserved as a future compatibility profile, but inactive at
+  genesis.
+- SHA3-256 is reserved as a future conservative alternative, but inactive at
+  genesis.
+- SHAKE256 is reserved for future variable-output proof systems, but inactive at
+  genesis.
+- BLAKE3 is reserved for possible non-consensus content addressing first, and is
+  not active for consensus.
 
-This ADR does not finalize the primary hash suite. Final acceptance requires
-benchmarking, implementation review, test vectors, and state tree requirements.
+### Rationale
+
+SHA-512/256 provides a 256-bit digest using the SHA-512 family, is standardized
+by NIST FIPS 180-4, and performs well on common 64-bit platforms. Selecting one
+active consensus profile keeps the initial protocol surface smaller than
+activating both SHA-2 and SHA-3 families.
+
+SHA3-256 remains a strong conservative candidate, but activating it at genesis
+alongside SHA-512/256 would increase implementation and test-vector surface
+without a current protocol need.
+
+BLAKE3 is not selected for consensus v0.1 because it is not a NIST FIPS
+standard and should first be evaluated in non-consensus contexts.
 
 ## Rejected Practices
 
@@ -326,23 +420,22 @@ Adding a new hash profile can be backward-compatible only if:
 Changing the hash profile for an existing consensus object version is a major
 protocol change.
 
+Changing the algorithm, domain tag encoding, digest length, or input
+construction of hash profile ID `0x0001` is a breaking protocol change.
+
 ## Related Specifications
 
 - `docs/adr/ADR-0006-transaction-format.md`
 - `docs/specs/core/hash-algorithms.md`
 - `docs/specs/core/transaction-format.md`
 
-## Open Decisions
+## Deferred Decisions
 
-- final primary consensus hash profile
-- final hash profile identifier encoding
-- final domain tag binary representation
-- whether state tree and transaction identifiers use the same algorithm
-- whether address derivation uses the same algorithm as transaction IDs
-- digest length for each protocol domain
-- BLAKE3 role, if any, in consensus
-- hash test vector format
+- BLAKE3 role, if any, in non-consensus content addressing
+- hash test vector file format
 - approved cryptographic libraries
+- future SHA3-256 activation rules
+- future SHAKE256 proof-system profile
 
 ## References
 

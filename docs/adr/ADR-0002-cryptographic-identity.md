@@ -1,6 +1,6 @@
 # ADR-0002: Cryptographic Identity
 
-Status: Proposed
+Status: Accepted
 
 Date: 2026-07-18
 
@@ -69,6 +69,55 @@ is specified by ADR-0003.
 
 The hash algorithm is intentionally not defined in this ADR. Hash functions and
 domain separation are specified by ADR-0005.
+
+The initial HNChain v0.1 cryptographic identity profile accepts Ed25519 as the
+only active consensus signing algorithm.
+
+Initial algorithm assignment:
+
+```text
+Algorithm ID:        0x0001
+Algorithm Name:      Ed25519
+Lifecycle:           Active
+Public Key Length:   32 bytes
+Signature Length:    64 bytes
+Signature Mode:      PureEdDSA Ed25519
+Specification:       RFC 8032
+Active Roles:
+  account_signing
+  validator_consensus
+  governance
+```
+
+The initial profile reserves but does not activate compatibility and
+post-quantum algorithm identifiers:
+
+```text
+0x0002 = secp256k1_ecdsa_sha256        Proposed
+0x0003 = ed448                         Proposed
+0x0100 = ml_dsa_reserved               Proposed
+0x0101 = slh_dsa_reserved              Proposed
+```
+
+`Proposed` algorithms are not valid for consensus signatures.
+
+secp256k1 is not active at genesis. It may be activated later only through a
+dedicated ADR or HNIP that specifies canonical public key encoding, canonical
+signature encoding, low-S requirements, recovery identifier handling, role
+limits, test vectors, and wallet compatibility rules.
+
+Post-quantum signatures are not active at genesis. HNChain reserves algorithm
+identifier space for them because key and signature envelopes must not assume
+fixed Ed25519-sized payloads.
+
+HNChain account identity supports multiple key descriptors structurally, but
+the initial authorization profile requires each consensus authorization to
+declare exactly one active signing key unless the owning object specification
+defines a threshold or multisignature rule.
+
+Threshold signatures, multisignature account policies, and key rotation
+transactions are deferred to dedicated specifications. They must not be
+implicitly defined by wallet software or SDK conventions.
 
 ## Normative Rules
 
@@ -195,7 +244,7 @@ They must not silently define consensus behavior.
 
 ## Initial Algorithm Candidates
 
-This ADR does not yet accept a final primary signing suite.
+This section records evaluated alternatives and non-active reserved suites.
 
 Candidate suites:
 
@@ -295,23 +344,42 @@ Recommended role if selected:
 
 - fallback or high-assurance long-term authority keys
 
-## Recommended Direction
+## Accepted Initial Direction
 
-HNChain should adopt algorithm agility from genesis.
+HNChain adopts algorithm agility from genesis.
 
-For the initial mainnet profile, the recommended direction is:
+For the initial v0.1 profile:
 
-- Ed25519 as the primary classical signing suite for account and validator
-  signatures.
-- secp256k1 as an optional compatibility suite only if wallet, bridge, or
-  interoperability requirements justify the complexity.
-- Post-quantum suites reserved through explicit algorithm identifiers and
-  variable-length key and signature envelopes.
-- No post-quantum suite activated for high-throughput transaction signing until
-  performance, implementation maturity, and storage impact are measured.
+- Ed25519 is the primary and only active consensus signing suite for
+  `account_signing`, `validator_consensus`, and `governance`.
+- secp256k1 is reserved for future compatibility and bridge use, but inactive
+  at genesis.
+- Ed448 is reserved for future high-assurance roles, but inactive at genesis.
+- ML-DSA and SLH-DSA identifier ranges are reserved for future post-quantum or
+  hybrid profiles, but inactive at genesis.
+- No post-quantum suite is active for high-throughput transaction signing until
+  performance, implementation maturity, wallet support, and storage impact are
+  measured.
 
-This recommendation is not final until benchmark, library, audit, and ecosystem
-requirements are reviewed.
+This decision minimizes the active consensus surface while preserving a
+versioned path for future algorithm migration.
+
+### Rationale
+
+Ed25519 is selected because it has compact 32-byte public keys, compact 64-byte
+signatures, deterministic signing, mature implementations, and a clear public
+specification.
+
+secp256k1 is not activated initially because ECDSA canonicality, low-S
+normalization, nonce failure risk, recovery identifier variants, and ecosystem
+compatibility rules increase consensus complexity. These trade-offs may be
+worth accepting later for bridge or wallet interoperability, but they should
+not be included in the minimal genesis profile.
+
+Post-quantum algorithms are not activated initially because key and signature
+sizes, bandwidth costs, implementation maturity, and wallet support need
+separate analysis. The protocol remains prepared for them through explicit
+algorithm identifiers and variable-length envelopes.
 
 ## Security Considerations
 
@@ -367,18 +435,17 @@ Adding a new algorithm can be backward-compatible only if:
 Changing verification behavior for an active algorithm is a major protocol
 change.
 
+Changing the accepted byte encoding, canonicality rules, or verification rules
+for Ed25519 under algorithm ID `0x0001` is a breaking protocol change.
+
 ## Related Specifications
 
 - `docs/adr/ADR-0003-address-format.md`
 - `docs/specs/core/cryptographic-identity.md`
 - `docs/specs/core/address-format.md`
 
-## Open Decisions
+## Deferred Decisions
 
-- final primary account signing algorithm
-- final validator consensus signing algorithm
-- whether secp256k1 is active at genesis or deferred
-- whether account identity supports multiple active keys at genesis
 - key rotation transaction semantics
 - threshold and multisignature identity model
 - hardware wallet compatibility requirements
