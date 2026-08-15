@@ -1,0 +1,79 @@
+﻿{
+  "schema": "hnchain.conformance.core.hncs-primitives",
+  "version": "0.1.0",
+  "status": "draft",
+  "byte_order": "little-endian",
+  "booleans": [
+    {
+      "value": false,
+      "hex": "00"
+    },
+    {
+      "value": true,
+      "hex": "01"
+    }
+  ],
+  "invalid_booleans": [
+    {
+      "hex": "02",
+      "error": "invalid_bool"
+    }
+  ],
+  "unsigned_integers": {
+    "u8": {
+      "value": "171",
+      "hex": "ab"
+    },
+    "u16": {
+      "value": "4660",
+      "hex": "3412"
+    },
+    "u32": {
+      "value": "305419896",
+      "hex": "78563412"
+    },
+    "u64": {
+      "value": "81985529216486895",
+      "hex": "efcdab8967452301"
+    },
+    "u128": {
+      "value": "1512366075204170929049582354406559216",
+      "hex": "1032547698badcfeefcdab8967452301"
+    }
+  },
+  "bounded_bytes": [
+    {
+      "value_hex": "616263",
+      "max_len": 3,
+      "hex": "03000000616263"
+    }
+  ],
+  "bounded_strings": [
+    {
+      "value": "hn",
+      "max_len": 2,
+      "hex": "02000000686e"
+    }
+  ],
+  "invalid_lengths": [
+    {
+      "hex": "0400000061626364",
+      "max_len": 3,
+      "error": "length_limit_exceeded"
+    }
+  ],
+  "invalid_utf8": [
+    {
+      "hex": "01000000ff",
+      "max_len": 1,
+      "error": "invalid_utf8"
+    }
+  ],
+  "trailing_bytes": [
+    {
+      "hex": "01ff",
+      "decoded_value": true,
+      "error": "trailing_bytes"
+    }
+  ]
+}

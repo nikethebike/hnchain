@@ -1,4 +1,4 @@
-# HNChain
+﻿# HNChain
 
 HNChain is a specification-first Layer 1 blockchain architecture focused on
 security, deterministic execution, modularity, predictable economics, long-term
@@ -10,7 +10,8 @@ The project is currently in the architecture and specification phase.
 
 Status: Draft documentation and architectural specifications.
 
-Protocol implementation is limited to initial `hn-core` primitive types.
+Protocol implementation is limited to initial `hn-core` primitive types and
+the `hn-hncs` primitive codec foundation.
 
 The repository contains an initial Rust workspace scaffold for the future
 reference implementation.

@@ -1,4 +1,4 @@
-# HNChain Documentation
+﻿# HNChain Documentation
 
 HNChain documentation is organized as a specification-first system.
 
