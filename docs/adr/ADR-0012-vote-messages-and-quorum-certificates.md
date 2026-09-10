@@ -441,8 +441,6 @@ compatibility analysis.
 - signature aggregation scheme
 - batch verification rules
 - evidence conflict rules
-- nil vote semantics
-- timeout certificate semantics
 - checkpoint certificate semantics
 - light-client validator set proof format
 - maximum vote size

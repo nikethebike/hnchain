@@ -316,8 +316,6 @@ bridges, exchanges, and archival services.
 
 ## Open Decisions
 
-- timeout certificate interaction
-- nil vote finality behavior
 - epoch transition finality rule
 - checkpoint interval
 - weak subjectivity policy

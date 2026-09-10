@@ -66,6 +66,49 @@ documented fairness and attack-resistance trade-offs.
 This ADR does not accept a final randomness scheme, VRF construction, committee
 selection model, or proposer priority algorithm.
 
+**Decided: deterministic weighted round-robin, no randomness source at
+all.** This follows directly from ADR-0009's "Decided: initial
+consensus family is Tendermint-style BFT," not from an independent
+choice among the candidates below — deterministic weighted rotation by
+accumulated proposer priority is specifically what makes a profile
+"Tendermint-style" rather than, say, Algorand-style (VRF-based private
+eligibility) or a committee-sampling design. Concretely, every active
+validator accumulates a `proposer_priority` that increases each round
+attempt in proportion to its own voting power; the highest-priority
+validator is selected and has its priority reduced by the total active
+voting power, so proposer frequency converges to be proportional to
+voting power over time without ever needing a random source. Ties
+break on the lowest `validator_id` among validators sharing the
+maximum priority — a purely deterministic rule, not a fallback to
+chance.
+
+This resolves several Open Decisions below directly, not independently:
+"weighted versus equal proposer probability" is weighted, by
+construction; "randomness source," "VRF algorithm," and "random beacon
+design" are all not applicable — there is no randomness to source,
+construct, or commit to; "committee selection relationship" is not
+applicable either, since the full active set participates in every
+round, matching the earlier decision against a DAG/committee-based
+consensus family. "Proposer priority tie-breaking" is decided above.
+
+The **exact** priority-update arithmetic (the precise formula for how
+much priority increases/decreases per round, beyond "proportional to
+voting power") is deliberately **not** pinned here: getting this exact
+in one pass from memory, without an independently-verifiable reference
+implementation to check it against, risks the same class of subtle
+error this project has caught elsewhere by insisting on oracle
+verification before trusting a remembered formula — this is a
+mechanism/architecture decision (weighted round-robin, no randomness),
+not the literal implementation formula, which stays a distinct,
+still-open, later decision.
+
+Lookahead is short and falls out of the algorithm rather than being an
+independently tunable parameter: because round `r + 1`'s proposer
+(within one height) depends on whether round `r` actually produced a
+block, the schedule is only reliably known one round at a time, not
+announced far in advance the way a VRF-reveal or beacon-based schedule
+might be — there is no separate "lookahead window" to configure.
+
 ## Normative Rules
 
 ### Versioned Election Profile
@@ -325,21 +368,13 @@ requires migration analysis.
 
 ## Open Decisions
 
-- initial election profile
-- round semantics
-- proposer lookahead window
-- randomness source
-- VRF algorithm, if any
-- random beacon design, if any
-- weighted versus equal proposer probability
-- proposer priority tie-breaking
-- fallback proposer selection
-- timeout interaction
+- exact proposer priority update formula (mechanism decided above —
+  weighted round-robin, no randomness; the precise arithmetic is not)
 - proposer proof format
-- randomness commitment format
 - leader schedule proof for light clients
-- grinding resistance analysis
-- committee selection relationship
+- grinding resistance analysis (voting-power-based grinding, e.g. via
+  validator admission or delegation manipulation — a different concern
+  from randomness-grinding, which does not apply here at all)
 
 ## Related Specifications
 

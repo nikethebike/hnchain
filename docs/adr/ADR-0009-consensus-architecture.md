@@ -197,6 +197,61 @@ verifiable.
 Leader selection must define resistance to targeted attacks, grinding, stake
 concentration, and denial-of-service amplification.
 
+Deterministic weighted round-robin, no randomness source at all — see
+ADR-0011, "Decided: deterministic weighted round-robin," which follows
+directly from Tendermint-style BFT being the chosen family, the same
+way the timeout/view-change mechanism below does.
+
+### Timeout And View Change
+
+**Decided: mechanism, not durations.** Follows directly from
+Tendermint-style BFT (ADR-0009, "Decided: initial consensus family"),
+not an independent choice — this is the standard Tendermint round
+structure, not a novel design.
+
+Each round has three sequential stages — `propose`, `prevote`,
+`precommit` (ADR-0012, "`vote_type` registry": `prevote`/`precommit`
+are the two voting stages; `propose` is the proposer's own single
+signed proposal, not a vote) — each with its own timeout. Timeouts
+increase with round number (monotonic backoff) rather than staying
+fixed, which is what gives the protocol liveness under only *partial*
+synchrony (ADR-0009's Explicit Safety Model already requires stating
+synchrony assumptions): once actual network delay stays under the
+now-large-enough timeout, a round eventually completes, without ever
+assuming a fixed bound on message delay.
+
+- **Propose timeout.** If a validator's propose-stage timeout expires
+  without a valid proposal from the round's elected proposer
+  (ADR-0011), it `prevote`s `nil` (`target_type = nil`, ADR-0012 —
+  not a distinct vote type; the type is still `prevote`).
+- **Prevote timeout.** If a validator's prevote-stage timeout expires
+  without observing a `2f+1` `prevote` quorum for one specific block,
+  it `precommit`s `nil`.
+- **Precommit timeout / round advance.** If a validator's
+  precommit-stage timeout expires without observing a `2f+1`
+  `precommit` quorum for one specific block, the round increments —
+  height stays the same, a new proposer is selected for the new round
+  by the same deterministic priority algorithm (ADR-0011), and the
+  three stages repeat. This *is* "view change" for this profile: there
+  is no separate timeout-certificate object to construct or verify (a
+  round's own absence of a qualifying `precommit` quorum before
+  timeout is itself sufficient justification to advance), unlike
+  designs that construct an explicit timeout certificate.
+
+This resolves "round semantics" (Open Decisions, below) directly: a
+`round` is one `propose -> prevote -> precommit` attempt at a fixed
+`height`; advancing the round never changes `height`, and only a
+successful `2f+1` `precommit` quorum (ADR-0012) at any round finalizes
+that height and moves to the next one.
+
+The **exact timeout durations** (base value, backoff formula) are
+deliberately not decided here — tunable network-timing parameters,
+the same class of decision as `MAX_TRANSACTION_SIZE` (ADR-0006) or
+epoch length (ADR-0010): fixed protocol constants for a later pass,
+not structural choices, and not decidable without also deciding real
+network-timing assumptions this ADR's "Explicit Safety Model" requires
+stating explicitly first.
+
 ### Evidence And Accountability
 
 Consensus must define evidence formats before activating penalties such as
@@ -392,8 +447,9 @@ explicit migration planning.
 - active validator set selection
 - voting power model
 - signature aggregation scheme
-- leader selection randomness source
-- timeout and view-change rules
+- timeout and view-change *durations* (mechanism decided above —
+  ADR-0009, "Timeout And View Change"; the exact base timeout and
+  backoff formula are not)
 - epoch length (transition mechanism decided, ADR-0010, "Epoch
   Boundaries"; the constant itself is not)
 - validator set update timing
