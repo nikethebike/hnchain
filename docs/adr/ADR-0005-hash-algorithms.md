@@ -21,6 +21,9 @@ Referenced By:
 - ADR-0006: Transaction Format
 - ADR-0007: State Tree
 - ADR-0008: Block Format
+- ADR-0010: Validator Set Model
+- ADR-0012: Vote Messages And Quorum Certificates
+- ADR-0015: Slashing And Accountability
 
 ## Context
 
@@ -131,8 +134,22 @@ Initial conceptual domain tags:
 - `hnchain.block.id.v1`
 - `hnchain.list.node.v1`
 - `hnchain.list.empty.v1`
+- `hnchain.vote.signing.v1`
+- `hnchain.consensus.root.v1`
+- `hnchain.validator.record.v1`
+- `hnchain.evidence.v1`
 - `hnchain.p2p.message.v1`
 - `hnchain.registry.algorithm.v1`
+
+`hnchain.vote.signing.v1` (ADR-0012), `hnchain.consensus.root.v1` and
+`hnchain.validator.record.v1` (ADR-0010), and `hnchain.evidence.v1`
+(ADR-0015) are added by the consensus track: the vote signing digest,
+the validator set commitment (which doubles as `BlockHeader.
+consensus_root`, ADR-0008), each validator record's leaf digest for
+`validators_root`, and each evidence object's leaf digest for
+`evidence_root`, respectively — the last two both committed via
+`hn-list-merkle-v1`, the same reuse already applied to `transactions_root`/
+`receipts_root`.
 
 `hnchain.list.node.v1` and `hnchain.list.empty.v1` are added by
 ADR-0008 ("Ordered List Commitment"): the internal-node and

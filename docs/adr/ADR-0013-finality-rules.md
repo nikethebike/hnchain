@@ -108,6 +108,24 @@ Finality requires quorum certificate verification as defined by ADR-0012.
 The finality rule must define whether one certificate is sufficient or whether a
 chain of certificates is required.
 
+**Decided: one certificate is sufficient.** Tendermint-style BFT
+(ADR-0009, "Decided: initial consensus family") gives deterministic,
+single-round finality: once a `precommit` `QuorumCertificate` (ADR-0012,
+`certificate_type = 0x02`) forms for a block at a height and round, that
+block is immediately final — no chain of certificates over multiple
+blocks is required, unlike HotStuff-style two/three-phase pipelined
+commit rules. This follows directly from the consensus family already
+chosen, not an independent choice.
+
+**Decided: `justification` (ADR-0008) is `FinalityProof`** (this ADR's
+Decision, above) carrying exactly that one `precommit`
+`QuorumCertificate`, with `FinalityProof.quorum_certificate.target_type
+= block` and `target_hash = block_hash` (ADR-0008, "Header Hash") — the
+"Block Header Binding" rule above already requires this binding; this
+decision fixes which object satisfies it. `block_hash` excludes
+`justification` (ADR-0008, "Header Hash"), so this binding is not
+circular: the proof references a hash computed without it.
+
 ### Safety Rule
 
 An accepted finality profile must state the safety property it provides.
@@ -298,10 +316,6 @@ bridges, exchanges, and archival services.
 
 ## Open Decisions
 
-- initial finality profile
-- one-QC versus chained-QC finality
-- final vote types used for finality
-- final quorum threshold formula
 - timeout certificate interaction
 - nil vote finality behavior
 - epoch transition finality rule
@@ -310,7 +324,6 @@ bridges, exchanges, and archival services.
 - light-client update rule
 - data availability precondition
 - rollback and halt behavior
-- finality proof inclusion in block justification
 - finality proof maximum size
 
 ## Related Specifications

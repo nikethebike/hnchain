@@ -56,9 +56,44 @@ The first consensus profile should be BFT-oriented and should target safety when
 fewer than one third of active voting power is Byzantine, assuming the final
 algorithm satisfies its network and timing assumptions.
 
-This ADR does not accept a final algorithm. HotStuff-style BFT, Tendermint-style
-BFT, DAG-based mempool plus BFT finality, and other candidates remain under
-evaluation.
+**Decided: initial consensus family is Tendermint-style BFT.** Asked the
+user first — this is the single most consequential decision in the
+project so far, since quorum certificates, finality justification,
+evidence categories, and epoch transition timing all cascade from it.
+
+Rejected the other three candidates in "Alternatives Considered" for
+the *initial* profile specifically, not as a claim that they are worse
+in general:
+
+- **HotStuff-style BFT**: pipelined/linear communication is a real
+  scalability advantage, but leader-failure and view-change tuning are
+  subtler and the design has less production hardening at the scale of
+  scrutiny this project targets for its first profile. Nothing rules
+  out a HotStuff-style profile later, once the validator set is large
+  enough that Tendermint's `O(n²)` vote traffic becomes a genuine
+  bottleneck — "Protocol Upgrades" above already anticipates replacing
+  the consensus profile.
+- **DAG-based mempool plus BFT finality**: ADR-0009's own analysis
+  already flags this as "significantly more complex, harder to audit"
+  for a first profile — matches this project's established preference
+  for well-precedented, conservatively-audited designs over novel ones
+  (RFC 6962 for `hn-list-merkle-v1`, "no custom cryptography without
+  external review" for signatures, ADR-0002).
+- **Avalanche-style metastable consensus**: probabilistic finality
+  contradicts this project's own stated deterministic-finality goal
+  (Goals, above: "Deterministic finality under explicit assumptions").
+- Proof of Work was already rejected (Rejected Options, above) before
+  this decision.
+
+Tendermint-style BFT: round-based, one proposer per round (Leader
+Election, below, decides selection specifically), a `propose ->
+prevote -> precommit -> commit` voting sequence, deterministic finality
+on a `2f+1`-of-`3f+1` voting-power quorum at each voting stage (no
+reorgs after commit, matching the `<1/3` Byzantine threshold this ADR's
+Decision text already targeted before this choice was made) — this is
+the same fault threshold, not a new one. `O(n²)` message complexity
+per round is acceptable for a first profile with a moderate validator
+set; revisit if validator set size later makes it a bottleneck.
 
 ## Normative Rules
 
@@ -354,17 +389,15 @@ explicit migration planning.
 
 ## Open Decisions
 
-- initial consensus family
 - active validator set selection
 - voting power model
-- quorum threshold
 - signature aggregation scheme
 - leader selection randomness source
 - timeout and view-change rules
-- epoch length
+- epoch length (transition mechanism decided, ADR-0010, "Epoch
+  Boundaries"; the constant itself is not)
 - validator set update timing
 - slashing activation model
-- evidence format
 - checkpoint interval
 - light-client finality proof
 - data availability rule

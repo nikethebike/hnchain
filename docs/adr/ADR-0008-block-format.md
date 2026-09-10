@@ -365,12 +365,36 @@ finality, validator set changes, voting data, or other consensus artifacts.
 
 The exact content is defined by the consensus specification.
 
+**Decided** (ADR-0010, "Validator Set Commitment"): `consensus_root` is
+the active validator set's `validator_set_commitment` — the same value
+ADR-0012's votes and quorum certificates and ADR-0015's evidence
+already reference, not a second, independently-computed digest.
+`HASH_PROFILE_0x0001("hnchain.consensus.root.v1", HNCS(ValidatorSetCommitmentV1))`,
+where `ValidatorSetCommitmentV1.validators_root` is an
+`hn-list-merkle-v1` (above) commitment over each active validator's
+own digest. This equality is what lets a light client verify that a
+block's `justification` was produced by the validator set the block
+itself claims, by comparing `consensus_root` against the QC's own
+`validator_set_commitment` field directly.
+
 ### Evidence Root
 
 `evidence_root` commits to Byzantine evidence included in the block, such as
 double-signing proofs or other slashable behavior if slashing is activated.
 
 The exact evidence schema is defined by validator and consensus specifications.
+
+**Decided** (ADR-0015, "Versioned Evidence"): `evidence_root` is
+`hn-list-merkle-v1` (above) over each included `ConsensusEvidence`
+object's `evidence_hash` (`HASH_PROFILE_0x0001("hnchain.evidence.v1",
+HNCS(ConsensusEvidence))`), sorted by ascending `evidence_hash` — unlike
+`transactions_root`, evidence order carries no consensus meaning of its
+own, so sorting by the leaves' own digests avoids needing a separate
+ordering rule. The `evidence_type` registry (closed, `u8`:
+`double_proposal`, `double_vote`, `conflicting_qc_participation`,
+`conflicting_finality_proof_participation`, `invalid_consensus_signature`)
+is decided in ADR-0015; slashing *amounts* remain fully open there,
+unaffected by this commitment-mechanism decision.
 
 ### Protocol Parameters Hash
 
@@ -396,6 +420,15 @@ explicitly requires otherwise.
 
 This allows a header hash to identify proposed content while finality data can
 be verified as a separate proof over that content.
+
+**Decided** (ADR-0013, "Quorum Verification"): `justification` is
+`FinalityProof`, carrying exactly one `precommit`-stage
+`QuorumCertificate` (ADR-0012, `certificate_type = 0x02`) whose
+`target_type = block` and `target_hash = block_hash` (above). One
+certificate is sufficient — Tendermint-style BFT (ADR-0009, "Decided:
+initial consensus family") gives deterministic, single-round finality,
+so no certificate chain over multiple blocks is required. `block_hash`
+already excludes `justification`, so this binding is not circular.
 
 ### Block Size And Transaction Count Limits
 
@@ -578,18 +611,20 @@ New body sections may be backward-compatible only if:
 - events root format (commitment mechanism — `hn-list-merkle-v1` — is
   decided; content stays open, gated on an event schema, itself gated
   on HNVM)
-- consensus root format — blocked on a consensus protocol being
-  selected (`docs/rfc/consensus/consensus-architecture.md` is
-  Proposed, not Accepted)
-- evidence root format — blocked on the same consensus track
-  (`docs/rfc/consensus/slashing-and-accountability.md`)
-- finality justification format — blocked on the same consensus track
-  (`docs/rfc/consensus/finality-rules.md`,
-  `vote-messages-and-quorum-certificates.md`)
-- timestamp validation window — blocked on the same consensus track
-- epoch transition rules — blocked on the same consensus track (the
-  consensus-protocol `epoch` field above, not `protocol_epoch`, which
-  is already decided)
+- consensus root format (decided above — ADR-0010, "Validator Set
+  Commitment": the active validator set's `validator_set_commitment`)
+- evidence root format (decided above — ADR-0015, "Versioned
+  Evidence"; slashing amounts remain open there, unaffected)
+- finality justification format (decided above — ADR-0013, "Quorum
+  Verification": a single `precommit` `QuorumCertificate`)
+- timestamp validation window — still blocked on the consensus track
+  reaching Accepted (`docs/rfc/consensus/*`, still Proposed) —
+  distinct from the other three items above: no existing conceptual
+  structure anywhere gave this one a concrete mechanism to adopt yet
+- epoch transition rules (mechanism decided — ADR-0010, "Epoch
+  Boundaries": height-aligned, one full epoch of lead time; the
+  consensus-protocol `epoch` field's exact length is not, same as
+  before — distinct from `protocol_epoch`, already decided)
 - protocol parameter commitment format — blocked on a governance model
   existing: unlike `fee_limit`/`ReceiptV1`, there is currently no
   partial structure to decide (no adjustable parameter has been named

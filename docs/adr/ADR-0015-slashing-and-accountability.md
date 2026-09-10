@@ -11,6 +11,7 @@ Depends On:
 - ADR-0000: Protocol Invariants
 - ADR-0001: Extended Account-Based State Model
 - ADR-0002: Cryptographic Identity
+- ADR-0005: Hash Algorithms
 - ADR-0008: Block Format
 - ADR-0009: Consensus Architecture
 - ADR-0010: Validator Set Model
@@ -83,6 +84,42 @@ Every evidence object includes `evidence_version`.
 
 Nodes must not infer evidence format from payload size, vote type, signature
 algorithm, network message type, or client software.
+
+**Decided: `evidence_type` registry**, `u8`, closed for this profile:
+
+```text
+0x00  reserved, invalid
+0x01  double_proposal
+0x02  double_vote
+0x03  conflicting_qc_participation
+0x04  conflicting_finality_proof_participation
+0x05  invalid_consensus_signature
+```
+
+`safety-rule violation, if profile-defined` (Decision, above) is
+deliberately left unassigned: it is explicitly conditional on a future
+consensus profile defining its own additional safety rule, which does
+not exist yet — assigning it a number now would be guessing at
+something with no content behind it, the same reasoning already
+applied to leaving `hnchain.block.id.v1` (ADR-0005) unassigned.
+
+**Decided: evidence digest mechanism**, closing "evidence inclusion
+format" (Open Decisions, below) at the commitment-mechanism level:
+
+```text
+evidence_hash = HASH_PROFILE_0x0001(
+  "hnchain.evidence.v1", HNCS(ConsensusEvidence))
+
+evidence_root = MTH(included_evidence, by ascending evidence_hash)
+```
+
+`MTH` is `hn-list-merkle-v1` (ADR-0008, "Ordered List Commitment"),
+the same reuse already applied to `validators_root` (ADR-0010). Sorted
+by the evidence objects' own digests rather than "inclusion order,"
+avoiding the need for a separate proposer-ordering rule purely for
+evidence — unlike `transactions_root`, where order is itself
+consensus-relevant (ADR-0008, "Transactions Root"), nothing in this
+protocol currently assigns evidence order any meaning.
 
 ### Evidence Context Binding
 
@@ -312,11 +349,8 @@ algorithm migrations.
 
 ## Open Decisions
 
-- initial evidence type registry
-- evidence inclusion format
 - evidence validity window
 - evidence fees
-- evidence root construction
 - jailing activation rules
 - downtime accountability
 - slashing activation criteria

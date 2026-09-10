@@ -11,6 +11,7 @@ Depends On:
 - ADR-0000: Protocol Invariants
 - ADR-0001: Extended Account-Based State Model
 - ADR-0002: Cryptographic Identity
+- ADR-0005: Hash Algorithms
 - ADR-0006: Transaction Format
 - ADR-0007: State Tree
 - ADR-0008: Block Format
@@ -154,6 +155,24 @@ verification, checkpointing, and consensus safety easier to reason about.
 
 The exact epoch length is open.
 
+**Decided: epoch transition mechanism**, not its length. Epoch
+boundaries are height-aligned: epoch `N` covers a fixed, contiguous
+range of block heights (the exact `EPOCH_LENGTH` stays open — a
+tunable constant, the same class of decision as ADR-0006's
+`MAX_TRANSACTION_SIZE`, not a structural one). The active validator set
+for epoch `N + 1` is derived from canonical state as it stands at the
+*start* of epoch `N` — one full epoch of lead time before it takes
+effect — giving validators and light clients an entire epoch to
+receive, verify, and prepare for the next set rather than learning it
+at the last possible height. New consensus keys become valid starting
+at epoch `N + 1`'s first height, exactly; old keys remain valid for
+verifying evidence and historical blocks from epoch `N` and earlier
+(already stated conceptually in "Key Rotation," below — this decision
+fixes the boundary precisely rather than leaving "remain valid" open).
+This mechanism is independent of the voting power model (still open,
+Open Decisions) and of the exact epoch length: both apply unchanged
+regardless of which is eventually chosen.
+
 ### Validator Set Commitment
 
 Blocks must commit to validator set or validator set transition data through
@@ -165,6 +184,45 @@ The commitment must be sufficient for:
 - light-client finality verification
 - checkpoint verification
 - historical audit
+
+**Decided: `validators_root` and `validator_set_commitment` /
+`consensus_root` mechanism.**
+
+```text
+validators_root = MTH(active_validators, by ascending validator_id)
+  where each leaf is
+    HASH_PROFILE_0x0001("hnchain.validator.record.v1", HNCS(ValidatorRecordV1))
+
+validator_set_commitment = HASH_PROFILE_0x0001(
+  "hnchain.consensus.root.v1", HNCS(ValidatorSetCommitmentV1))
+```
+
+`MTH` is `hn-list-merkle-v1` (ADR-0008, "Ordered List Commitment") —
+reused here for the same reason it was designed generically: any
+ordered list of domain-separated digests can use it, not just
+`transactions_root`/`receipts_root`. Leaves are sorted by ascending
+`validator_id` — a canonical, content-independent order, avoiding an
+"inclusion order" ambiguity that would need its own separate rule to
+define.
+
+**`validator_set_commitment` (used throughout ADR-0012's votes and
+quorum certificates, ADR-0015's evidence, and here) and `consensus_root`
+(ADR-0008's `BlockHeader` field) are the same value, not two
+independently-computed digests that happen to agree.** A block's
+`consensus_root` *is* the active validator set's
+`validator_set_commitment` — this is what lets a light client verify
+that the votes referenced by a block's `justification` actually used
+the validator set the block itself claims, by comparing one field
+against the other directly, rather than needing to trust that two
+separately-named fields were computed consistently.
+
+`ValidatorSetCommitmentV1`'s conceptual `hash_profile` field
+(`validator-set.md` §7) is dropped: every hash in this protocol already
+uses `HASH_PROFILE_0x0001` with an unambiguous domain tag, so a field
+naming which profile was used would duplicate what the domain tag
+`hnchain.consensus.root.v1` already guarantees — the same redundancy
+class as `protocol_name` inside `TransactionSigningPayload` (ADR-0006)
+and `checksum_profile` inside `AddressPayload` (ADR-0003 Decision 5).
 
 ### Key Rotation
 
@@ -353,7 +411,8 @@ rules and light-client compatibility analysis.
 - delegation support
 - stake caps
 - validator admission ranking
-- epoch length
+- epoch length (transition mechanism decided above; the constant itself
+  is not)
 - activation delay
 - deactivation delay
 - key rotation delay
@@ -361,7 +420,6 @@ rules and light-client compatibility analysis.
 - jailing conditions
 - slashing activation
 - validator metadata schema
-- validator set commitment format
 - light-client validator set proof format
 - hardware and bandwidth requirements
 

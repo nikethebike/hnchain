@@ -15,6 +15,7 @@ Depends On:
 - ADR-0009: Consensus Architecture
 - ADR-0010: Validator Set Model
 - ADR-0011: Leader Election
+- ADR-0022: Protocol Versioning
 
 Supersedes: None
 
@@ -110,6 +111,34 @@ Every vote signature must bind to:
 
 Votes valid in one context must not be replayable in another context.
 
+**Decided: vote signing digest mechanism.**
+
+```text
+vote_signing_digest = HASH_PROFILE_0x0001(
+  "hnchain.vote.signing.v1", HNCS(VoteSigningPayloadV1))
+```
+
+Reuses `HASH_PROFILE_0x0001` (ADR-0005) with a domain tag reserved for
+this purpose, matching every other signing digest decided so far
+(transaction signing, ADR-0006). `protocol_name` and `signing purpose`
+in the binding list above are **not** fields of `VoteSigningPayloadV1`
+— they duplicate what the domain tag itself already guarantees (same
+redundancy class as `protocol_name` inside `TransactionSigningPayload`,
+ADR-0006, "Signing Payload," itself mirroring `checksum_profile` inside
+`AddressPayload`, ADR-0003 Decision 5): `hnchain.vote.signing.v1`
+already says "this digest means HNChain consensus vote signing intent,
+and nothing else can produce or accept it," for free. `chain ID` and
+`network ID` are the already-decided `chain_id`/`network_id` fields
+themselves, not duplicated identifiers.
+
+`VoteSigningPayloadV1`'s full field list mirrors `ConsensusVote` minus
+`signature` (a signature cannot cover itself) and minus `protocol name`/
+`signing purpose` for the reason above; every field in it already has a
+decided type from this ADR, ADR-0006 (`chain_id`, `network_id`), or
+ADR-0022/ADR-0008 (`epoch`/`protocol_epoch`, height), except
+`validator_set_commitment` (ADR-0010, below) and `round` (still open,
+owned by the eventual timeout/view-change model).
+
 ### Vote Types
 
 Vote types are consensus-profile specific.
@@ -125,6 +154,34 @@ Initial conceptual vote classes:
 - `checkpoint`
 
 The accepted consensus profile must define which vote types are active.
+
+**Decided: `vote_type` registry for Tendermint-style BFT** (ADR-0009,
+"Decided: initial consensus family"), `u8`, closed for this profile:
+
+```text
+0x00  reserved, invalid
+0x01  prevote
+0x02  precommit
+```
+
+`proposal` is not a `vote_type`: a proposal is the proposer's own
+single signed block proposal, not a multi-validator claim requiring
+quorum aggregation, so it does not belong in the same registry as
+objects that get counted into a `QuorumCertificate`. `commit` is not a
+separate vote a validator casts — a block becomes committed when a
+`precommit` quorum forms, which is a property of a
+`QuorumCertificate.certificate_type` (below), not a vote a validator
+sends. `timeout` and `nil` are not separate vote types either: in
+classic Tendermint, a validator that cannot vote for a real block at a
+round still casts a real `prevote` or `precommit`, just with
+`target_type = nil` and an empty `target_hash` — the *type* of the
+vote (which round-stage it belongs to) is unchanged, only its target
+is. `checkpoint` stays out of this registry for now: checkpointing
+(ADR-0016) is a separate mechanism from per-block finality voting and
+has not been decided yet — extending this registry for it later needs
+no other change here, since `vote_type` is closed only "for this
+profile," matching every other closed-for-this-profile registry in
+this project.
 
 ### Validator Eligibility
 
@@ -156,7 +213,36 @@ set.
 For BFT profiles targeting fewer than one third Byzantine voting power, the
 expected direction is a threshold greater than two thirds of total voting power.
 
-The exact formula remains open until the final consensus profile is accepted.
+**Decided: quorum threshold formula.** A certificate meets threshold
+when `signed_voting_power * 3 > total_voting_power * 2` — strict
+majority above two thirds, using multiplication instead of division to
+avoid rounding-mode ambiguity across implementations (matching ADR-0000,
+"No Hidden Consensus Dependencies": no floating point, no
+implementation-defined rounding). This is independent of the voting
+power *model* (ADR-0010, still open — equal-weight, stake-weighted,
+capped, or committee-based all produce a `total_voting_power` this same
+formula applies to unchanged) and independent of `voting_power`'s
+final integer width (ADR-0010, still open) — the formula is exact
+integer arithmetic regardless of what width `total_voting_power` and
+`signed_voting_power` end up using, as long as `signed_voting_power *
+3` cannot overflow that width (a constraint on the chosen width, not on
+this formula).
+
+**Decided: `certificate_type` registry for Tendermint-style BFT**, `u8`,
+closed for this profile:
+
+```text
+0x00  reserved, invalid
+0x01  prevote
+0x02  precommit
+```
+
+Mirrors `vote_type` above — a `QuorumCertificate` aggregates votes of
+one type. Only `precommit` certificates are used as finality proof
+(ADR-0013, "Finality Proof Binding"); a `prevote` certificate_type
+exists in the registry for completeness and local/internal use (a
+validator computing its own prevote quorum before precommitting) but is
+not itself embedded in a block's `justification`.
 
 ### Quorum Certificate Target
 
@@ -348,9 +434,9 @@ compatibility analysis.
 
 ## Open Decisions
 
-- initial vote types
-- final quorum threshold formula
-- final quorum certificate format
+- final quorum certificate format (`certificate_type` registry and
+  threshold formula decided above; `signer_commitment`/aggregation
+  representation still open, below)
 - signer commitment representation
 - signature aggregation scheme
 - batch verification rules
@@ -361,7 +447,6 @@ compatibility analysis.
 - light-client validator set proof format
 - maximum vote size
 - maximum certificate size
-- certificate inclusion in block justification
 
 ## Related Specifications
 
