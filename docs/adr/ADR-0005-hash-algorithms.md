@@ -18,6 +18,9 @@ Supersedes: None
 Referenced By:
 
 - ADR-0003: Address Format
+- ADR-0006: Transaction Format
+- ADR-0007: State Tree
+- ADR-0008: Block Format
 
 ## Context
 
@@ -126,8 +129,18 @@ Initial conceptual domain tags:
 - `hnchain.state.internal.v1`
 - `hnchain.block.header.v1`
 - `hnchain.block.id.v1`
+- `hnchain.list.node.v1`
+- `hnchain.list.empty.v1`
 - `hnchain.p2p.message.v1`
 - `hnchain.registry.algorithm.v1`
+
+`hnchain.list.node.v1` and `hnchain.list.empty.v1` are added by
+ADR-0008 ("Ordered List Commitment"): the internal-node and
+empty-list-root hashes for `hn-list-merkle-v1`, the dense ordered-list
+tree profile shared by `transactions_root` and `receipts_root`. Every
+list leaf reuses an already-domain-separated digest from elsewhere
+(`hnchain.transaction.id.v1`, `hnchain.receipt.v1`) rather than needing
+its own tag.
 
 Domain tags are protocol constants. They are not user input.
 

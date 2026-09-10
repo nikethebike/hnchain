@@ -193,10 +193,90 @@ A node must not use local wall-clock time to decide state transition results
 unless the consensus specification explicitly defines the rule and validation
 window.
 
+### Ordered List Commitment (`hn-list-merkle-v1`)
+
+**Decided: a new, dedicated tree profile for ordered lists**, shared by
+`transactions_root` and `receipts_root` below (and available to
+`events_root` once an event schema exists) — not a reuse of
+`hn-smt-256-v1` (ADR-0007). ADR-0007's tree is a *sparse* structure
+fixed at exactly 256 levels, built for a huge, mostly-empty key space
+(global account state); a block's transaction list is the opposite
+shape — small, dense, and sequential (index `0..N-1`, no gaps).
+Recomputing a fixed 256-level sparse tree every block to commit to a
+few thousand dense items would be real wasted work, not a style
+choice — a dense list needs only `ceil(log2(N))` levels. Asked the
+user before taking this on, since designing a new tree profile is
+comparable in scope to what `hn-smt-256-v1` itself required.
+
+```text
+LIST_TREE_PROFILE_ID = 0x0001   (hn-list-merkle-v1, independent
+                                  registry from ADR-0007's TREE_PROFILE_ID)
+```
+
+Leaves are the ordered list's items' own already-decided canonical
+digests — not a separate wrapper hash. Reusing an existing
+domain-separated digest as a leaf, rather than inventing a redundant
+"list leaf" hash on top of it, is the same principle already applied to
+`AccessListV1` entries reusing `state_key` directly (ADR-0006, "Access
+List"):
+
+- `transactions_root` leaves: each transaction's `tx_id` (ADR-0006,
+  "Transaction ID": `HASH_PROFILE_0x0001("hnchain.transaction.id.v1",
+  HNCS(TransactionEnvelope))`).
+- `receipts_root` leaves: each receipt's digest,
+  `HASH_PROFILE_0x0001("hnchain.receipt.v1", HNCS(ReceiptV1))` — this
+  is what `hnchain.receipt.v1` (already reserved in ADR-0005's
+  conceptual domain tag list) is for.
+
+Internal node combination is one shared formula, domain-separated from
+every leaf digest (which all come from other, distinct domain tags) and
+requiring two new domain tags (added to ADR-0005's conceptual registry
+by this decision): `hnchain.list.node.v1` and `hnchain.list.empty.v1`.
+
+```text
+node_hash(left, right) =
+  HASH_PROFILE_0x0001("hnchain.list.node.v1", u16 LIST_TREE_PROFILE_ID || left || right)
+
+empty_root =
+  HASH_PROFILE_0x0001("hnchain.list.empty.v1", u16 LIST_TREE_PROFILE_ID)
+```
+
+Tree construction for an ordered list `D` of `n` items (`MTH`, "Merkle
+Tree Hash"), following RFC 6962 (Certificate Transparency) exactly —
+not an ad hoc scheme:
+
+```text
+MTH(D[0:0])   = empty_root                                    (n = 0)
+MTH(D[0:1])   = D[0]                                           (n = 1, the
+                                                                 leaf digest
+                                                                 itself)
+MTH(D[0:n])   = node_hash(MTH(D[0:k]), MTH(D[k:n]))            (n > 1)
+                where k is the largest power of two < n
+```
+
+The `n = 1` case uses the leaf digest directly with no extra hashing
+step, unlike RFC 6962's own construction (which re-hashes even a single
+leaf with a type-prefix byte to keep leaf and root values
+distinguishable). RFC 6962 needed that prefix because it has no other
+domain separation; this project already gets the equivalent guarantee
+for free from `tx_id`/`hnchain.receipt.v1` being domain-separated from
+`hnchain.list.node.v1` at the hash-profile level — a leaf digest and an
+internal node digest can never collide in meaning regardless of tree
+position, so no extra wrapping is needed.
+
+The largest-power-of-two split (rather than duplicating an unpaired
+leaf, as pre-2012-fix Bitcoin did) is deliberate: duplicating an
+unpaired leaf to force a balanced pairing is exactly the construction
+behind CVE-2012-2459, where a block containing a duplicated transaction
+could produce the same Merkle root as a differently-shaped block. The
+RFC 6962 split makes tree shape a pure function of `n`, with no
+pairing ambiguity to exploit.
+
 ### Transactions Root
 
 `transactions_root` commits to the ordered canonical transaction list included
-in the block.
+in the block: `MTH` (`hn-list-merkle-v1`, above) over each transaction's
+`tx_id`, in block order.
 
 Transaction order is consensus-relevant.
 
@@ -211,7 +291,10 @@ The state root is defined by ADR-0007 and the accepted state tree specification.
 
 ### Receipts Root
 
-`receipts_root` commits to deterministic execution receipts.
+`receipts_root` commits to deterministic execution receipts: `MTH`
+(`hn-list-merkle-v1`, above) over each receipt's
+`HASH_PROFILE_0x0001("hnchain.receipt.v1", HNCS(ReceiptV1))` digest,
+in the same order as `transactions_root`.
 
 A minimal `ReceiptV1` core shape (`receipt_version`, `tx_id`, `status`)
 is decided in ADR-0006 ("Receipts"), not here — the same
@@ -219,7 +302,7 @@ earlier-document-decides, later-document-consumes direction already
 used for `chain_id`. `fee_charged`, `resource_usage`, and
 `emitted_event_references` remain open until the fee, event, and HNVM
 specifications are accepted; `receipts_root`'s own commitment structure
-(ordering, hashing) is this ADR's concern, not the receipt's content.
+is now decided (above) independently of that remaining content.
 
 ### Events Root
 
@@ -423,9 +506,9 @@ New body sections may be backward-compatible only if:
 
 - final header field registry
 - final body section registry
-- transactions root format
-- receipts root format
-- events root format
+- events root format (commitment mechanism — `hn-list-merkle-v1` — is
+  decided; content stays open, gated on an event schema, itself gated
+  on HNVM)
 - consensus root format
 - evidence root format
 - finality justification format

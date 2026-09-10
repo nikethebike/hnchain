@@ -191,14 +191,19 @@ state transition logic.
 
 `transactions_root` commits to the ordered canonical transactions in the body.
 
-The root format is open and must define:
+**Decided** (ADR-0008, "Ordered List Commitment"): `MTH` (`hn-list-merkle-v1`)
+over each transaction's `tx_id` (ADR-0006), in block order. Leaves reuse
+`tx_id` directly rather than a separate wrapper hash. See ADR-0008 for
+the full tree construction (RFC 6962-style largest-power-of-two split,
+deliberately not a duplicate-unpaired-leaf scheme — that construction
+is what CVE-2012-2459 exploited).
 
-- transaction leaf encoding
-- ordering rule
-- empty list root
-- tree or accumulator profile
-- hash profile
-- test vectors
+- transaction leaf encoding: `tx_id` (already a canonical digest)
+- ordering rule: block order (positional, matching `transactions_root`)
+- empty list root: `HASH_PROFILE_0x0001("hnchain.list.empty.v1", u16 0x0001)`
+- tree profile: `hn-list-merkle-v1`, `LIST_TREE_PROFILE_ID = 0x0001`
+- hash profile: `HASH_PROFILE_0x0001` (ADR-0005), no new profile
+- test vectors: not yet written (implementation task, not a design gap)
 
 ### 5.10 State Root
 
@@ -224,6 +229,11 @@ Receipt format must define:
 usage, and emitted event references remain open, gated on the fee and
 event models.
 
+**Decided root construction** (ADR-0008, "Ordered List Commitment"):
+`MTH` (`hn-list-merkle-v1`) over each receipt's
+`HASH_PROFILE_0x0001("hnchain.receipt.v1", HNCS(ReceiptV1))` digest, in
+the same order as `transactions_root`.
+
 ### 5.12 Events Root
 
 `events_root` commits to consensus-visible events.
@@ -232,7 +242,9 @@ Indexer-only metadata must not be included unless promoted to consensus-visible
 event semantics by specification.
 
 No event schema is decided yet (ADR-0006, "Events") — no currently-decided
-`tx_type` payload emits one; gated on HNVM.
+`tx_type` payload emits one; gated on HNVM. The commitment mechanism
+(`hn-list-merkle-v1`, ADR-0008) is already available once one exists —
+only the per-event leaf digest formula is missing.
 
 ### 5.13 Consensus Root
 
@@ -478,17 +490,14 @@ Test vectors are mandatory before production implementation.
 - final header schema
 - final body schema
 - genesis mapping
-- transaction root construction
 - receipt schema (`ReceiptV1` core shape decided, ADR-0006 "Receipts" —
   `fee_charged`/`resource_usage`/`emitted_event_references` still open)
-- receipt root construction
-- event schema (not decided — gated on HNVM)
-- event root construction
+- event schema (not decided — gated on HNVM; `hn-list-merkle-v1` root
+  construction is ready once one exists, ADR-0008)
 - evidence schema
 - consensus metadata schema
 - justification schema
 - block size limits
-- empty root constants
 - timestamp validation semantics
 - protocol parameter schema
 
