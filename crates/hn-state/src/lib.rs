@@ -27,12 +27,15 @@
 //! implements `hn-list-merkle-v1` (ADR-0008, "Ordered List
 //! Commitment"), the dense ordered-list tree profile `transactions_root`
 //! and `receipts_root` use — a separate profile from ADR-0007's sparse
-//! `hn-smt-256-v1`, not a reuse of it.
+//! `hn-smt-256-v1`, not a reuse of it. [`block_hash`] computes the block
+//! hash itself (ADR-0008, "Header Hash") over an already-canonical
+//! `BlockHeader` encoding.
 
 mod access_list;
 mod account;
 mod asset_value;
 mod balance_value;
+mod block_hash;
 mod envelope_value;
 mod error;
 mod key;
@@ -54,6 +57,7 @@ pub use account::{
 };
 pub use asset_value::{ASSET_VERSION_1, AssetValueV1, MAX_ASSET_HOLDINGS};
 pub use balance_value::{BALANCE_VERSION_1, BalanceValueV1};
+pub use block_hash::block_hash;
 pub use envelope_value::{AccountType, ENVELOPE_VERSION_1, EnvelopeValueV1, SectionVersionsV1};
 pub use error::{StateError, StateResult};
 pub use key::{OBJECT_ID_MAX_LEN, SUBKEY_MAX_LEN, state_key_core, state_key_extension};
