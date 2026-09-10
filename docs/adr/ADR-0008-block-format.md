@@ -169,8 +169,13 @@ The state root is defined by ADR-0007 and the accepted state tree specification.
 
 `receipts_root` commits to deterministic execution receipts.
 
-Receipt format remains open until transaction execution, fee, event, and HNVM
-specifications are accepted.
+A minimal `ReceiptV1` core shape (`receipt_version`, `tx_id`, `status`)
+is decided in ADR-0006 ("Receipts"), not here — the same
+earlier-document-decides, later-document-consumes direction already
+used for `chain_id`. `fee_charged`, `resource_usage`, and
+`emitted_event_references` remain open until the fee, event, and HNVM
+specifications are accepted; `receipts_root`'s own commitment structure
+(ordering, hashing) is this ADR's concern, not the receipt's content.
 
 ### Events Root
 
@@ -178,7 +183,8 @@ specifications are accepted.
 execution.
 
 Events intended only for local indexing must not be confused with
-consensus-visible events.
+consensus-visible events. No event schema is decided yet (ADR-0006,
+"Events") — gated on HNVM.
 
 ### Consensus Root
 

@@ -200,12 +200,20 @@ Receipt format must define:
 - emitted event references
 - state changes summary, if included
 
+`ReceiptV1` (transaction index binding via `tx_id`, success/failure via
+`status`) is decided in ADR-0006, "Receipts". Fee charged, resource
+usage, and emitted event references remain open, gated on the fee and
+event models.
+
 ### 5.12 Events Root
 
 `events_root` commits to consensus-visible events.
 
 Indexer-only metadata must not be included unless promoted to consensus-visible
 event semantics by specification.
+
+No event schema is decided yet (ADR-0006, "Events") — no currently-decided
+`tx_type` payload emits one; gated on HNVM.
 
 ### 5.13 Consensus Root
 
@@ -274,7 +282,8 @@ Mempool acceptance is not consensus validity.
 
 ## 8. Receipts
 
-Receipts are deterministic execution outputs.
+Receipts are deterministic execution outputs. Core shape (`ReceiptV1`:
+`receipt_version`, `tx_id`, `status`) decided in ADR-0006, "Receipts".
 
 Receipt ordering must correspond to transaction ordering.
 

@@ -282,8 +282,12 @@ and Metadata initial values, since those sections' own value schemas
 are still deferred (§4.5, §4.6) — this blocks full closure of implicit
 creation specifically, not `transfer`'s core mechanics above.
 
-Event and receipt behavior is not decided for any `tx_type` yet — the
-receipt and event models themselves are still fully open (§12).
+Receipt behavior: `transfer` produces a minimal `ReceiptV1` (ADR-0006,
+"Receipts" — `receipt_version`, `tx_id`, `status`: `Failed`/`Success`),
+`Failed` for a validation-precondition failure, `Success` otherwise.
+Event behavior: `transfer` emits no event (ADR-0006, "Events") — its
+outcome is fully visible through its receipt and the state root, and no
+event model exists yet (HNVM-gated).
 
 Failure behavior follows the already-decided nonce/fee rules (§4.5,
 §4.6): a failed `transfer` still consumed its nonce and still owes a
@@ -446,6 +450,9 @@ Boundary rules:
   decided; each remaining type is parked on a named blocker)
 - newly-created accounts' Permission/Metadata initial values (§5,
   `transfer` implicit creation) — blocked on §4.5/§4.6
-- final receipt schema
-- final event schema
+- final receipt schema (`ReceiptV1` core shape decided, ADR-0006
+  "Receipts" — `fee_charged`/`resource_usage`/`emitted_event_references`
+  deferred to a future `receipt_version`, gated on the fee model and an
+  event model)
+- final event schema (not decided — gated on HNVM)
 - final mempool policy boundaries

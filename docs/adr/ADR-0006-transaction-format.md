@@ -479,9 +479,11 @@ Failure semantics follow the already-decided Nonce/Fees rules: a
 insufficient balance) still consumed its nonce and still owes a fee
 (amount not decided, Fees above); only its own state effects revert.
 
-Event and receipt behavior for `transfer` is not decided: the receipt
-and event models themselves are still fully open (Open Decisions,
-below) for every `tx_type`, not specific to `transfer`.
+Receipt behavior: `transfer` produces a `ReceiptV1` (Receipts, below) —
+`Success` if the state transition applied, `Failed` if a validation
+precondition failed. Event behavior: `transfer` emits no event (Events,
+below); its outcome is fully visible through its receipt and the state
+root.
 
 **Parked, each blocked on a subsystem that does not exist yet, not
 merely unaddressed:**
@@ -498,6 +500,61 @@ merely unaddressed:**
   Permission State, itself explicitly deferred this session.
 - `system` (`0x09`): scope not yet concrete — no protocol module
   operation has been specified that would use it.
+
+### Receipts
+
+Every executed transaction produces a receipt (ADR-0008, "Receipts
+Root": `receipts_root` commits to deterministic execution receipts, one
+per transaction, ordered with the transaction list). Receipt format
+must define transaction index binding, success/failure semantics, fee
+charged, resource usage, emitted event references, and an optional
+state-changes summary (block-format.md §5.11/§8).
+
+**Decided: minimal `ReceiptV1` now, the rest deferred.**
+
+```text
+ReceiptV1
+  u16     receipt_version = 1
+  bytes32 tx_id
+  u8      status
+```
+
+`status` registry, closed for this profile: `0x00` = `Failed` (the
+transaction was included but its payload's own execution failed — only
+nonce and fee effects applied, per the already-decided Nonce/Fees
+rules); `0x01` = `Success` (the payload's state transition fully
+applied). This falls directly out of what Nonce and Fees already
+decided — a transaction that fails precheck is never included at all
+and produces no receipt; a transaction that fails during execution
+still consumed a nonce and still owes a fee, which is exactly the
+`Failed` case. No third status is needed.
+
+`fee_charged`, `resource_usage`, and `emitted_event_references` are
+**not** fields of `ReceiptV1` today — asked the user first, since this
+was a real scope choice, not a forced default. Adding them is a future
+`receipt_version` bump once the Fee model (resource metering units) and
+an event model (itself HNVM-gated) exist to inform their shape, not a
+placeholder reserved now against a guess. `transfer` needs none of
+this to have a real receipt: its outcome is fully described by
+`status` plus the state root itself (the debited/credited balances),
+the same way a plain ETH transfer needs no event log.
+
+### Events
+
+Deterministic execution outputs intended for protocol-visible
+consumption, separately committed from receipts (ADR-0008, "Events
+Root": `events_root`); a receipt may reference associated events, it
+does not embed them. Event indexing strategy is outside consensus
+(block-format.md §9).
+
+**Not decided.** No currently-decided `tx_type` payload emits an event
+— `transfer`'s outcome is fully visible through its receipt and the
+state root, matching how plain value transfers need no event log on
+other account-based chains either. An event schema is meaningful only
+once a payload exists that needs one (the first candidate being HNVM
+contract execution logs), so this stays open until HNVM exists to
+define what an event actually contains, rather than being designed
+speculatively now.
 
 ### Signatures
 
@@ -716,8 +773,12 @@ change.
   distribution, burn policy, storage costs, and priority-fee market
   behavior remain economic decisions owned by a future tokenomics and
   HNVM metering specification)
-- receipt model
-- event model
+- receipt model (`ReceiptV1` core shape decided above — `tx_id` +
+  `status`; `fee_charged`/`resource_usage`/`emitted_event_references`
+  deferred to a future `receipt_version`, gated on the fee model and an
+  event model)
+- event model (not decided — no currently-decided `tx_type` emits one;
+  gated on HNVM existing to define what an event contains)
 - signing payload schema (hash mechanism and full field list now decided
   above; only `payload`'s own per-`tx_type` shape remains open, same
   caveat as the envelope)
