@@ -55,6 +55,13 @@ pub fn write_i128(out: &mut Vec<u8>, value: i128) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
+/// Writes a fixed-width byte array with no length prefix (ADR-0004,
+/// "Fixed Byte Arrays"; canonical-serialization.md §4.3). The length is
+/// defined by the schema (the `N` type parameter), not by the encoding.
+pub fn write_fixed_bytes<const N: usize>(out: &mut Vec<u8>, bytes: &[u8; N]) {
+    out.extend_from_slice(bytes);
+}
+
 /// Writes a bounded byte sequence as `u32_length || bytes`.
 pub fn write_bytes(out: &mut Vec<u8>, bytes: &[u8], max_len: usize) -> HncsResult<()> {
     let length = bytes.len();
@@ -181,9 +188,9 @@ fn write_u32_count(out: &mut Vec<u8>, count: usize) -> HncsResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        write_bool, write_bytes, write_i8, write_i16, write_i32, write_i64, write_i128, write_list,
-        write_map, write_optional, write_set, write_string, write_u8, write_u16, write_u32,
-        write_u64, write_u128,
+        write_bool, write_bytes, write_fixed_bytes, write_i8, write_i16, write_i32, write_i64,
+        write_i128, write_list, write_map, write_optional, write_set, write_string, write_u8,
+        write_u16, write_u32, write_u64, write_u128,
     };
     use crate::HncsError;
 
@@ -232,6 +239,15 @@ mod tests {
         assert_eq!(&out[3..7], &(-3_i32).to_le_bytes());
         assert_eq!(&out[7..15], &(-4_i64).to_le_bytes());
         assert_eq!(&out[15..31], &(-5_i128).to_le_bytes());
+    }
+
+    #[test]
+    fn writes_fixed_bytes_with_no_length_prefix() {
+        let mut out = Vec::new();
+
+        write_fixed_bytes(&mut out, &[0xAB_u8, 0xCD, 0xEF]);
+
+        assert_eq!(out, [0xAB, 0xCD, 0xEF]);
     }
 
     #[test]

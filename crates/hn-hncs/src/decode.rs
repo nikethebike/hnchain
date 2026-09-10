@@ -97,6 +97,14 @@ impl<'a> Decoder<'a> {
         Ok(i128::from_le_bytes(self.read_array()?))
     }
 
+    /// Reads a fixed-width byte array with no length prefix (ADR-0004,
+    /// "Fixed Byte Arrays"; canonical-serialization.md §4.3). The length
+    /// is defined by the schema (the `N` type parameter), not read from
+    /// the input.
+    pub fn read_fixed_bytes<const N: usize>(&mut self) -> HncsResult<[u8; N]> {
+        self.read_array()
+    }
+
     /// Reads a bounded byte sequence encoded as `u32_length || bytes`.
     pub fn read_bytes(&mut self, max_len: usize) -> HncsResult<&'a [u8]> {
         let length = self.read_u32()? as usize;
@@ -294,6 +302,27 @@ mod tests {
         assert_eq!(decoder.read_i64(), Ok(-4));
         assert_eq!(decoder.read_i128(), Ok(-5));
         assert_eq!(decoder.finish(), Ok(()));
+    }
+
+    #[test]
+    fn reads_fixed_bytes_with_no_length_prefix() {
+        let mut decoder = Decoder::new(&[0xAB, 0xCD, 0xEF]);
+
+        assert_eq!(decoder.read_fixed_bytes::<3>(), Ok([0xAB, 0xCD, 0xEF]));
+        assert_eq!(decoder.finish(), Ok(()));
+    }
+
+    #[test]
+    fn reads_fixed_bytes_rejects_short_input() {
+        let mut decoder = Decoder::new(&[0xAB, 0xCD]);
+
+        assert_eq!(
+            decoder.read_fixed_bytes::<3>(),
+            Err(HncsError::UnexpectedEof {
+                needed: 3,
+                remaining: 2
+            })
+        );
     }
 
     #[test]

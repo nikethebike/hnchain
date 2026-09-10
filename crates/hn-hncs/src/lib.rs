@@ -14,9 +14,9 @@ mod validate;
 
 pub use decode::Decoder;
 pub use encode::{
-    write_bool, write_bytes, write_i8, write_i16, write_i32, write_i64, write_i128, write_list,
-    write_map, write_optional, write_set, write_string, write_u8, write_u16, write_u32, write_u64,
-    write_u128,
+    write_bool, write_bytes, write_fixed_bytes, write_i8, write_i16, write_i32, write_i64,
+    write_i128, write_list, write_map, write_optional, write_set, write_string, write_u8,
+    write_u16, write_u32, write_u64, write_u128,
 };
 pub use error::{HncsError, HncsResult};
 pub use validate::{
