@@ -49,14 +49,29 @@ AddressPayload
   network_id
   derivation_scheme
   address_body
-  checksum_profile
 ```
 
 Conceptual text structure:
 
 ```text
-hrp + separator + encoded(AddressPayload)
+hrp + separator + encoded(AddressPayload) + checksum
 ```
+
+**Decided: no `checksum_profile` in `AddressPayload`.** An earlier draft of
+this structure carried `checksum_profile` as a sixth consensus field.
+Removed: a text-encoding checksum protects address entry and transport
+("The checksum protects address entry and transport. It is not a
+cryptographic integrity mechanism," Human-Readable Encoding below) — it
+says nothing about what the address identifies. Placing it inside
+`AddressPayload` would have made Fixed Consensus Equality below depend on
+it, so two payloads identical in every field that actually names an object
+(`address_namespace`, `network_id`, `derivation_scheme`, `address_body`)
+but encoded with a different checksum algorithm would count as different
+addresses — the same class of error as encoding `address_namespace` into
+the HRP (decision on HRP scope, above): a display/transport concern bleeding
+into consensus identity, just on the opposite side of the payload boundary
+this time. See Human-Readable Encoding below for where the checksum
+algorithm is actually decided, now that it is not a payload field.
 
 **Decided: no `chain_id` in `AddressPayload`.** `AddressPayload` carries
 `network_id` (which environment: mainnet, testnet, a devnet) but not
@@ -189,7 +204,10 @@ Two addresses are equal only if their canonical binary payloads are byte-for-byt
 equal after canonical decoding.
 
 Case folding, Unicode normalization, whitespace trimming, or display formatting
-must not affect consensus equality.
+must not affect consensus equality. Neither must the checksum algorithm used to
+encode an address to text: `AddressPayload` does not carry a checksum field
+(Decision, "no `checksum_profile` in `AddressPayload`"), so it cannot
+participate in consensus equality by construction, not by convention.
 
 ### No Raw Public Keys As Addresses
 
@@ -214,6 +232,28 @@ Reasons:
 The checksum protects address entry and transport. It is not a cryptographic
 integrity mechanism and must not replace canonical hashing or signature
 verification.
+
+**Decided: checksum scheme.** With `checksum_profile` removed from
+`AddressPayload` (Decision above), "what does the checksum protect" is
+answered by Bech32m's own construction rather than needing a separate
+choice: Bech32m computes its checksum over the full typed string — HRP plus
+the entire encoded data part — so it covers every payload field and the HRP
+together, not `address_body` alone and not a subset chosen per address.
+
+Because the checksum is entirely outside `AddressPayload`, changing the
+checksum algorithm later is not a change to any already-issued address's
+consensus identity at all, and does not require a new `address_version`:
+the same `AddressPayload` bytes can be re-rendered under a different
+text-encoding convention without altering what they identify. It is a
+change to this specification's (or its successor's) text-encoding
+convention, scoped the same way HRP string choices are — not a Structure
+Version in ADR-0022's sense, since there is no field whose value changes.
+
+This closes the "what does the checksum protect" half of the original
+checksum-scheme open item; "which specific algorithm" stays the existing
+Bech32m recommendation above, still hedged ("unless rejected by later
+implementation analysis") pending actual implementation experience, not a
+remaining architectural fork.
 
 **Decided: HRP scope.** The human-readable prefix (HRP) encodes `network_id`
 only. It must not encode `address_namespace` or any other payload field.
