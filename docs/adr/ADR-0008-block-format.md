@@ -352,6 +352,29 @@ explicitly requires otherwise.
 This allows a header hash to identify proposed content while finality data can
 be verified as a separate proof over that content.
 
+### Block Size And Transaction Count Limits
+
+**Decided: `MAX_BLOCK_SIZE = 8388608` bytes (8 MiB) and
+`MAX_TRANSACTIONS_PER_BLOCK = 10000`**, both checked on the raw encoded
+block as an early validation stage, before expensive per-transaction
+work. Implementation DoS bounds, not derived, same class as ADR-0006's
+`MAX_TRANSACTION_SIZE` — picked for generous headroom, not a formula.
+
+The two are independent bounds, not one derived from the other: byte
+size alone does not bound per-block processing cost, since a block
+packed with many small transactions can carry far more signature
+verifications and state-tree writes than a block near the byte limit
+but built from few large transactions. `MAX_TRANSACTIONS_PER_BLOCK`
+bounds that cost directly regardless of how it is distributed across
+`MAX_BLOCK_SIZE`. Raise either bound later if real usage needs it;
+never lower it silently once blocks exist on any live network.
+
+Both are fixed protocol constants for this profile, not (yet) a live
+`protocol_parameters_hash`-committed adjustable parameter — whether a
+future profile makes size limits governance-adjustable is a question
+for "protocol parameter commitment format" (still open), not assumed
+here, matching how ADR-0006 treats `MAX_TRANSACTION_SIZE`.
+
 ## Validation Pipeline
 
 Conceptual validation flow:
@@ -512,8 +535,6 @@ New body sections may be backward-compatible only if:
 - consensus root format
 - evidence root format
 - finality justification format
-- block size limits
-- transaction count limits
 - timestamp validation window
 - epoch transition rules
 - protocol parameter commitment format

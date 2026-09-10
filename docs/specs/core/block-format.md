@@ -435,6 +435,22 @@ The accepted version must define limits for:
 - per-section decode memory
 - per-section verification time
 
+**Decided** (ADR-0008, "Block Size And Transaction Count Limits"):
+`MAX_BLOCK_SIZE = 8388608` bytes (8 MiB), `MAX_TRANSACTIONS_PER_BLOCK =
+10000` — independent bounds (byte size alone does not bound
+per-transaction processing cost). Fixed protocol constants for this
+profile, matching how ADR-0006's `MAX_TRANSACTION_SIZE` is treated —
+not (yet) a live governance-adjustable parameter; raising either is a
+future protocol-version decision. Whether size limits become
+`protocol_parameters_hash`-committed adjustable parameters in a later
+profile is a question for "protocol parameter commitment format"
+(still open), not assumed here.
+
+Receipt count, event count, evidence count, extra data size,
+justification size, and per-section decode/verification budgets remain
+open, gated on the schemas and specifications each depends on
+(event/evidence/justification schemas, HNVM, consensus protocol).
+
 Limits are consensus parameters and must be committed by
 `protocol_parameters_hash` where applicable.
 
@@ -497,7 +513,6 @@ Test vectors are mandatory before production implementation.
 - evidence schema
 - consensus metadata schema
 - justification schema
-- block size limits
 - timestamp validation semantics
 - protocol parameter schema
 
