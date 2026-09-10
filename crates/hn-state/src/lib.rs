@@ -10,14 +10,14 @@
 //! ADR-0007: state key derivation ([`key`]), tree node hashing
 //! ([`node`]), and state root computation ([`tree`]). [`account`] adds
 //! the `accounts` and `account_extensions` domain-specific key derivation
-//! ADR-0007 defines on top of those primitives. [`account_value`] adds
-//! the account value schemas `docs/specs/core/account-state.md` defines
-//! (currently `EnvelopeValueV1`); sections whose value schema is not yet
-//! decided are still treated as opaque already-canonical HNCS bytes by
-//! callers of this crate.
+//! ADR-0007 defines on top of those primitives. Each account section's
+//! value schema, once decided in `docs/specs/core/account-state.md`, gets
+//! its own module (for example [`envelope_value`]); sections whose value
+//! schema is not yet decided are still treated as opaque already-canonical
+//! HNCS bytes by callers of this crate.
 
 mod account;
-mod account_value;
+mod envelope_value;
 mod error;
 mod key;
 mod node;
@@ -28,7 +28,7 @@ pub use account::{
     account_extension_payload_state_key, account_extension_registry_state_key,
     account_section_state_key,
 };
-pub use account_value::{AccountType, ENVELOPE_VERSION_1, EnvelopeValueV1, SectionVersionsV1};
+pub use envelope_value::{AccountType, ENVELOPE_VERSION_1, EnvelopeValueV1, SectionVersionsV1};
 pub use error::{StateError, StateResult};
 pub use key::{OBJECT_ID_MAX_LEN, SUBKEY_MAX_LEN, state_key_core, state_key_extension};
 pub use node::{EmptyHashTable, TREE_DEPTH, TREE_PROFILE_ID, internal_hash, leaf_hash, value_hash};

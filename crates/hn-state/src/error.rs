@@ -34,7 +34,7 @@ pub enum StateError {
         value: u8,
     },
     /// A decoded `EnvelopeValueV1.envelope_version` does not match
-    /// [`crate::account_value::ENVELOPE_VERSION_1`], the only shape this
+    /// [`crate::envelope_value::ENVELOPE_VERSION_1`], the only shape this
     /// implementation understands.
     UnsupportedEnvelopeVersion {
         /// The rejected version.
