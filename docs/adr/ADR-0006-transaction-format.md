@@ -317,6 +317,43 @@ Multi-signature and threshold authorization require explicit account permission
 rules before activation — deferred along with account-state.md §4.5
 Permission State, which is itself not yet activated.
 
+### Signing Payload
+
+The signing payload is a canonical subset of the transaction: `sender`'s
+signature verifies over this, not over the full `TransactionEnvelope`
+(`signatures` cannot be included in its own signing payload).
+
+**Decided: signing payload hash mechanism.**
+
+```text
+signing_digest = HASH_PROFILE_0x0001(
+  "hnchain.transaction.signing.v1", HNCS(TransactionSigningPayload))
+```
+
+Reuses `HASH_PROFILE_0x0001` (ADR-0005) with the domain tag already
+reserved for this purpose in ADR-0005's conceptual registry — the same
+pattern ADR-0007 uses for every state-tree hash, not a second hash
+profile.
+
+`protocol_name` (listed in the "every signature must bind to" list above,
+and in `TransactionSigningPayload`'s conceptual structure,
+transaction-format.md §7) is **not** a field of `TransactionSigningPayload`
+— it would duplicate what `DomainSeparatedHashInputV1`'s own
+`domain_tag` (ADR-0005) already provides. `hnchain.transaction.signing.v1`
+already says "this digest means HNChain transaction signing intent, and
+nothing else can produce or accept it" for free; a redundant string field
+inside the payload would repeat that guarantee without adding one (same
+class of redundancy as `checksum_profile` inside `AddressPayload`,
+ADR-0003 Decision 5). Likewise "signing purpose" in that list is the
+domain tag itself, not a separate field. "chain ID" and "network ID" are
+the already-decided `chain_id`/`network_id` fields (above), not
+duplicated identifiers.
+
+`TransactionSigningPayload`'s full field list is not finalized here: it
+mirrors `TransactionEnvelope` minus `signatures`, so it cannot be closed
+before `fee_limit`, `validity_window`, and `access_list` are (Fees,
+Validity Window, Access List — all still open).
+
 ### Transaction ID
 
 Transaction ID is derived from canonical bytes using a transaction ID hash
@@ -324,6 +361,25 @@ profile.
 
 Transaction ID must not be computed over JSON, display strings, RPC request
 objects, or local memory layouts.
+
+**Decided: transaction ID hash mechanism.**
+
+```text
+tx_id = HASH_PROFILE_0x0001(
+  "hnchain.transaction.id.v1", HNCS(TransactionEnvelope))
+```
+
+Same reasoning and mechanism as the signing payload above: reuses
+`HASH_PROFILE_0x0001` with its own already-reserved domain tag, no
+second hash profile. Unlike the signing payload, `tx_id` commits to the
+*full* `TransactionEnvelope`, including `signatures` — this is what
+makes transaction malleability meaningful to guard against at all (see
+Security Considerations, "Transaction malleability"): if `tx_id` excluded
+`signatures`, a different valid signature over the same intent would not
+change the ID, and the malleability risk framing would not apply to
+`tx_id` in the first place. `TransactionEnvelope`'s own full field list
+is likewise not finalized until `fee_limit`/`validity_window`/
+`access_list` are, same caveat as above.
 
 ### Validation Before Execution
 
@@ -433,8 +489,8 @@ change.
 - access list enforcement model
 - receipt model
 - event model
-- transaction ID hash profile
-- signing payload schema
+- signing payload schema (hash mechanism now decided above; full field
+  list still blocked on fee_limit/validity_window/access_list)
 - multi-signature activation model
 - threshold authorization model
 - transaction size limits

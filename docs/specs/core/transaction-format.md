@@ -223,7 +223,6 @@ Conceptual structure:
 
 ```text
 TransactionSigningPayload
-  protocol_name
   chain_id
   network_id
   tx_version
@@ -236,20 +235,40 @@ TransactionSigningPayload
   payload
 ```
 
+`protocol_name` is not a field: domain separation is already provided by
+the hash construction's own `domain_tag` (see below), so a redundant
+in-payload string would duplicate that guarantee rather than add one
+(ADR-0006, "Signing Payload").
+
 Signatures are not included inside the signing payload unless a specific
 multi-signature scheme defines nested signing behavior.
+
+**Decided: hash mechanism** (ADR-0006, "Signing Payload"):
+
+```text
+signing_digest = HASH_PROFILE_0x0001(
+  "hnchain.transaction.signing.v1", HNCS(TransactionSigningPayload))
+```
+
+The full field list above is not final until `fee_limit`, `validity_window`,
+and `access_list` are decided (§4.6, §4.7, §4.8).
 
 ## 8. Transaction ID
 
 The transaction ID is a domain-separated hash of canonical transaction bytes.
 
-Conceptual computation:
+**Decided** (ADR-0006, "Transaction ID"):
 
 ```text
-tx_id = HASH_PROFILE_TRANSACTION_ID(HNCS(TransactionEnvelope))
+tx_id = HASH_PROFILE_0x0001(
+  "hnchain.transaction.id.v1", HNCS(TransactionEnvelope))
 ```
 
-The exact profile is defined by the hash algorithms specification.
+Reuses `HASH_PROFILE_0x0001` (ADR-0005) with its own reserved domain tag
+— no separate transaction ID hash profile. Unlike the signing payload,
+`tx_id` commits to the full envelope including `signatures`, which is
+what makes transaction malleability a meaningful risk to mitigate at the
+`tx_id` level (§11).
 
 ## 9. Validation Pipeline
 
@@ -326,6 +345,5 @@ Boundary rules:
 - final transaction size limits
 - final receipt schema
 - final event schema
-- final transaction ID hash profile
-- final signing payload hash profile
+- final signing payload field list (hash mechanism decided; see §7)
 - final mempool policy boundaries
