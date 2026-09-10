@@ -75,6 +75,46 @@ Every transaction binds to `chain_id` and `network_id`.
 Transactions valid on one HNChain network must not be replayable on another
 network.
 
+**Decided: `chain_id` format.** `chain_id` is `uint8`, a small closed
+registry grown only through explicit governance action, not the
+closed-registry-plus-self-assigned-range model `network_id` uses (ADR-0003,
+"Network Separation").
+
+```text
+0x00  reserved, invalid
+0x01  the HNChain lineage (initial genesis)
+```
+
+The two fields serve different purposes and change at different rates:
+`network_id` identifies the environment (mainnet/testnet/devnet) and needs
+room for many concurrent, disposable, self-assigned devnet instances (see
+ADR-0003's reasoning for `network_id` being `uint16`). `chain_id` identifies
+the HNChain protocol lineage itself and changes only on an irreconcilable
+governance fork — a rare, deliberate, centrally-coordinated event, not
+something anyone spins up unilaterally. There is no legitimate scenario
+where two independently-created `chain_id` values need to coexist without
+a governance decision behind each one, so there is no need for a
+self-assigned range the way devnets needed one for `network_id`. `uint8`
+gives 255 usable values, which is far more headroom than a rare, deliberate
+event will ever need.
+
+`chain_id` is not part of `AddressPayload` (ADR-0003, "no `chain_id` in
+`AddressPayload`"); it appears here in `TransactionEnvelope` and in
+`BlockHeader` (ADR-0008) for replay protection across a lineage split.
+This is the canonical decision for `chain_id`'s format — ADR-0008
+references it rather than redeciding it, since ADR-0000's Required ADR
+Dependency Order places ADR-0006 before ADR-0008 and a block-format
+document cannot be a dependency of a transaction-format document.
+
+**Decided: `network_id` format.** `network_id` is `uint16`
+(ADR-0003, "Decision 4"): `0x0001` mainnet, `0x0002` testnet,
+`0x0003`-`0x7FFF` reserved/future-registered, `0x8000`-`0xFFFF`
+self-assigned devnet range. `TransactionEnvelope.network_id` reuses
+`AddressPayload.network_id`'s registry unchanged — this is the same value,
+not a parallel one, so a mismatch between a sender's address and the
+transaction's own `network_id` is a validation error, not two independent
+facts to reconcile.
+
 ### Transaction Type
 
 Every transaction includes `tx_type`.
@@ -295,7 +335,8 @@ change.
 
 ## Open Decisions
 
-- final transaction envelope fields
+- final transaction envelope fields (`chain_id`/`network_id` now decided
+  above; remaining fields still open)
 - nonce width and failed-execution behavior
 - final fee model
 - final validity window semantics

@@ -98,9 +98,10 @@ nothing about what an address identifies (a key, a contract, a validator)
 changes at a fork.
 
 `chain_id` itself — binary size, type, and value scheme — is not decided by
-this ADR. `docs/specs/core/genesis.md` already defines a conceptual
-`chain_id` field and is constrained by ADR-0008, not this one, so ADR-0008
-is `chain_id`'s owner; see Deferred Decisions.
+this ADR. It is owned by ADR-0006 (Transaction Format, "Chain And Network
+Binding") — the earlier document in ADR-0000's Required ADR Dependency
+Order among the ones that need it (`TransactionEnvelope` and
+`BlockHeader`); see Deferred Decisions.
 
 The exact canonical binary encoding is defined by ADR-0004.
 
@@ -764,11 +765,11 @@ own derivation inputs are decided.
   does not exist yet; not a blocker for accepting this ADR's genesis-time
   list.
 - `chain_id` format, width, and value scheme: out of scope for this ADR
-  (see Decision, "no `chain_id` in `AddressPayload`"). Owned by ADR-0008
-  (Block Format), the ADR that constrains `docs/specs/core/genesis.md`,
-  where `chain_id` first appears with concrete (if still conceptual)
-  structure. Not a blocker for this ADR, since `AddressPayload` does not
-  carry `chain_id`.
+  (see Decision, "no `chain_id` in `AddressPayload`"). Decided in
+  ADR-0006 (Transaction Format, "Chain And Network Binding"): `uint8`, a
+  small closed registry grown only through explicit governance action.
+  Not a blocker for this ADR, since `AddressPayload` does not carry
+  `chain_id`.
 
 ## References
 

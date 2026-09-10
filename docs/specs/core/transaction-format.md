@@ -73,10 +73,16 @@ acceptance or migration behavior.
 
 ### 4.2 Chain ID And Network ID
 
-`chain_id` identifies the HNChain chain.
+`chain_id` identifies the HNChain chain. `uint8`, a small closed registry
+grown only through explicit governance action (`0x00` reserved/invalid,
+`0x01` the HNChain lineage) — decided in ADR-0006, "Chain And Network
+Binding".
 
 `network_id` identifies the network environment, such as mainnet, testnet, or
-devnet.
+devnet. `uint16`, reusing `AddressPayload.network_id`'s registry unchanged
+(ADR-0003, "Decision 4"): `0x0001` mainnet, `0x0002` testnet,
+`0x0003`-`0x7FFF` reserved/future-registered, `0x8000`-`0xFFFF`
+self-assigned devnet range.
 
 Both fields are included in signing payloads and replay protection.
 

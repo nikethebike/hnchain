@@ -124,6 +124,11 @@ Unknown header versions are rejected unless upgrade rules define acceptance.
 
 They must match local node configuration.
 
+`chain_id` (`uint8`) and `network_id` (`uint16`) reuse the same registries
+`TransactionEnvelope` uses, decided in ADR-0006 ("Chain And Network
+Binding") and ADR-0003 ("Decision 4") respectively — not redecided here,
+per ADR-0000's Required ADR Dependency Order (ADR-0006 precedes ADR-0008).
+
 ### 5.3 Height
 
 `height` is the block number after genesis.
