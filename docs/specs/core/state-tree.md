@@ -406,11 +406,21 @@ key length (32 bytes), final domain registry numeric identifiers
 (`0x0001`-`0x0009`), composite root or single tree root (single global
 root), and empty state root (recursive `empty_hash[0..256]`).
 
-Still open, matching ADR-0007's own Deferred Decisions:
+Still open, reproduced verbatim from ADR-0007's own Deferred Decisions
+(that ADR owns these; this list must track it exactly, not paraphrase it):
 
-- proof wire format
+- exact proof wire format
+- proof size limits
+- pruning profiles
+- archival node requirements
 - snapshot manifest format
-- pruning window
 - rollback window
+- cache invalidation strategy
+- Verkle migration criteria
+- state rent activation model
+
+Still open, owned by this specification rather than ADR-0007 (ADR-0007
+deliberately does not define storage backend behavior; see §2 and ADR-0007's
+Storage Backend Independence):
+
 - storage backend layout recommendations
-- state rent economics
