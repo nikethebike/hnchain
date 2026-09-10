@@ -16,6 +16,11 @@ pub enum StateError {
     /// (ADR-0007: the state tree layer accepts a deterministic final write
     /// set; it does not resolve write-set conflicts).
     DuplicateStateKey,
+    /// `extension_id = 0x0000` was used where an extension payload leaf
+    /// was expected; that value is reserved for the extension registry
+    /// leaf (ADR-0007, Account Extensions Domain: Registry And Payload
+    /// Leaves).
+    ReservedExtensionId,
 }
 
 impl From<HashError> for StateError {
@@ -35,6 +40,9 @@ impl core::fmt::Display for StateError {
         match self {
             Self::Hash(error) => write!(formatter, "state hashing error: {error}"),
             Self::DuplicateStateKey => formatter.write_str("duplicate state_key in write set"),
+            Self::ReservedExtensionId => {
+                formatter.write_str("extension_id 0x0000 is reserved for the registry leaf")
+            }
         }
     }
 }
