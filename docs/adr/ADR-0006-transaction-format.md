@@ -213,8 +213,8 @@ transaction-validation semantics that section left to this ADR.
   only the transaction's own state effects are reverted; the nonce
   increment from the rule above is not undone. This is required so a
   failed execution cannot be resubmitted or replayed under the same
-  nonce. Whether a fee is charged in this case is decided by the Fee
-  model (still open, see Fees below), not by this rule.
+  nonce. A fee is owed in this case too (Fees, below) — the amount is not
+  decided by this rule, only that the obligation survives.
 - **Ordering rules.** A sender's transactions must be included in
   strictly increasing, gap-free nonce order: a transaction is valid for
   inclusion only when its nonce exactly equals the sender's current
@@ -255,6 +255,43 @@ The fee model must define:
 
 The transaction format must not assume a final fee market before the economics
 and HNVM metering specifications are accepted.
+
+**Decided: fee mechanism only** — never an amount, split, or market
+model; those remain owned by a future tokenomics specification and HNVM
+metering specification, per this section's own constraint above and the
+project's standing rule that no economic parameter (fee amount, burn
+percentage, distribution split — even an explicit zero) may be encoded
+before such a specification is accepted.
+
+- **`fee_limit` type.** `u128`, matching `native_balance`/`amount`'s width
+  convention (account-state.md §4.3/§4.7) for the same overflow-headroom
+  reason — not an economic decision.
+- **Fee payer.** The sender pays. Third-party fee sponsorship (a payer
+  distinct from `sender`) is deferred, not decided either way: it would
+  need its own authorization rule, and account-state.md §4.5 Permission
+  State — the natural place such a rule would live — is itself not yet
+  activated (account-state.md, deferred this session).
+- **`fee_limit` is a cap, not an exact charge.** The field is named
+  `fee_limit`, not `fee` or `fee_amount`: a transaction declares the
+  maximum it is willing to pay, and the amount actually owed is
+  determined by resource consumption up to that cap — this follows from
+  the field's own name, not from deciding any metering formula. Whether
+  and how the unused difference is refunded depends on resource metering
+  units (still open, HNVM-gated); this decision only fixes that a
+  cap/consumption relationship exists, not its arithmetic.
+- **Failed execution still incurs a fee obligation.** A transaction that
+  fails during execution (as opposed to failing precheck) still owes a
+  fee for the resources it consumed before failing — mirroring the
+  already-decided nonce rule (Nonce, above) that a failed execution still
+  consumes its nonce. This closes the "whether a fee is charged" question
+  the Nonce decision explicitly deferred to here. The *amount* owed on
+  failure is not decided — that depends on metering units, same as the
+  success case.
+
+Resource metering units, refund arithmetic, validator distribution, burn
+policy, storage costs, and priority-fee market behavior remain fully
+open, gated on the economics and HNVM metering specifications this
+section already requires.
 
 ### Validity Window
 
@@ -402,8 +439,8 @@ duplicated identifiers.
 
 `TransactionSigningPayload`'s full field list is not finalized here: it
 mirrors `TransactionEnvelope` minus `signatures`, so it cannot be closed
-before `fee_limit` and `access_list` are (Fees, Access List — still open;
-`validity_window`'s shape is now decided above).
+before `access_list`'s concrete structure is (Access List — still open;
+`validity_window` and `fee_limit`'s type are now decided above).
 
 ### Transaction ID
 
@@ -429,8 +466,8 @@ Security Considerations, "Transaction malleability"): if `tx_id` excluded
 `signatures`, a different valid signature over the same intent would not
 change the ID, and the malleability risk framing would not apply to
 `tx_id` in the first place. `TransactionEnvelope`'s own full field list
-is likewise not finalized until `fee_limit`/`access_list` are, same
-caveat as above.
+is likewise not finalized until `access_list`'s concrete structure is,
+same caveat as above.
 
 ### Transaction Size Limit
 
@@ -548,10 +585,14 @@ change.
 ## Open Decisions
 
 - final transaction envelope fields (`chain_id`/`network_id`/`tx_version`/
-  `tx_type`/`sender`/`validity_window` now decided above; `fee_limit`
-  still fully open, `access_list`'s enforcement model is decided but its
-  concrete structure is not, `payload` still open)
-- final fee model
+  `tx_type`/`sender`/`validity_window`/`fee_limit`'s type now decided
+  above; `access_list`'s enforcement model is decided but its concrete
+  structure is not, `payload` still open)
+- final fee model (mechanism decided above — type, payer, cap-not-exact,
+  failed-execution obligation; amount, refund arithmetic, validator
+  distribution, burn policy, storage costs, and priority-fee market
+  behavior remain economic decisions owned by a future tokenomics and
+  HNVM metering specification)
 - access list structure (enforcement model is decided above — hint-only;
   the concrete `reads`/`writes` entry shape referencing accounts,
   contract storage keys, asset identifiers, validator state, and
@@ -559,7 +600,7 @@ change.
 - receipt model
 - event model
 - signing payload schema (hash mechanism now decided above; full field
-  list still blocked on fee_limit and access list structure)
+  list still blocked on access list structure)
 - multi-signature activation model
 - threshold authorization model
 - mempool admission policy

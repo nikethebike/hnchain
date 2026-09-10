@@ -139,10 +139,22 @@ Still open:
 
 ### 4.6 Fee Limit
 
-`fee_limit` constrains transaction resource consumption.
+`fee_limit` constrains transaction resource consumption. `u128`, matching
+the width convention `native_balance`/`amount` already use
+(account-state.md §4.3/§4.7). Decided in ADR-0006, "Fees" — mechanism
+only, not an amount.
+
+`fee_limit` is a cap, not an exact charge (the field's own name, not a
+metering formula): the sender pays, up to this cap, for resources
+actually consumed; a failed execution still owes a fee for what it
+consumed before failing, mirroring nonce's already-decided
+still-consumed-on-failure rule. Third-party fee sponsorship is deferred,
+not decided either way, pending account-state.md §4.5 Permission State.
 
 The final fee structure may include base fees, execution fees, storage fees,
-priority fees, refunds, and burn rules.
+priority fees, refunds, and burn rules — all of this is amount/market/policy,
+which is out of scope for this specification and gated on a future
+economics and HNVM metering specification.
 
 This specification does not finalize the fee market.
 
@@ -267,8 +279,9 @@ signing_digest = HASH_PROFILE_0x0001(
   "hnchain.transaction.signing.v1", HNCS(TransactionSigningPayload))
 ```
 
-The full field list above is not final until `fee_limit` and `access_list`
-are decided (§4.6, §4.8) — `validity_window`'s shape is now decided (§4.7).
+The full field list above is not final until `access_list`'s concrete
+structure is decided (§4.8) — `validity_window` and `fee_limit`'s type
+are now decided (§4.7, §4.6).
 
 ## 8. Transaction ID
 
@@ -362,7 +375,9 @@ Boundary rules:
 ## 12. Open Architecture Decisions
 
 - final HNCS schema
-- final fee model
+- final fee model (mechanism decided; see §4.6 — amount, refunds,
+  distribution, burn policy, and priority market remain economic
+  decisions)
 - final access list structure (enforcement model decided; see §4.8)
 - final receipt schema
 - final event schema
