@@ -10,6 +10,8 @@ description = "HNChain cryptographic identity and primitive wrappers."
 
 [dependencies]
 hn-core = { path = "../hn-core" }
+hn-hncs = { path = "../hn-hncs" }
+sha2 = "0.10"
 
 [lints]
 workspace = true
