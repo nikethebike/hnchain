@@ -31,15 +31,21 @@
 //! hash itself (ADR-0008, "Header Hash") over an already-canonical
 //! `BlockHeader` encoding, and [`tx_id`] computes a transaction ID
 //! (ADR-0006, "Transaction ID") the same way over an already-canonical
-//! `TransactionEnvelope` encoding.
+//! `TransactionEnvelope` encoding. [`validator_digest`], [`evidence_digest`],
+//! and [`consensus_root`] add the three remaining consensus-track leaf/
+//! root digests (ADR-0010, ADR-0015): `consensus_root` and
+//! [`validator_set_commitment`] are two names for the same function, not
+//! two independently-computed values.
 
 mod access_list;
 mod account;
 mod asset_value;
 mod balance_value;
 mod block_hash;
+mod consensus_root;
 mod envelope_value;
 mod error;
+mod evidence_digest;
 mod key;
 mod lifecycle_value;
 mod list_merkle;
@@ -50,6 +56,7 @@ mod transfer;
 mod transfer_payload;
 mod tree;
 mod tx_id;
+mod validator_digest;
 mod validity_window;
 
 pub use access_list::{AccessListV1, MAX_ACCESS_LIST_ENTRIES};
@@ -61,8 +68,10 @@ pub use account::{
 pub use asset_value::{ASSET_VERSION_1, AssetValueV1, MAX_ASSET_HOLDINGS};
 pub use balance_value::{BALANCE_VERSION_1, BalanceValueV1};
 pub use block_hash::block_hash;
+pub use consensus_root::{consensus_root, validator_set_commitment};
 pub use envelope_value::{AccountType, ENVELOPE_VERSION_1, EnvelopeValueV1, SectionVersionsV1};
 pub use error::{StateError, StateResult};
+pub use evidence_digest::evidence_digest;
 pub use key::{OBJECT_ID_MAX_LEN, SUBKEY_MAX_LEN, state_key_core, state_key_extension};
 pub use lifecycle_value::{LIFECYCLE_VERSION_1, LifecycleState, LifecycleValueV1};
 pub use list_merkle::{LIST_TREE_PROFILE_ID, list_empty_root, list_merkle_root, list_node_hash};
@@ -73,6 +82,7 @@ pub use transfer::{TransferParty, apply_transfer, apply_transfer_with_receipt};
 pub use transfer_payload::{TRANSFER_PAYLOAD_VERSION_1, TransferPayloadV1};
 pub use tree::{Leaf, compute_state_root};
 pub use tx_id::tx_id;
+pub use validator_digest::validator_digest;
 pub use validity_window::ValidityWindowV1;
 
 #[cfg(test)]
