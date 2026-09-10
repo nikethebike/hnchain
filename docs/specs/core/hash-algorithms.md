@@ -81,8 +81,11 @@ hnchain.address.contract.v1
 hnchain.transaction.id.v1
 hnchain.transaction.signing.v1
 hnchain.receipt.v1
+hnchain.state.key.v1
+hnchain.state.value.v1
+hnchain.state.empty.v1
 hnchain.state.leaf.v1
-hnchain.state.node.v1
+hnchain.state.internal.v1
 hnchain.block.header.v1
 hnchain.block.id.v1
 hnchain.p2p.message.v1
