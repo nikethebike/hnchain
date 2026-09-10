@@ -306,18 +306,47 @@ enforces by construction. See Security Considerations, "HRP spoofing."
 
 Used for user accounts and account-controlled state.
 
-Initial derivation direction:
+**Decided: account address derivation function.**
 
 ```text
-account_address = ADDRESS_DERIVE(
-  network_id,
-  namespace = account,
-  derivation_scheme,
-  key_descriptor_or_identity_commitment
+address_body = HASH_PROFILE_0x0001(
+  domain = "hnchain.address.account.v1",
+  payload = HNCS(AccountAddressInputV1)
 )
+
+AccountAddressInputV1
+  u16   address_version = 1
+  u16   network_id
+  u8    address_namespace = 0x01
+  u8    derivation_scheme
+  u16   algorithm_id
+  bytes public_key
 ```
 
-Exact derivation waits for ADR-0004 and ADR-0005.
+`derivation_scheme = 0x01` (`DirectPublicKey`, ADR-0002's `algorithm_id`
+identifies which signing algorithm; `derivation_scheme` is a separate,
+explicit field per "Derivation Scheme Separation" above, not inferred from
+it) for this scheme: `address_body` is a direct hash commitment to the
+signing public key, with no additional identity-commitment layer.
+
+`public_key` is the raw signing public key bytes for `algorithm_id`
+(ADR-0002) — not a commitment to the full `KeyDescriptor`. `key_role` does
+not enter this derivation: the `account` namespace already fixes the
+context to account-signing-class keys, and ADR-0002 already discourages
+reusing one key across roles, so binding `key_role` into the address would
+duplicate a guarantee that belongs to key management, not address
+identity.
+
+`algorithm_id` is a field, and `public_key` is variable-length
+(HNCS-bounded, not a fixed 32-byte array), because Ed25519's 32-byte key
+is not representative of every `algorithm_id` ADR-0002 reserves — a
+fixed-width field would break the moment a different-length key algorithm
+(for example a reserved post-quantum one) activates.
+
+This resolves "account address derivation function" for the `account`
+namespace only. Contract, validator, protocol, and identity address
+derivation remain open (see Open Decisions); bridge address derivation is
+already resolved separately (Bridge Address below).
 
 ### Contract Address
 
@@ -562,11 +591,18 @@ existing address version is a major protocol change.
 ## Open Decisions
 
 - final mainnet, testnet, and devnet human-readable prefixes
-- address body derivation function
-- whether addresses bind directly to key descriptors or identity commitments
+- address body derivation function for `contract`, `validator`, `protocol`,
+  and `identity` namespaces (`account` is resolved: Account Address above;
+  `bridge` is resolved separately: Bridge Address)
 - contract address derivation inputs
 - bridge chain identifier format
 - display and truncation requirements for wallets and explorers
+
+Resolved and removed from this list: "whether addresses bind directly to
+key descriptors or identity commitments" — for the `account` namespace,
+directly to the raw public key, not a `KeyDescriptor` commitment (Account
+Address above). Other namespaces may answer this differently when their
+own derivation inputs are decided.
 
 ## Deferred Decisions
 
