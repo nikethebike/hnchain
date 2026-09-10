@@ -520,14 +520,16 @@ Test vectors are mandatory before production implementation.
 - final block envelope schema
 - final header schema
 - final body schema
-- genesis mapping
+- genesis mapping — blocked on `docs/specs/core/genesis.md` reaching
+  Accepted (currently Draft)
 - receipt schema (`ReceiptV1` core shape decided, ADR-0006 "Receipts" —
   `fee_charged`/`resource_usage`/`emitted_event_references` still open)
 - event schema (not decided — gated on HNVM; `hn-list-merkle-v1` root
   construction is ready once one exists, ADR-0008)
-- evidence schema
-- consensus metadata schema
-- justification schema
-- timestamp validation semantics
-- protocol parameter schema
+- evidence schema, consensus metadata schema, justification schema,
+  timestamp validation semantics, epoch transition rules — all blocked
+  on `docs/rfc/consensus/*` reaching Accepted (currently Proposed)
+- protocol parameter schema — blocked on a governance model existing;
+  no adjustable parameter has been named anywhere yet to give this a
+  partial shape
 

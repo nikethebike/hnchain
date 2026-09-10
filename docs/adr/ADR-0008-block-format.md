@@ -572,18 +572,30 @@ New body sections may be backward-compatible only if:
 
 ## Open Decisions
 
-- final header field registry
-- final body section registry
+- final header field registry (sum of the fields below; not a
+  standalone decision)
+- final body section registry (sum of the same)
 - events root format (commitment mechanism — `hn-list-merkle-v1` — is
   decided; content stays open, gated on an event schema, itself gated
   on HNVM)
-- consensus root format
-- evidence root format
-- finality justification format
-- timestamp validation window
-- epoch transition rules
-- protocol parameter commitment format
-- genesis block compatibility rules
+- consensus root format — blocked on a consensus protocol being
+  selected (`docs/rfc/consensus/consensus-architecture.md` is
+  Proposed, not Accepted)
+- evidence root format — blocked on the same consensus track
+  (`docs/rfc/consensus/slashing-and-accountability.md`)
+- finality justification format — blocked on the same consensus track
+  (`docs/rfc/consensus/finality-rules.md`,
+  `vote-messages-and-quorum-certificates.md`)
+- timestamp validation window — blocked on the same consensus track
+- epoch transition rules — blocked on the same consensus track (the
+  consensus-protocol `epoch` field above, not `protocol_epoch`, which
+  is already decided)
+- protocol parameter commitment format — blocked on a governance model
+  existing: unlike `fee_limit`/`ReceiptV1`, there is currently no
+  partial structure to decide (no adjustable parameter has been named
+  anywhere yet), not just an incomplete one
+- genesis block compatibility rules — blocked on
+  `docs/specs/core/genesis.md` reaching Accepted (currently Draft)
 
 ## Related Specifications
 
