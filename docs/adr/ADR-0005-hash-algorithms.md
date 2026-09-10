@@ -118,8 +118,11 @@ Initial conceptual domain tags:
 - `hnchain.transaction.id.v1`
 - `hnchain.transaction.signing.v1`
 - `hnchain.receipt.v1`
+- `hnchain.state.key.v1`
+- `hnchain.state.value.v1`
+- `hnchain.state.empty.v1`
 - `hnchain.state.leaf.v1`
-- `hnchain.state.node.v1`
+- `hnchain.state.internal.v1`
 - `hnchain.block.header.v1`
 - `hnchain.block.id.v1`
 - `hnchain.p2p.message.v1`
@@ -187,8 +190,11 @@ address contract         32 bytes
 transaction id           32 bytes
 transaction signing      32 bytes
 receipt id               32 bytes
+state key                32 bytes
+state value              32 bytes
+state empty node         32 bytes
 state leaf               32 bytes
-state node               32 bytes
+state internal node      32 bytes
 block header             32 bytes
 block id                 32 bytes
 p2p message id           32 bytes
