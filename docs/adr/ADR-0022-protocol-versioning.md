@@ -253,6 +253,8 @@ fork-choice or activation decisions is a major protocol change.
 ## Related Specifications
 
 - `docs/adr/ADR-0000-protocol-invariants.md`
+- `docs/adr/ADR-0003-address-format.md`
 - `docs/adr/ADR-0005-hash-algorithms.md`
 - `docs/adr/ADR-0007-state-tree.md`
 - `docs/adr/ADR-0008-block-format.md`
+- `docs/specs/core/account-state.md`
