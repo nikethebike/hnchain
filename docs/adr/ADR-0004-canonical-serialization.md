@@ -275,9 +275,15 @@ ratifying the shape already used by every existing HNCS conformance file
 
 ```text
 {
-  schema, version, status, depends_on,
+  schema, version, status,
   scope: { included, excluded },
-  notes,
+  properties,
+  depends_on?,        // present when this file builds on another
+                       // conformance file's already-verified encodings
+                       // (e.g. hncs-compound depends on hncs-primitives);
+                       // absent for a self-contained file
+  <format-specific top-level keys, e.g. "byte_order" (primitives),
+   "ordering" (compound)>,
   <one or more type-family groups, e.g. "optional", "lists", "sets", "maps">: {
     canonical:  [{ name, type, value | semantic_inputs, hex }],
     inequality: [{ name, type, left_hex, right_hex, expected_equal }],
@@ -288,6 +294,10 @@ ratifying the shape already used by every existing HNCS conformance file
 
 Rules:
 
+- `schema`, `version`, `status`, `scope`, and `properties` are present in
+  every HNCS conformance file; `depends_on` and any format-specific keys
+  are present only where they apply — this is not a fixed six-field
+  envelope, and a file must not carry a key it doesn't use.
 - `hex` fields are lowercase hex strings of the exact canonical bytes.
 - `error` values are Canonical Error Taxonomy kinds above, exactly as
   spelled there (`snake_case`), not implementation-specific messages.

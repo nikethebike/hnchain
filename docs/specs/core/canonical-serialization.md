@@ -79,11 +79,14 @@ u8, u16, u32, u64, u128
 i8, i16, i32, i64, i128
 ```
 
-Initial profile byte order:
+Byte order (ADR-0004, "Decided: byte order"):
 
 ```text
 little-endian
 ```
+
+This is final for HNCS v0.1, not a placeholder — changing it is a breaking
+protocol change (§5).
 
 Host-size integers such as C `int`, Rust `usize`, or Go `int` are forbidden in
 consensus schemas.
@@ -133,7 +136,14 @@ Struct fields are encoded in schema order.
 field_0 || field_1 || ... || field_n
 ```
 
-No field tags are encoded in the initial profile.
+No field tags are encoded. This is final, not initial-profile-only
+(ADR-0004, "Decided: no wire-level type identifiers"): HNCS is
+schema-driven, never self-describing, so a decoder always knows the
+expected type from the schema it is decoding against and a wire-level type
+tag would identify nothing a fixed schema position doesn't already fix.
+This does not apply to `extension_id` (§7), which is a genuine
+schema-selecting identifier carried in the bytes because it chooses between
+different extension schemas at decode time.
 
 Schema versioning defines how fields are added or removed.
 
@@ -376,7 +386,76 @@ HNCS decoders must:
 - reject unsupported object versions
 - enforce resource limits before allocation where possible
 
-## 9. Module Boundaries
+Each rejection above corresponds to one Canonical Error Taxonomy kind (§9);
+"reject integer width mismatch" and "reject unsupported object versions"
+are enforced by the calling object schema, not by an HNCS-level error kind
+of their own — HNCS itself only ever decodes the width its schema declares.
+
+## 9. Canonical Error Taxonomy
+
+ADR-0004, "Decided: Canonical Error Taxonomy." Every HNCS decoder rejects
+malformed input as exactly one of these kinds — a closed set for HNCS v0.1,
+ratifying what `crates/hn-hncs/src/error.rs` already implements and tests:
+
+```text
+invalid_bool               non-canonical boolean byte
+invalid_presence           non-canonical optional presence byte
+unexpected_eof             input ended before a value could be decoded
+length_limit_exceeded      a variable-length value exceeds its schema max
+count_limit_exceeded       a collection count exceeds its schema max
+length_field_overflow      a host length cannot fit the HNCS length field
+invalid_utf8               a decoded string is not valid UTF-8
+unsorted_set                a decoded set is not bytewise-ascending
+duplicate_set_element      a decoded set has a duplicate canonical element
+unsorted_map                a decoded map is not sorted by canonical key
+duplicate_map_key          a decoded map has a duplicate canonical key
+trailing_bytes             bytes remain after a complete value
+```
+
+A new HNCS-level failure mode is a profile change (§5), not something an
+individual object schema can add. Object-specific validation failures (an
+unregistered domain, a value outside a business rule) are that object's own
+errors, not HNCS errors, and must not reuse or overload one of the kinds
+above.
+
+## 10. Conformance Vector Format
+
+ADR-0004, "Decided: Conformance Vector Format." HNCS-level conformance
+vectors (`tests/conformance/core/hncs-primitives-v0.1.json`,
+`hncs-compound-v0.1.json`) follow this shape:
+
+```text
+{
+  schema, version, status, scope: { included, excluded }, properties,
+  depends_on?,   // present only when this file builds on another
+                 // conformance file's already-verified encodings
+  <format-specific top-level keys, e.g. "byte_order", "ordering">,
+  <type-family group, e.g. "optional" | "lists" | "sets" | "maps">: {
+    canonical:  [{ name, type, value | semantic_inputs, hex }],
+    inequality: [{ name, type, left_hex, right_hex, expected_equal }],
+    invalid:    [{ name, type, hex, error }]
+  }
+}
+```
+
+Rules:
+
+- `schema`, `version`, `status`, `scope`, and `properties` are present in
+  every file; `depends_on` and format-specific keys appear only where they
+  apply — a file must not carry a key it doesn't use.
+- `hex` fields are lowercase hex of the exact canonical bytes.
+- `error` values are Canonical Error Taxonomy kinds (§9) verbatim.
+- `canonical.semantic_inputs`, where present, lists multiple differently
+  *ordered* semantic inputs (sets, maps) that must all encode to the same
+  `hex`, proving order-independence rather than only one encoding path.
+- the JSON is authored or generated independently of the runner that
+  verifies it, never derived from the implementation under test.
+
+This format is specifically for HNCS-level primitive and compound encoding
+vectors. A consensus object's own conformance vectors (for example,
+`state-tree-v0.1.json`) may use a different shape suited to what they test.
+
+## 11. Module Boundaries
 
 ```text
 Protocol Schema
@@ -399,7 +478,7 @@ Boundary rules:
 - RPC specifications define external JSON/gRPC views.
 - Storage specifications define physical persistence layout.
 
-## 10. Security Requirements
+## 12. Security Requirements
 
 - HNCS must not accept multiple encodings for the same consensus value.
 - HNCS must not depend on reflection order from a programming language.
@@ -409,13 +488,14 @@ Boundary rules:
 - HNCS must not silently discard unknown critical data.
 - HNCS test vectors are mandatory before implementation.
 
-## 11. Open Architecture Decisions
+## 13. Open Architecture Decisions
 
-- final byte order confirmation
+Resolved by ADR-0004 and removed from this list: final byte order
+(little-endian, §4.2), numeric type identifiers (resolved as not needed,
+§4.6), canonical error taxonomy (§9), test vector format (§10).
+
 - schema definition language
 - extension identifier width
 - enum discriminant width defaults
 - maximum collection size defaults
-- canonical error taxonomy
-- test vector format
 - code generation strategy
