@@ -29,7 +29,9 @@
 //! and `receipts_root` use — a separate profile from ADR-0007's sparse
 //! `hn-smt-256-v1`, not a reuse of it. [`block_hash`] computes the block
 //! hash itself (ADR-0008, "Header Hash") over an already-canonical
-//! `BlockHeader` encoding.
+//! `BlockHeader` encoding, and [`tx_id`] computes a transaction ID
+//! (ADR-0006, "Transaction ID") the same way over an already-canonical
+//! `TransactionEnvelope` encoding.
 
 mod access_list;
 mod account;
@@ -47,6 +49,7 @@ mod receipt;
 mod transfer;
 mod transfer_payload;
 mod tree;
+mod tx_id;
 mod validity_window;
 
 pub use access_list::{AccessListV1, MAX_ACCESS_LIST_ENTRIES};
@@ -69,6 +72,7 @@ pub use receipt::{RECEIPT_VERSION_1, ReceiptStatus, ReceiptV1};
 pub use transfer::{TransferParty, apply_transfer, apply_transfer_with_receipt};
 pub use transfer_payload::{TRANSFER_PAYLOAD_VERSION_1, TransferPayloadV1};
 pub use tree::{Leaf, compute_state_root};
+pub use tx_id::tx_id;
 pub use validity_window::ValidityWindowV1;
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use hn_crypto::Digest;
+use hn_crypto::{Digest, hash_profile_0x0001};
 use hn_hncs::{Decoder, write_fixed_bytes, write_u8, write_u16};
 
 use crate::error::{StateError, StateResult};
@@ -61,6 +61,15 @@ impl ReceiptV1 {
         out
     }
 
+    /// Computes this receipt's digest (ADR-0008, "Ordered List
+    /// Commitment"): `HASH_PROFILE_0x0001("hnchain.receipt.v1",
+    /// HNCS(ReceiptV1))`. This is the leaf value `receipts_root` (ADR-0008)
+    /// commits to — not the same as `tx_id` (which identifies the
+    /// transaction this receipt is *for*, not the receipt itself).
+    pub fn digest(&self) -> StateResult<Digest> {
+        Ok(hash_profile_0x0001("hnchain.receipt.v1", &self.encode())?)
+    }
+
     /// Decodes and validates canonical HNCS bytes produced by
     /// [`ReceiptV1::encode`].
     pub fn decode(bytes: &[u8]) -> StateResult<Self> {
@@ -99,6 +108,19 @@ mod tests {
             hex(&receipt.encode()),
             "0100aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01"
         );
+    }
+
+    #[test]
+    fn digest_matches_independent_oracle() -> crate::error::StateResult<()> {
+        let receipt = ReceiptV1 {
+            tx_id: TX_ID,
+            status: ReceiptStatus::Success,
+        };
+        assert_eq!(
+            hex(&receipt.digest()?),
+            "c3aa176ddcff4b7b5072f87e8b64922972f9bb5189163f3cf22b0a7bbfc713c9"
+        );
+        Ok(())
     }
 
     #[test]
