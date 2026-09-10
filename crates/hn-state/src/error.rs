@@ -21,6 +21,25 @@ pub enum StateError {
     /// leaf (ADR-0007, Account Extensions Domain: Registry And Payload
     /// Leaves).
     ReservedExtensionId,
+    /// A value schema (for example `EnvelopeValueV1`) failed to encode
+    /// or decode as canonical HNCS. Distinct from [`StateError::Hash`],
+    /// which is scoped to `object_id` / `subkey` framing during key
+    /// derivation.
+    Encoding(HncsError),
+    /// A decoded `EnvelopeValueV1.account_type` byte is not a member of
+    /// the `account_type` registry (account-state.md §3.1). `0x00` is
+    /// reserved and always invalid.
+    InvalidAccountType {
+        /// The rejected byte.
+        value: u8,
+    },
+    /// A decoded `EnvelopeValueV1.envelope_version` does not match
+    /// [`crate::account_value::ENVELOPE_VERSION_1`], the only shape this
+    /// implementation understands.
+    UnsupportedEnvelopeVersion {
+        /// The rejected version.
+        value: u16,
+    },
 }
 
 impl From<HashError> for StateError {
@@ -42,6 +61,13 @@ impl core::fmt::Display for StateError {
             Self::DuplicateStateKey => formatter.write_str("duplicate state_key in write set"),
             Self::ReservedExtensionId => {
                 formatter.write_str("extension_id 0x0000 is reserved for the registry leaf")
+            }
+            Self::Encoding(error) => write!(formatter, "value schema encoding error: {error}"),
+            Self::InvalidAccountType { value } => {
+                write!(formatter, "invalid account_type: 0x{value:02x}")
+            }
+            Self::UnsupportedEnvelopeVersion { value } => {
+                write!(formatter, "unsupported envelope_version: {value}")
             }
         }
     }

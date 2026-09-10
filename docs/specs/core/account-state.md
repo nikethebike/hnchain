@@ -78,8 +78,11 @@ specification before implementation.
 ADR-0007 state `domain_id = 0x0001`) only. It is not a general-purpose tag
 for every kind of protocol object.
 
+`account_type` is `u8`, a closed registry (Envelope, §4.1):
+
 ```text
-standard
+0x00  reserved, invalid
+0x01  standard
 ```
 
 Validators and smart contracts are not `account_type` values: each is a
@@ -135,12 +138,50 @@ future post-quantum migration without redefining account identity.
 
 The envelope identifies the account state format.
 
-Required fields:
+**Decided: envelope value schema.**
 
-- `envelope_version`
-- `account_type`
-- `address`
-- `section_versions`
+```text
+EnvelopeValueV1
+  u16             envelope_version = 1
+  u8              account_type
+  bytes32         address
+  SectionVersionsV1 section_versions
+
+SectionVersionsV1
+  u16 identity_version
+  u16 balance_version
+  u16 nonce_version
+  u16 permission_version
+  u16 metadata_version
+  u16 asset_version
+  u16 lifecycle_version
+```
+
+Fields:
+
+- `envelope_version`: `u16`, matching this project's existing version-field
+  width convention (`state_key_version`, `address_version`, and so on). A
+  Structure Version in ADR-0022's sense: it changes only when the envelope
+  shape itself changes, independently of any individual section's own
+  version.
+- `account_type`: `u8`, a closed registry (`0x00` reserved/invalid,
+  `0x01` = `standard`) matching §3.1's segregated-model resolution — see
+  below.
+- `address`: this account's own 32-byte `address_body`
+  (`hn_crypto::account_address_body`'s output), raw bytes, not a full
+  `AddressPayload`. This duplicates what was already used to derive this
+  leaf's `state_key` (ADR-0007's `object_id`), which is necessary, not
+  redundant: `state_key` is a one-way hash, so a reader holding only a
+  leaf's key and value cannot recover the address from the key alone.
+  Storing it in the value lets a leaf self-describe and lets any reader
+  cross-check the value's claimed address against the key it was found at.
+- `section_versions`: one `u16` version per section other than the
+  envelope itself, in a fixed position per section — not a bounded map.
+  §4 is titled "Required Sections": unlike extension records (§4.8,
+  explicitly lazy and optional), every core section is mandatory for
+  every account, so there is no sparse/missing case to represent and no
+  need for map machinery. The envelope's own version is `envelope_version`
+  above, not repeated inside `section_versions`.
 
 The envelope is mandatory and must be included in state hashing.
 
