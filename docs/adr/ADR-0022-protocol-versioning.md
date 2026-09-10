@@ -19,7 +19,8 @@ packet, storage record, and public API, but does not say how the growing set
 of independent version fields across the protocol relate to each other, or
 how the network signals a hard fork.
 
-Accepted and pending ADRs already define several independent version fields:
+Accepted and pending ADRs already define several version fields, not all of
+which are independent of each other (see Decision):
 
 - `hash_profile_id` (ADR-0005) versions the hash algorithm and domain
   separation construction.
@@ -65,7 +66,7 @@ Every consensus structure keeps its own version field, changed only when
 that structure's own encoding or semantics change. Current instances:
 
 - `hash_profile_id` (ADR-0005)
-- `tree_profile` and `state_key_version` (ADR-0007)
+- `tree_profile` (ADR-0007)
 - `envelope_version` (account-state.md §4.1)
 - `address_version` (ADR-0003, once accepted)
 
@@ -83,6 +84,32 @@ own independent version field, per ADR-0000's Explicit Versioning invariant.
 It must not reuse another structure's version field to imply its own
 version, and must not omit a version field on the assumption that a global
 counter covers it.
+
+### Nested Structure Versions
+
+Not every version field is a top-level independent axis. A structure
+version may instead be scoped within, and owned by, another structure's
+version — in which case it is not free to move independently of its parent.
+
+`state_key_version` (ADR-0007, inside `StateKeyInputV1` and
+`StateKeyInputExtensionV1`) is the current example: ADR-0007 defines it as
+part of tree profile `0x0001`'s own specification, and its own Compatibility
+section treats a change to state key derivation as a breaking change "for
+tree profile `0x0001`" specifically, not as a globally independent field.
+Concretely:
+
+- `state_key_version` can change on its own while `tree_profile` stays
+  `0x0001` (for example, refining the key derivation formula without
+  changing the tree's structural model).
+- `tree_profile` changing to a structurally different profile (for example,
+  a Verkle-based profile, where a flat 256-bit hashed path may not even
+  apply) should be assumed to require a new state-key derivation scheme as
+  well, whether that takes the form of a new `state_key_version` or a
+  different mechanism entirely defined by that profile.
+
+The owning ADR must state which of its version fields are nested this way;
+absent such a statement, a version field is treated as a top-level
+independent axis under the rule above.
 
 ### Protocol Epoch
 
@@ -114,6 +141,22 @@ structures at once. Each structure versions itself.
 A structure's version field must change only when that structure's own
 canonical encoding or semantics change. It must not be bumped to track
 unrelated changes elsewhere in the protocol.
+
+### Nested Versions Must Be Declared
+
+A version field is nested within another structure's version only if the
+owning ADR's own text establishes that scoping (for example, by treating a
+change to the field as a breaking change "for" a specific parent profile
+value, as ADR-0007 does for `state_key_version` under `tree_profile`).
+Absent such text, a version field is independent under Version Independence.
+
+This ADR classifying an already-Accepted field as nested (as it does for
+`state_key_version` above) does not require rewriting the owning ADR to use
+this document's vocabulary; the classification is drawn from that ADR's
+existing normative text. Every ADR written after this one, however, must
+state any nesting relationship explicitly, using this vocabulary, at the
+point the version field is introduced — not add it later once a dependent
+change is already needed.
 
 ### Protocol Epoch Is Explicit
 
