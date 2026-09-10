@@ -243,6 +243,58 @@ Every payload must define:
 
 Payload bytes must be bounded.
 
+**Decided: `transfer` (`tx_type = 0x01`)** (ADR-0006, "Payload") — the
+only `tx_type` currently unblocked, since it needs only
+`BalanceValueV1`/`AssetValueV1` (§4.3/§4.7, both decided) and this
+document's own already-decided envelope fields:
+
+```text
+TransferPayloadV1
+  u16          payload_version = 1
+  bytes32      recipient
+  optional u16 asset_id
+  u128         amount
+```
+
+`asset_id` absent means native HNCOIN; present references a curated
+protocol-level/bridged asset (`assets` domain, §4.7's registry).
+Contract-defined assets move through `contract_call`, not `transfer` —
+their balances live in `contract_storage`, not this domain's Asset
+section. `amount` may be zero (a valid no-op, not a validation error).
+
+Required permissions: the sender's own signing key only — `transfer`
+defines no threshold/multisignature rule, and Permission State's
+capabilities are not activated (§4.5).
+
+Validation preconditions: `asset_id`, if present, must exist in the
+`assets` domain registry; the sender's applicable balance must be at
+least `amount`.
+
+State transition: debit the sender, credit the recipient, on the
+applicable section (`native_balance` or `holdings[asset_id]`).
+
+**Decided: implicit account creation.** A transfer to a `recipient`
+with no existing account state creates it (Ethereum's model, not
+Solana's explicit-creation-required one). Envelope, Nonce, Balance,
+Asset, and Lifecycle (`Created`) initial values are all specifiable
+from already-decided schemas. **Open, not resolved here**: Permission
+and Metadata initial values, since those sections' own value schemas
+are still deferred (§4.5, §4.6) — this blocks full closure of implicit
+creation specifically, not `transfer`'s core mechanics above.
+
+Event and receipt behavior is not decided for any `tx_type` yet — the
+receipt and event models themselves are still fully open (§12).
+
+Failure behavior follows the already-decided nonce/fee rules (§4.5,
+§4.6): a failed `transfer` still consumed its nonce and still owes a
+fee; only its own state effects revert.
+
+Every other `tx_type` is parked, each blocked on a named subsystem that
+does not exist yet: `contract_deploy`/`contract_call` (HNVM),
+`stake`/`unstake`/`validator_update` (consensus/validator specs, likely
+tokenomics too), `governance` (a governance model), `permission_update`
+(Permission State, §4.5), `system` (scope not yet concrete).
+
 ## 6. Signatures
 
 Transactions contain one or more signature envelopes as defined by cryptographic
@@ -390,8 +442,10 @@ Boundary rules:
 - final fee model (mechanism decided; see §4.6 — amount, refunds,
   distribution, burn policy, and priority market remain economic
   decisions)
-- final `payload` schemas per `tx_type` (§5) — the one remaining
-  envelope/signing-payload field; every other field is now decided
+- final `payload` schemas for 8 of 9 `tx_type`s (§5 — `transfer` is
+  decided; each remaining type is parked on a named blocker)
+- newly-created accounts' Permission/Metadata initial values (§5,
+  `transfer` implicit creation) — blocked on §4.5/§4.6
 - final receipt schema
 - final event schema
 - final mempool policy boundaries

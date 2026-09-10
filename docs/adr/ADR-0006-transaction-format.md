@@ -413,6 +413,92 @@ Every payload type must define:
 - event and receipt behavior
 - failure semantics
 
+**Decided: `transfer` (`tx_type = 0x01`) payload.** The only `tx_type`
+currently unblocked: it needs only `BalanceValueV1`/`AssetValueV1`
+(account-state.md §4.3/§4.7, both decided) and this ADR's own already-
+decided fields. Every other `tx_type` is parked below, each blocked on a
+subsystem that does not exist yet.
+
+```text
+TransferPayloadV1
+  u16          payload_version = 1
+  bytes32      recipient
+  optional u16 asset_id
+  u128         amount
+```
+
+Fields:
+
+- `payload_version`: `u16`, Structure Version, matching this project's
+  convention.
+- `recipient`: `bytes32`, an `address_body` — same shape as `sender`
+  (Sender, above), for the same reasons.
+- `asset_id`: `optional u16`. Absent means native HNCOIN (Balance
+  State, account-state.md §4.3); present references a curated
+  protocol-level/bridged asset (Asset State, §4.7, `assets` domain
+  registry). Contract-defined assets are out of scope for `transfer`
+  entirely — their balances live in `contract_storage` under the
+  issuing contract, not the `accounts` domain's Asset section
+  (account-state.md §4.7), so moving them is a `contract_call`, not a
+  `transfer`.
+- `amount`: `u128`, matching the balance/asset width convention. May be
+  zero (a valid no-op transfer, not a validation error) — this follows
+  Ethereum's permissive stance rather than inventing a new restriction
+  with no derivable justification.
+
+Authorization: the sender's own signing key only (ADR-0002's default —
+"exactly one active signing key unless the owning object specification
+defines a threshold or multisignature rule"); `transfer` defines no
+such rule, and Permission State's own capabilities are not activated
+(account-state.md §4.5), so there is nothing beyond the base signature
+to require yet.
+
+Validation preconditions: the referenced `asset_id`, if present, must
+exist in the `assets` domain registry; the sender's applicable balance
+(`native_balance` or `holdings[asset_id]`) must be at least `amount`.
+
+State transition: debit `amount` from the sender's applicable section,
+credit `amount` to the recipient's applicable section.
+
+**Decided: implicit account creation.** If `recipient` has no existing
+account state, the transfer creates it (Ethereum's model, not Solana's
+explicit-creation-required one) — asked the user first, since this was
+a genuine fork with real precedent on both sides. `EnvelopeValueV1`
+(`account_type = Standard`, current `section_versions`), `NonceValueV1`
+(`AccountNonce::INITIAL`), `BalanceValueV1`/`AssetValueV1` (zero/empty,
+then credited), and `LifecycleValueV1` (`Created`) are all fully
+specifiable today from already-decided schemas. **Open sub-item, not
+resolved here**: the newly-created account's Permission and Metadata
+section values are not decided, because those sections' own value
+schemas are still deferred (account-state.md §4.5/§4.6, no concrete
+driver yet) — implicit creation via `transfer` cannot be fully closed
+until they are, independent of everything else decided above.
+
+Failure semantics follow the already-decided Nonce/Fees rules: a
+`transfer` that fails a validation precondition (for example
+insufficient balance) still consumed its nonce and still owes a fee
+(amount not decided, Fees above); only its own state effects revert.
+
+Event and receipt behavior for `transfer` is not decided: the receipt
+and event models themselves are still fully open (Open Decisions,
+below) for every `tx_type`, not specific to `transfer`.
+
+**Parked, each blocked on a subsystem that does not exist yet, not
+merely unaddressed:**
+
+- `contract_deploy`, `contract_call` (`0x02`, `0x03`): blocked on HNVM,
+  which has no design yet.
+- `stake`, `unstake`, `validator_update` (`0x04`-`0x06`): blocked on
+  consensus and validator specifications, which do not exist yet, and
+  likely on economic parameters (staking amounts, reward/slashing
+  rules) owned by a future tokenomics spec.
+- `governance` (`0x07`): blocked on a governance model, which does not
+  exist yet.
+- `permission_update` (`0x08`): blocked on account-state.md §4.5
+  Permission State, itself explicitly deferred this session.
+- `system` (`0x09`): scope not yet concrete — no protocol module
+  operation has been specified that would use it.
+
 ### Signatures
 
 Transactions include one or more signature envelopes.
@@ -621,7 +707,10 @@ change.
 - final transaction envelope fields (every field except `payload` is now
   decided above: `chain_id`/`network_id`/`tx_version`/`tx_type`/`sender`/
   `validity_window`/`fee_limit`'s type/`access_list`; `payload` remains
-  open, typed per `tx_type` — a separate, large per-type track, §5)
+  open for 8 of 9 `tx_type`s — `transfer`'s payload is now decided,
+  §5 — each parked on a named blocker, not merely unaddressed)
+- newly-created accounts' Permission/Metadata initial values (`transfer`
+  implicit creation, §5) — blocked on account-state.md §4.5/§4.6
 - final fee model (mechanism decided above — type, payer, cap-not-exact,
   failed-execution obligation; amount, refund arithmetic, validator
   distribution, burn policy, storage costs, and priority-fee market
