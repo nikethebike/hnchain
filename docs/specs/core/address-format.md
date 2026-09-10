@@ -21,6 +21,7 @@ This specification is constrained by:
 - `docs/adr/ADR-0000-protocol-invariants.md`
 - `docs/adr/ADR-0002-cryptographic-identity.md`
 - `docs/adr/ADR-0003-address-format.md`
+- `docs/adr/ADR-0005-hash-algorithms.md`
 
 ## 2. Design Goals
 
@@ -42,31 +43,42 @@ AddressPayload
   network_id
   derivation_scheme
   address_body
-  checksum_profile
 ```
 
 Field meanings:
 
 - `address_version`: version of the address payload format.
-- `address_namespace`: protocol namespace of the address.
-- `network_id`: canonical network identifier.
+- `address_namespace`: protocol namespace of the address. `uint8`, closed
+  registry for `address_version = 1` (§4).
+- `network_id`: canonical network identifier. `uint16` (§5).
 - `derivation_scheme`: identifier for address derivation rules.
-- `address_body`: derived identifier bytes.
-- `checksum_profile`: text encoding checksum profile for external display.
+- `address_body`: derived identifier bytes. 32 bytes for every namespace
+  under `address_version = 1` (ADR-0003, "Address Body Length").
+
+`AddressPayload` deliberately does not carry `chain_id` or
+`checksum_profile` (ADR-0003, Decision). `chain_id` (which HNChain chain
+lineage) is a different field from `network_id` (which environment) owned
+elsewhere (ADR-0008); addresses are chain-lineage-agnostic. A checksum
+protects text-encoding entry and transport, not consensus identity, so it
+lives entirely in the text representation (§7), not in this payload — if it
+were a payload field, two payloads naming the same object but checksummed
+differently would count as different addresses under Address Equality (§8).
 
 The canonical field encoding is defined by the serialization specification.
 
 ## 4. Address Namespaces
 
-Initial namespaces:
+`address_namespace` is `uint8`. The registry for `address_version = 1` is
+closed (ADR-0003, "Namespace Separation"):
 
 ```text
-account
-contract
-validator
-protocol
-bridge
-identity
+0x00  reserved, invalid for committed addresses
+0x01  account
+0x02  contract
+0x03  validator
+0x04  protocol
+0x05  bridge
+0x06  identity
 ```
 
 Namespace rules:
@@ -75,20 +87,46 @@ Namespace rules:
 - Unknown namespaces are rejected unless activated by protocol rules.
 - An address from one namespace must not be accepted where another namespace is
   required.
+- Adding a namespace requires a new `address_version`, not an addition to
+  the `address_version = 1` registry.
+
+The `protocol` namespace's `address_version = 1` genesis reservation list
+(treasury, governance, staking, slashing, bridge registry) is fixed at
+genesis and enumerated in the genesis specification, not here. Whether more
+protocol modules can be reserved after genesis without a hard fork depends
+on a governance process that does not exist yet (ADR-0003, Deferred
+Decisions).
 
 ## 5. Network Identifier
 
 `network_id` prevents accidental cross-network address reuse.
+
+`network_id` is `uint16` (ADR-0003, "Network Separation"), split into a
+registered range and a self-assigned devnet range:
+
+```text
+0x0000           reserved, invalid
+0x0001           mainnet
+0x0002           testnet
+0x0003..0x7FFF   reserved for future centrally registered networks
+0x8000..0xFFFF   devnet range: self-assigned per devnet instance, not
+                 centrally registered
+```
+
+`uint16`, not `uint8` like `address_namespace`: devnets are expected to run
+many concurrent disposable instances, and a single shared devnet value
+would leave two independently spun-up devnets indistinguishable at the
+address level.
 
 Network identifier rules:
 
 - `network_id` is part of the canonical address payload.
 - `network_id` is part of signature verification context.
 - Wallets and RPC clients must reject mismatched network identifiers.
-- The human-readable prefix may duplicate network information, but does not
-  replace `network_id`.
-
-The exact network identifier format remains open.
+- The human-readable prefix duplicates network information for display, but
+  is not consensus-authoritative and does not replace `network_id`; wallets,
+  CLI tools, and explorers must verify the decoded `network_id` matches the
+  network the presented HRP claims (§7) and reject or warn on mismatch.
 
 ## 6. Derivation Scheme
 
@@ -102,7 +140,15 @@ Candidate derivation inputs:
 - deployment nonce
 - code commitment
 - protocol namespace identifier
-- bridge chain identifier
+- external chain identifier and external account reference (bridge
+  namespace only — see below)
+
+For the `bridge` namespace, `address_body` is a hash commitment over
+`(external_chain_id, external_account_reference)` under
+`HASH_PROFILE_0x0001`, not those raw external bytes embedded directly; this
+keeps the bridge body the same 32-byte length as every other namespace
+(ADR-0003, "Bridge Address"). The external chain identifier's own format is
+still open (§11).
 
 Rules:
 
@@ -119,8 +165,22 @@ Human-readable address is an external representation of `AddressPayload`.
 Recommended conceptual structure:
 
 ```text
-hrp + separator + encoded_payload
+hrp + separator + encoded_payload + checksum
 ```
+
+The HRP encodes `network_id` only — never `address_namespace` or any other
+payload field (ADR-0003, "HRP scope"). Wallets and explorers read
+`address_namespace` from the decoded payload, not from the prefix, so it
+needs no HRP of its own. There is one HRP for mainnet, one for testnet, and
+one shared HRP for the whole self-assigned devnet `network_id` range — not
+one HRP per devnet instance (ADR-0003, "Recommended Initial Profile" and
+"HRP-network_id consistency"); checking a decoded `network_id` against its
+HRP is exact-value matching for mainnet/testnet and range membership for
+devnet.
+
+The checksum is part of this text structure, not of `AddressPayload` (§3):
+it protects entry and transport, and cannot affect consensus equality (§8)
+by construction.
 
 Rules:
 
@@ -129,6 +189,9 @@ Rules:
 - text encoding must reject non-canonical forms
 - decoding must produce exactly one `AddressPayload`
 - consensus must not hash or compare text addresses
+- the decoded `network_id` must be checked against the presented HRP before
+  display or acceptance; a mismatch must be rejected or prominently warned
+  on, not silently accepted (ADR-0003, "HRP spoofing")
 
 HNChain should use Bech32m-style encoding unless implementation analysis
 rejects it.
@@ -184,15 +247,24 @@ Boundary rules:
 - Address derivation must use canonical input bytes.
 - Address derivation must include domain separation.
 - Wallet display must prevent silent network or namespace confusion.
+- Wallets, CLI tools, and explorers must verify decoded `network_id` against
+  the presented HRP and reject or warn on mismatch ("HRP spoofing").
 
 ## 11. Open Architecture Decisions
 
-- final HRPs
-- final network identifier format
-- final namespace numeric identifiers
+Resolved by ADR-0003 and removed from this list: final network identifier
+format (`uint16`, §5), final namespace numeric identifiers (`uint8`, §4),
+final address body length (32 bytes uniform, §3). Protocol address
+reservation rules are resolved for the `address_version = 1` genesis list
+(§4) but the post-genesis extension process remains open, deferred pending
+a governance ADR that does not exist yet (ADR-0003, Deferred Decisions).
+
+Still open:
+
+- final HRPs (the literal prefix strings)
 - final derivation scheme identifiers
-- final address body length for account addresses
 - contract address derivation rules
-- protocol address reservation rules
-- bridge address chain identifier format
+- bridge address external chain identifier format (how `external_chain_id`
+  itself is encoded before being hashed into `address_body`; the hashing
+  itself is resolved, §6)
 - text address codec test vectors
