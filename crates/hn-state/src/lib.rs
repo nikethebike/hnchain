@@ -23,7 +23,11 @@
 //! `TransactionEnvelope` field shapes with their own dedicated encoding
 //! (ADR-0006, "Validity Window" / "Access List"). [`receipt`] adds
 //! `ReceiptV1` (ADR-0006, "Receipts"); [`transfer`] maps a `transfer`'s
-//! outcome onto one via `apply_transfer_with_receipt`.
+//! outcome onto one via `apply_transfer_with_receipt`. [`list_merkle`]
+//! implements `hn-list-merkle-v1` (ADR-0008, "Ordered List
+//! Commitment"), the dense ordered-list tree profile `transactions_root`
+//! and `receipts_root` use — a separate profile from ADR-0007's sparse
+//! `hn-smt-256-v1`, not a reuse of it.
 
 mod access_list;
 mod account;
@@ -33,6 +37,7 @@ mod envelope_value;
 mod error;
 mod key;
 mod lifecycle_value;
+mod list_merkle;
 mod node;
 mod nonce_value;
 mod receipt;
@@ -53,6 +58,7 @@ pub use envelope_value::{AccountType, ENVELOPE_VERSION_1, EnvelopeValueV1, Secti
 pub use error::{StateError, StateResult};
 pub use key::{OBJECT_ID_MAX_LEN, SUBKEY_MAX_LEN, state_key_core, state_key_extension};
 pub use lifecycle_value::{LIFECYCLE_VERSION_1, LifecycleState, LifecycleValueV1};
+pub use list_merkle::{LIST_TREE_PROFILE_ID, list_empty_root, list_merkle_root, list_node_hash};
 pub use node::{EmptyHashTable, TREE_DEPTH, TREE_PROFILE_ID, internal_hash, leaf_hash, value_hash};
 pub use nonce_value::{NONCE_VERSION_1, NonceValueV1};
 pub use receipt::{RECEIPT_VERSION_1, ReceiptStatus, ReceiptV1};
