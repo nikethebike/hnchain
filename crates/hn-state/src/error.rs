@@ -74,6 +74,21 @@ pub enum StateError {
         /// The rejected byte.
         value: u8,
     },
+    /// A decoded `TransferPayloadV1.payload_version` does not match
+    /// [`crate::transfer_payload::TRANSFER_PAYLOAD_VERSION_1`], the only
+    /// shape this implementation understands.
+    UnsupportedTransferPayloadVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A `transfer` (ADR-0006, "Payload") would debit more than the
+    /// sender's applicable balance — the validation precondition
+    /// "the sender's applicable balance must be at least `amount`"
+    /// failed.
+    InsufficientBalance,
+    /// Applying a `transfer`'s credit side would overflow the
+    /// recipient's applicable balance's `u128` range.
+    BalanceOverflow,
 }
 
 impl From<HashError> for StateError {
@@ -117,6 +132,13 @@ impl core::fmt::Display for StateError {
             }
             Self::InvalidLifecycleState { value } => {
                 write!(formatter, "invalid lifecycle state: 0x{value:02x}")
+            }
+            Self::UnsupportedTransferPayloadVersion { value } => {
+                write!(formatter, "unsupported transfer payload_version: {value}")
+            }
+            Self::InsufficientBalance => formatter.write_str("insufficient balance for transfer"),
+            Self::BalanceOverflow => {
+                formatter.write_str("transfer credit would overflow recipient balance")
             }
         }
     }

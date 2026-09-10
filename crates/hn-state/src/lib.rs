@@ -15,6 +15,10 @@
 //! its own module (for example [`envelope_value`], [`nonce_value`]);
 //! sections whose value schema is not yet decided are still treated as
 //! opaque already-canonical HNCS bytes by callers of this crate.
+//! [`transfer_payload`] and [`transfer`] add ADR-0006's `transfer`
+//! transaction payload and its state transition: decoding a payload is
+//! ADR-0006's concern, applying it to produce updated write-set leaves
+//! is this crate's, per its own "state transition boundaries" scope.
 
 mod account;
 mod asset_value;
@@ -25,6 +29,8 @@ mod key;
 mod lifecycle_value;
 mod node;
 mod nonce_value;
+mod transfer;
+mod transfer_payload;
 mod tree;
 
 pub use account::{
@@ -40,6 +46,8 @@ pub use key::{OBJECT_ID_MAX_LEN, SUBKEY_MAX_LEN, state_key_core, state_key_exten
 pub use lifecycle_value::{LIFECYCLE_VERSION_1, LifecycleState, LifecycleValueV1};
 pub use node::{EmptyHashTable, TREE_DEPTH, TREE_PROFILE_ID, internal_hash, leaf_hash, value_hash};
 pub use nonce_value::{NONCE_VERSION_1, NonceValueV1};
+pub use transfer::{TransferParty, apply_transfer};
+pub use transfer_payload::{TRANSFER_PAYLOAD_VERSION_1, TransferPayloadV1};
 pub use tree::{Leaf, compute_state_root};
 
 #[cfg(test)]
