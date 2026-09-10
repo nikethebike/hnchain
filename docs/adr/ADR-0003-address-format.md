@@ -16,6 +16,10 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0007: State Tree
+
 ## Context
 
 HNChain requires addresses for accounts, validators, smart contracts, protocol

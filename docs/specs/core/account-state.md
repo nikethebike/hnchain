@@ -73,14 +73,41 @@ specification before implementation.
 
 ## 3.1 Account Types
 
-Initial conceptual account types:
+**Decided: segregated model.** `account_type` distinguishes kinds of object
+*within* the `accounts` domain (ADR-0003 `address_namespace = 0x01`,
+ADR-0007 state `domain_id = 0x0001`) only. It is not a general-purpose tag
+for every kind of protocol object.
 
 ```text
 standard
-validator
-smart_contract
-system
 ```
+
+Validators and smart contracts are not `account_type` values: each is a
+fully separate category with its own `address_namespace` and state
+`domain_id` (ADR-0003 `contract = 0x02` / `validator = 0x03`, ADR-0007
+`contracts = 0x0003` / `validators = 0x0006`), not an `AccountState`
+instance distinguished by type. An earlier draft of this list included
+`validator`, `smart_contract`, and `system` as account types; that
+conflated three independently-built registries — this document's own
+(unnumbered) `account_type`, ADR-0003's `address_namespace`, and
+ADR-0007's state `domain_id` — which classified the same conceptual space
+three different ways and did not fully agree with each other. Contracts
+and validators are segregated because ADR-0007 already gives each its own
+state domain with its own leaf structure (`contract_storage` alongside
+`contracts`, for example), which only makes sense if their state is not
+shaped like `AccountState` at all — folding them into `account_type` would
+mean pretending they share a structure they were already accepted as not
+sharing.
+
+`system` is deferred rather than resolved either way: whether HNChain's
+protocol-owned modules (treasury, governance, staking, and so on) are
+`AccountState` instances tagged `account_type = system`, or their own
+segregated category, depends on how the `protocol` `address_namespace`
+(ADR-0003, covering exactly those modules) relates to ADR-0007's
+`governance`/`metadata`/`system` state domains — a namespace-to-domain
+mapping question this document does not resolve. See
+`docs/adr/ADR-0007-state-tree.md`'s State Domains section for the current
+state domain registry.
 
 Account type is consensus-relevant.
 

@@ -10,6 +10,7 @@ Depends On:
 
 - ADR-0000: Protocol Invariants
 - ADR-0001: Extended Account-Based State Model
+- ADR-0003: Address Format
 - ADR-0004: Canonical Serialization
 - ADR-0005: Hash Algorithms
 
@@ -216,10 +217,35 @@ Initial conceptual domains:
 - `0x0007` governance
 - `0x0008` metadata
 - `0x0009` system
+- `0x000A` bridge
+- `0x000B` identity
 
 Domains are part of the key derivation and proof semantics.
 
 Domain ID `0x0000` is reserved and invalid for committed state.
+
+`bridge` and `identity` reserve the domain IDs matching ADR-0003's
+`address_namespace` registry (`bridge = 0x05`, `identity = 0x06`), so the
+two registries agree on which kinds of protocol object exist, following
+the segregated-namespace decision in `docs/specs/core/account-state.md`
+§3.1. Reserving the ID is not the same as fully specifying the domain: like
+`contract_storage`, `assets`, `governance`, `metadata`, and `system`
+above, neither gets its own per-domain leaf structure subsection here, and
+per Compatibility below a domain addition is backward-compatible only once
+it also has a canonical encoding, value schema, and activation rules — none
+of which this ADR defines for `bridge` or `identity` yet.
+
+This registry is not closed the way the `accounts` domain's SectionId
+registry is (Accounts Domain: Sections below): adding a domain here follows
+Compatibility's existing "unique identifier, canonical encoding,
+deterministic rejection, state transition rules" process, not a tree
+profile bump.
+
+The relationship between ADR-0003's `protocol` namespace (one value,
+`0x04`) and this registry's `governance`/`metadata`/`system` domains
+(three values) is not yet mapped — which of the three domains a given
+`protocol`-namespace address's state lands in is a separate open question,
+not resolved by this addition.
 
 The `accounts` and `account_extensions` domains define additional per-domain
 leaf structure, specified below.
