@@ -20,6 +20,7 @@ Referenced By:
 - ADR-0006: Transaction Format
 - ADR-0008: Block Format
 - ADR-0019: Storage And State Interfaces
+- ADR-0022: Protocol Versioning
 
 ## Context
 
