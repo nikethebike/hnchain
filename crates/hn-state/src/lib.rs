@@ -35,7 +35,11 @@
 //! and [`consensus_root`] add the three remaining consensus-track leaf/
 //! root digests (ADR-0010, ADR-0015): `consensus_root` and
 //! [`validator_set_commitment`] are two names for the same function, not
-//! two independently-computed values.
+//! two independently-computed values. [`vote`] adds
+//! `VoteSigningPayloadV1`/`ConsensusVote` (ADR-0012); `QuorumCertificate`
+//! is not yet implementable as a concrete struct, since its
+//! `signer_commitment`/aggregation representation and the voting power
+//! integer width it depends on are still open (ADR-0010, ADR-0012).
 
 mod access_list;
 mod account;
@@ -58,6 +62,7 @@ mod tree;
 mod tx_id;
 mod validator_digest;
 mod validity_window;
+mod vote;
 
 pub use access_list::{AccessListV1, MAX_ACCESS_LIST_ENTRIES};
 pub use account::{
@@ -84,6 +89,10 @@ pub use tree::{Leaf, compute_state_root};
 pub use tx_id::tx_id;
 pub use validator_digest::validator_digest;
 pub use validity_window::ValidityWindowV1;
+pub use vote::{
+    CONSENSUS_PROFILE_TENDERMINT_V1, ConsensusVote, MAX_VOTE_METADATA_LEN, MAX_VOTE_SIGNATURE_LEN,
+    VOTE_VERSION_1, VoteSigningPayloadV1, VoteTargetType, VoteType,
+};
 
 #[cfg(test)]
 mod tests {

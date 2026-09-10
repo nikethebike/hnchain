@@ -102,6 +102,37 @@ pub enum StateError {
         /// The rejected byte.
         value: u8,
     },
+    /// A decoded `VoteSigningPayloadV1`/`ConsensusVote.vote_version`
+    /// does not match [`crate::vote::VOTE_VERSION_1`], the only shape
+    /// this implementation understands.
+    UnsupportedVoteVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `consensus_profile` does not match
+    /// [`crate::vote::CONSENSUS_PROFILE_TENDERMINT_V1`], the only
+    /// profile this implementation understands.
+    UnsupportedConsensusProfile {
+        /// The rejected profile identifier.
+        value: u16,
+    },
+    /// A decoded `vote_type` byte is not a member of the closed
+    /// registry (ADR-0012, "Decided: `vote_type` registry").
+    InvalidVoteType {
+        /// The rejected byte.
+        value: u8,
+    },
+    /// A decoded `target_type` byte is not a member of the closed
+    /// registry (ADR-0012, "Decided: `target_type` registry").
+    InvalidVoteTargetType {
+        /// The rejected byte.
+        value: u8,
+    },
+    /// A decoded vote has `target_type = Nil` but a non-zero
+    /// `target_hash` — the only canonical encoding of a nil vote has
+    /// an all-zero `target_hash` (ADR-0012, "Decided: `target_type`
+    /// registry").
+    NonCanonicalNilTarget,
 }
 
 impl From<HashError> for StateError {
@@ -158,6 +189,21 @@ impl core::fmt::Display for StateError {
             }
             Self::InvalidReceiptStatus { value } => {
                 write!(formatter, "invalid receipt status: 0x{value:02x}")
+            }
+            Self::UnsupportedVoteVersion { value } => {
+                write!(formatter, "unsupported vote_version: {value}")
+            }
+            Self::UnsupportedConsensusProfile { value } => {
+                write!(formatter, "unsupported consensus_profile: {value}")
+            }
+            Self::InvalidVoteType { value } => {
+                write!(formatter, "invalid vote_type: 0x{value:02x}")
+            }
+            Self::InvalidVoteTargetType { value } => {
+                write!(formatter, "invalid target_type: 0x{value:02x}")
+            }
+            Self::NonCanonicalNilTarget => {
+                formatter.write_str("nil vote target_hash must be all-zero")
             }
         }
     }

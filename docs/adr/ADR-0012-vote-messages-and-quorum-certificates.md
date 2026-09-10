@@ -131,13 +131,65 @@ and nothing else can produce or accept it," for free. `chain ID` and
 `network ID` are the already-decided `chain_id`/`network_id` fields
 themselves, not duplicated identifiers.
 
-`VoteSigningPayloadV1`'s full field list mirrors `ConsensusVote` minus
-`signature` (a signature cannot cover itself) and minus `protocol name`/
-`signing purpose` for the reason above; every field in it already has a
-decided type from this ADR, ADR-0006 (`chain_id`, `network_id`), or
-ADR-0022/ADR-0008 (`epoch`/`protocol_epoch`, height), except
-`validator_set_commitment` (ADR-0010, below) and `round` (still open,
-owned by the eventual timeout/view-change model).
+**Decided: `round` type.** `u64`, matching `hn_core::Round` (already
+implemented) and the width convention every other consensus counter in
+this project uses (`height`, `epoch`, `protocol_epoch`, `nonce`) — not
+narrowed to `u32` despite resetting each height (ADR-0009, "Timeout And
+View Change": "a round is one `propose -> prevote -> precommit`
+attempt at a fixed height; advancing the round never changes height,"
+which is also what fixes `round`'s reset behavior — `Round::FIRST = 0`
+at the start of every new height, not a chain-wide monotonic counter
+the way `height` itself is). Matching the sibling types' width is
+worth more than a narrower bound for a value that, in practice, rarely
+grows large: no other counter-like consensus field in this project
+uses a narrower width without a specific reason to, and a healthy
+network keeps `round` small regardless of its declared type width.
+
+**Decided: `validator_id` width, not its exact derivation.** `bytes32`,
+matching every other protocol identifier's width in this project
+(`address_body`, `tx_id`, and so on) — but *not* asserted to equal
+`hn_crypto::validator_address_body` (which derives from `consensus_key`)
+or `account_address`. `validator_id` must stay stable across consensus
+key rotation (validator-set.md §4.2, §10, "Key Rotation"), while
+`validator_address_body` is derived from the consensus key itself and
+would change on rotation — so the two are not obviously the same value,
+and deciding which one `validator_id` actually is (or whether it is a
+third, separately-assigned value) belongs to ADR-0010's own still-open
+`ValidatorRecordV1` closure, not here. Fixing only the width lets
+`ConsensusVote`/`QuorumCertificate` be fully encodable now without
+guessing at that derivation.
+
+**Decided: `consensus_profile` type.** `u16`, matching the width
+convention of every other profile-identifier field in this project
+(`hash_profile_id`, `tree_profile`, `LIST_TREE_PROFILE_ID`). `0x0001`
+identifies the Tendermint-style profile decided in ADR-0009 (`0x00` is
+not reserved here the way `chain_id`/`tx_type` reserve it — this is a
+single-value profile identifier like `tree_profile`, not a per-object
+registry with a meaningful "absent" case).
+
+**Decided: `epoch` type.** `hn_core::Epoch` (`u64`, already
+implemented) — the consensus/validator-set epoch (ADR-0009, "Height,
+Round, And Epoch": a consensus-protocol concept), **not**
+`protocol_epoch` (`hn_core::ProtocolEpoch`, ADR-0008/ADR-0022):
+`ConsensusVote`/`QuorumCertificate` were never conceptually defined
+with a `protocol_epoch` field at all (only `epoch`) — an earlier draft
+of this section's own prose momentarily conflated the two, the same
+class of naming confusion ADR-0008's own `protocol_epoch` gap fix
+caught and corrected for `BlockHeader`. A vote binds to the validator
+set epoch it was cast under; it has no reason to also carry the
+separate hard-fork/activation signal.
+
+With this, `VoteSigningPayloadV1`'s full field list is closed: mirrors
+`ConsensusVote` minus `signature` (a signature cannot cover itself) and
+minus `protocol name`/`signing purpose` for the reason above. Every
+field now has a decided type: this ADR (`vote_version`,
+`consensus_profile`, `vote_type`, `epoch`, `round`, `validator_id`),
+ADR-0006 (`chain_id`, `network_id`), ADR-0008 (`height`,
+`hn_core::BlockHeight`), ADR-0010 (`validator_set_commitment` — the
+value itself, `consensus_root`), or is left intentionally generic
+(`target_type`/`target_hash` — closed registry and `bytes32` per
+"Quorum Certificate Target," below; `vote_metadata` — bounded bytes,
+profile-specific by design, not a fixed schema).
 
 ### Vote Types
 
@@ -257,6 +309,28 @@ The target may be:
 - consensus object hash
 
 The target type must be explicit.
+
+**Decided: `target_type` registry**, `u8`, closed for this profile:
+
+```text
+0x00  reserved, invalid
+0x01  block
+0x02  nil
+```
+
+`target_hash` is `bytes32` always (`block_hash`, ADR-0008, when
+`target_type = block`; the all-zero digest when `target_type = nil` —
+not a variable-length or absent field, so decoding never needs to
+branch on `target_type` to know how many bytes follow). `proposal`,
+`checkpoint`, and `timeout claim` stay unassigned: "timeout claim" has
+no object to target at all (ADR-0009, "Timeout And View Change" — no
+separate timeout-certificate object exists), `checkpoint` is deferred
+with ADR-0016 (untouched), and "proposal" is not a distinct target
+from `block` in this profile — a `prevote`/`precommit` targets the
+block a proposal carries, not the proposal message itself, matching
+classic Tendermint. `consensus object hash` is not a registry entry;
+it was a placeholder category, not a concrete target this profile
+uses.
 
 ### Signer Commitment
 
