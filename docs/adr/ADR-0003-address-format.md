@@ -365,6 +365,47 @@ already resolved separately (Bridge Address below).
 
 Used for smart contract instances.
 
+**Decided: contract address derivation function.**
+
+```text
+address_body = HASH_PROFILE_0x0001(
+  domain = "hnchain.address.contract.v1",
+  payload = HNCS(ContractAddressInputV1)
+)
+
+ContractAddressInputV1
+  u16     address_version = 1
+  u16     network_id
+  u8      address_namespace = 0x02
+  u8      derivation_scheme
+  bytes32 deployer_address_body
+  bytes32 code_commitment
+  bytes   deployment_input
+```
+
+`derivation_scheme = 0x01` (`DeployerCodeCommitment`) for this scheme.
+`derivation_scheme` values are scoped per namespace, the same way
+ADR-0007 scopes `section_id` to a `domain_id`: `contract`'s registry
+independently starts at `0x01`, the same value `account`'s does, without
+colliding — they are different registries, not one shared one.
+
+`deployer_address_body` is the deployer's own already-derived 32-byte
+account `address_body` (Account Address above), not a raw public key: by
+deployment time the deployer is identified by its account address, which
+is exactly what "creator or deployer account" above names.
+`code_commitment` is a 32-byte domain-separated hash commitment to the
+canonical deployed code bytes; this ADR takes it as given rather than
+defining how it is computed. `deployment_input` is HNCS-bounded, not a
+fixed-width nonce field, because the account nonce model itself is not
+yet decided (account-state.md SS4.4) — this derivation does not assume a
+specific nonce width, matching "deployment nonce or unique deployment
+input" above, which already hedges between the two.
+
+`network_id` binds here the same way it does for Account Address: it is
+one of this section's five required binding inputs, not an
+account-specific detail that stopped applying once namespaces
+segregated.
+
 Contract address derivation must bind to:
 
 - creator or deployer account
@@ -633,10 +674,10 @@ existing address version is a major protocol change.
 ## Open Decisions
 
 - final mainnet, testnet, and devnet human-readable prefixes
-- address body derivation function for `contract`, `validator`, `protocol`,
-  and `identity` namespaces (`account` is resolved: Account Address above;
-  `bridge` is resolved separately: Bridge Address)
-- contract address derivation inputs
+- address body derivation function for `validator`, `protocol`, and
+  `identity` namespaces (`account` and `contract` are resolved: Account
+  Address and Contract Address above; `bridge` is resolved separately:
+  Bridge Address)
 - bridge chain identifier format
 - display and truncation requirements for wallets and explorers
 
