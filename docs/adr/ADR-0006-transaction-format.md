@@ -155,6 +155,44 @@ The nonce model must define:
 - replay protection domain
 - interaction with parallel execution
 
+**Decided: nonce model**, except fee behavior (owned by Fees, below).
+Storage width and initial value (`u64`, initial `0`) are already decided
+in `NonceValueV1` (account-state.md §4.4); this closes the remaining
+transaction-validation semantics that section left to this ADR.
+
+- **Increment rule.** A transaction's nonce is consumed exactly once it
+  passes precheck (signature, nonce match, and fee-affordability checks)
+  and is included in a block — regardless of whether the transaction's
+  own execution later succeeds or reverts. A transaction that fails
+  precheck is never included and never consumes a nonce.
+- **Behavior for failed execution.** If execution fails after inclusion,
+  only the transaction's own state effects are reverted; the nonce
+  increment from the rule above is not undone. This is required so a
+  failed execution cannot be resubmitted or replayed under the same
+  nonce. Whether a fee is charged in this case is decided by the Fee
+  model (still open, see Fees below), not by this rule.
+- **Ordering rules.** A sender's transactions must be included in
+  strictly increasing, gap-free nonce order: a transaction is valid for
+  inclusion only when its nonce exactly equals the sender's current
+  on-chain nonce at execution time. A mempool may hold and reorder
+  transactions with higher nonces locally, but block validity does not.
+- **Replay protection domain.** The uniqueness scope for a signed
+  transaction is `(chain_id, network_id, sender_address, nonce)` — chain
+  and network binding (decided above) plus a nonce that can only ever be
+  consumed once per sender together make a valid signed transaction
+  replayable nowhere else and at most once.
+- **Interaction with parallel execution.** Nonce ordering serializes only
+  transactions from the *same* sender (each sender has its own
+  independent nonce sequence). Transactions from different senders are
+  not ordered relative to each other by nonce at all; any shared-state
+  conflicts between them are resolved by the access list mechanism
+  (Access List, below), not by nonce.
+
+This account-based sequential-nonce model follows directly from ADR-0001
+(Extended Account-Based State Model) already being the accepted account
+model — it is not an independent design choice among live alternatives
+for this project.
+
 ### Fees
 
 Transactions include fee limits or equivalent resource-payment constraints.
@@ -337,7 +375,6 @@ change.
 
 - final transaction envelope fields (`chain_id`/`network_id` now decided
   above; remaining fields still open)
-- nonce width and failed-execution behavior
 - final fee model
 - final validity window semantics
 - access list enforcement model

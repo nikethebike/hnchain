@@ -260,10 +260,11 @@ implemented. At minimum, the model must define:
 **Decided: nonce storage width only.** This section decides how a nonce is
 represented as a stored leaf value — nonce width and initial value — not the
 full nonce model above. Replay protection domain, increment timing, ordering
-rules, and behavior for failed execution are transaction-validation semantics
-owned by ADR-0006 (Transaction Format, still Proposed) and remain open there;
-this schema decodes and stores whatever `u64` count ADR-0006 eventually
-specifies the rules for, without assuming any of those rules itself.
+rules, and behavior for failed execution are transaction-validation
+semantics owned by ADR-0006 (Transaction Format, "Nonce" — now decided
+there, though the ADR overall remains Proposed pending its other open
+items); this schema decodes and stores whatever `u64` count that model
+produces, without assuming any of those rules itself.
 
 ```text
 NonceValueV1

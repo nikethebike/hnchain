@@ -116,15 +116,20 @@ Display address strings are not used in consensus transaction encoding.
 
 Nonce prevents replay and defines account transaction ordering.
 
-Open requirements:
+`u64`, initial `0` (`NonceValueV1`, account-state.md §4.4). A nonce is
+consumed on inclusion (passing precheck), not on successful execution —
+a failed execution still consumes its nonce, only its own state effects
+revert. Inclusion requires the transaction's nonce to exactly equal the
+sender's current on-chain nonce (strictly increasing, gap-free per
+sender). Replay protection scope is `(chain_id, network_id,
+sender_address, nonce)`. Nonce ordering serializes only same-sender
+transactions; cross-sender conflicts are an access list concern, not a
+nonce concern. Decided in ADR-0006, "Nonce".
 
-- fixed-width integer type
-- initial value
-- increment point
-- behavior on validation failure
-- behavior on execution failure
-- interaction with multi-signature
-- interaction with parallel execution
+Still open:
+
+- interaction with multi-signature (depends on account permission rules,
+  not yet activated — account-state.md §4.5)
 
 ### 4.6 Fee Limit
 
@@ -310,7 +315,6 @@ Boundary rules:
 
 - final HNCS schema
 - final transaction type identifiers
-- final nonce rules
 - final fee model
 - final validity window fields
 - final access list enforcement

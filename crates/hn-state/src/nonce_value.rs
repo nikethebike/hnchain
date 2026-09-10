@@ -9,10 +9,11 @@ pub const NONCE_VERSION_1: u16 = 1;
 
 /// The `accounts` domain nonce leaf value (account-state.md §4.4,
 /// ADR-0007 SectionId `0x03`): a canonical storage encoding for
-/// `hn_core::AccountNonce`. This decides the stored width and initial
-/// value only; replay protection domain, increment timing, and behavior
-/// for failed execution remain open, owned by ADR-0006 (Transaction
-/// Format).
+/// `hn_core::AccountNonce`. This type decides the stored width and
+/// initial value only; the transaction-validation semantics that
+/// produce the stored count (replay protection domain, increment
+/// timing, ordering, behavior for failed execution) are decided in
+/// ADR-0006 (Transaction Format, "Nonce"), not here.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NonceValueV1 {
     /// The account's current nonce.
