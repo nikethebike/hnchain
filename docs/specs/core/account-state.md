@@ -224,7 +224,9 @@ before activation.
 
 ### 4.7 Asset State
 
-Asset state describes assets supported by the account.
+Asset state describes assets supported by the account: this section holds
+each held asset's balance line item, keyed by the owning account. It does
+not define the assets themselves.
 
 The asset model must distinguish between:
 
@@ -232,6 +234,14 @@ The asset model must distinguish between:
 - protocol-level assets
 - contract-defined assets
 - bridged assets
+
+Native, protocol-level, and bridged asset *definitions* (supply, decimals,
+mint/burn authority) live in ADR-0007's `assets` state domain (`0x0005`),
+keyed by a curated `asset_id`, not in this account section and not behind
+their own address (ADR-0003 deliberately has no `asset` address namespace).
+Contract-defined assets are defined in `contract_storage` under the
+issuing contract's own address instead. This section's balance line items
+reference those definitions; they do not duplicate them.
 
 No asset class may be introduced without explicit supply, ownership, and
 validation rules.

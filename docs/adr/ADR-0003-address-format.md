@@ -155,6 +155,15 @@ process separate from, the existing rules for introducing a new
 Namespaces prevent accidental reuse of the same bytes for different protocol
 domains.
 
+**Decided: no `asset` namespace.** Native/protocol-level and bridged asset
+*definitions* have an ADR-0007 state domain (`assets`, `0x0005`) but no
+entry here: they are protocol-curated via a numeric `asset_id` registry,
+not permissionlessly derived the way `account`/`contract`/`validator`
+addresses are, so they do not need an `AddressPayload` at all. See
+ADR-0007's State Domains, "Decided: `assets` is not an `address_namespace`,"
+for the full reasoning, including why contract-defined assets and
+per-account balances are not this domain either.
+
 ### Network Separation
 
 Every address binds to a `network_id`.

@@ -279,6 +279,24 @@ domains.
 at all: it is protocol-internal bookkeeping, not a target any transaction
 sends to.
 
+**Decided: `assets` is not an `address_namespace`.** `assets` (`0x0005`)
+holds native/protocol-level and bridged asset *definitions* — supply,
+decimals, mint/burn authority, and similar — keyed by a curated `asset_id`
+registry, not by an `AddressPayload`. Unlike `account`/`contract`/
+`validator`, asset definitions are not permissionlessly created by
+deriving a cryptographic identity; they are protocol-curated, the same way
+`domain_id` and `chain_id` are small assigned registries rather than
+derived addresses. ADR-0003's `address_namespace` registry accordingly has
+no `asset` entry, and none is added by this ADR either.
+
+Contract-defined assets are not in this domain at all: they live in
+`contract_storage` under the owning contract's own address, the same as
+any other contract state. Per-account asset *balances* are not here
+either — those are the `accounts` domain's `asset` section
+(`docs/specs/core/account-state.md` §4.7), keyed by the owning account,
+not by `assets`. `assets` holds only the shared definition each balance
+line item refers to, one record per asset, not one per holder.
+
 The `accounts` and `account_extensions` domains define additional per-domain
 leaf structure, specified below.
 
