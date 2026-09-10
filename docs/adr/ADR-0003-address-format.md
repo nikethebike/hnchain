@@ -58,6 +58,29 @@ Conceptual text structure:
 hrp + separator + encoded(AddressPayload)
 ```
 
+**Decided: no `chain_id` in `AddressPayload`.** `AddressPayload` carries
+`network_id` (which environment: mainnet, testnet, a devnet) but not
+`chain_id` (which HNChain chain lineage). These are separate fields with
+separate purposes elsewhere in the protocol — `docs/specs/core/
+transaction-format.md` §4.2 already distinguishes them explicitly
+("`chain_id` identifies the HNChain chain," "`network_id` identifies the
+network environment") — and only `network_id` belongs in an address.
+
+Addresses are chain-lineage-agnostic by design: the same address (same key
+material, namespace, and network) remains valid across a chain split, the
+way an Ethereum address is unchanged across ETH and ETC. Replay protection
+across a lineage split is a transaction-level concern, already covered by
+`chain_id` in `TransactionEnvelope` (ADR-0006 / transaction-format.md §4.2),
+not an address-level one. Adding `chain_id` to `AddressPayload` would make
+every address split whenever the chain does, with no compensating benefit:
+nothing about what an address identifies (a key, a contract, a validator)
+changes at a fork.
+
+`chain_id` itself — binary size, type, and value scheme — is not decided by
+this ADR. `docs/specs/core/genesis.md` already defines a conceptual
+`chain_id` field and is constrained by ADR-0008, not this one, so ADR-0008
+is `chain_id`'s owner; see Deferred Decisions.
+
 The exact canonical binary encoding is defined by ADR-0004.
 
 The exact hash function used by derivation schemes is defined by ADR-0005.
@@ -121,6 +144,37 @@ network unless cross-network behavior is explicitly specified.
 Human-readable prefixes are useful, but they are not sufficient network
 separation for consensus. The network identifier must be inside the canonical
 payload.
+
+**Decided: `network_id` width and value scheme.** `network_id` is `uint16`.
+Values are split into a small registered range and an open, self-assigned
+range for devnets:
+
+```text
+0x0000           reserved, invalid
+0x0001           mainnet
+0x0002           testnet
+0x0003..0x7FFF   reserved for future centrally registered networks
+0x8000..0xFFFF   devnet range: self-assigned per devnet instance, not
+                 centrally registered
+```
+
+`uint8` (mirroring `domain_id`/`address_namespace`/`SectionId`) was
+considered and rejected here specifically: those registries close over a
+small, genuinely fixed set of values, but devnets are expected to run many
+disposable, concurrent instances (feature branches, CI-ephemeral networks),
+and a single shared devnet value would mean two independently spun-up
+devnets cannot be distinguished at the address level at all — a real replay
+risk if their key material ever overlaps. `uint16` gives the devnet range
+65024 self-assigned values without requiring a hash-sized field or a
+central registry entry per devnet.
+
+Registering a new mainnet- or testnet-class network (`0x0003..0x7FFF`)
+requires a protocol change record, the same as any other closed-registry
+addition in this ADR. Picking a `network_id` inside the devnet range does
+not: any value in `0x8000..0xFFFF` is valid for `address_version = 1`
+without registration, and devnet genesis configuration is responsible for
+choosing one that does not collide with other devnets it might interact
+with.
 
 ### Derivation Scheme Separation
 
@@ -448,7 +502,6 @@ existing address version is a major protocol change.
 ## Open Decisions
 
 - final mainnet, testnet, and devnet human-readable prefixes
-- binary size and type of `network_id`
 - address body derivation function
 - whether addresses bind directly to key descriptors or identity commitments
 - contract address derivation inputs
@@ -463,6 +516,12 @@ existing address version is a major protocol change.
   through what governance process. Depends on a future governance ADR that
   does not exist yet; not a blocker for accepting this ADR's genesis-time
   list.
+- `chain_id` format, width, and value scheme: out of scope for this ADR
+  (see Decision, "no `chain_id` in `AddressPayload`"). Owned by ADR-0008
+  (Block Format), the ADR that constrains `docs/specs/core/genesis.md`,
+  where `chain_id` first appears with concrete (if still conceptual)
+  structure. Not a blocker for this ADR, since `AddressPayload` does not
+  carry `chain_id`.
 
 ## References
 
