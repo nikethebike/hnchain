@@ -95,6 +95,15 @@ Every block includes `block_version`.
 Nodes must not infer block format from byte length, block height, network
 message type, client version, or consensus engine implementation.
 
+**Decided: initial versions.** `block_version`, `header_version`, and
+`body_version` are each `u16`, matching this project's Structure
+Version convention. All three start at `1` for the initial profile.
+They are independent fields, not one shared value (ADR-0022's "Nested
+Structure Versions" rule: nesting is decided by the owning field's own
+introduction text, not assumed) — `BlockHeader` and `BlockBody` can
+each evolve their own shape without forcing `BlockEnvelope` or each
+other to bump in lockstep.
+
 ### Header Hash
 
 The block hash is computed from canonical HNCS bytes of `BlockHeader` using a
@@ -102,6 +111,28 @@ block header hash profile.
 
 The block hash must not include non-canonical RPC fields, gossip metadata,
 database identifiers, or local validation annotations.
+
+**Decided: block hash mechanism.**
+
+```text
+block_hash = HASH_PROFILE_0x0001("hnchain.block.header.v1", HNCS(BlockHeader))
+```
+
+Reuses `HASH_PROFILE_0x0001` (ADR-0005) with the domain tag already
+reserved for this purpose — the same pattern every other hash decided
+so far in this project follows (state tree, transaction ID, signing
+payload); no second hash profile. `hnchain.block.id.v1`, ADR-0005's
+other block-scoped reserved tag, is **not** used here and stays
+unassigned: nothing decided so far needs a second block-scoped digest
+(the transaction-format precedent needed two — `tx_id` over the full
+envelope, a separate signing digest over a payload subset — because a
+signature must not cover itself; no analogous split is needed for
+`block_hash` yet, since `justification` is explicitly excluded from the
+header hash by construction, not via a second digest). Leave it
+reserved for whatever future purpose needs it (for example a
+proposer-signing digest, if block proposal signing turns out to need
+one distinct from `block_hash` itself) rather than assigning it a
+meaning now to force a use.
 
 ### Parent Link
 
@@ -140,6 +171,19 @@ The exact semantics are defined by consensus specifications.
 
 The proposer field must use canonical identity data, not display names or RPC
 strings.
+
+**Decided: `proposer` field shape.** `bytes32`, an `address_body`
+(ADR-0003) — same shape as `sender`/`recipient` in `TransactionEnvelope`
+(ADR-0006, "Sender"), for the same reason: everything needed to
+interpret it (which namespace, which network) is available from
+context (`network_id` here in `BlockHeader`) or is a currently-fixed
+value, so a full `AddressPayload` would be redundant. Usually a
+`validator` namespace address (ADR-0003, `validator_address_body`), but
+the field itself does not encode which namespace produced it —
+`address_body` is namespace-opaque by construction (ADR-0003), so a
+genesis or other system-authority-proposed block can use a `protocol`
+namespace address (`protocol_address_body`) in the same field without
+a format change.
 
 ### Timestamp
 
@@ -379,10 +423,6 @@ New body sections may be backward-compatible only if:
 
 - final header field registry
 - final body section registry
-- initial block version
-- initial header version
-- initial body version
-- block hash profile
 - transactions root format
 - receipts root format
 - events root format
@@ -392,7 +432,6 @@ New body sections may be backward-compatible only if:
 - block size limits
 - transaction count limits
 - timestamp validation window
-- proposer identity encoding
 - epoch transition rules
 - protocol parameter commitment format
 - genesis block compatibility rules

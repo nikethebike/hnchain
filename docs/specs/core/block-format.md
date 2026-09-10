@@ -64,8 +64,8 @@ BlockEnvelopeV1
 
 `block_version`
 
-- Version of the block envelope.
-- Initial value: open.
+- Version of the block envelope. `u16`, Structure Version convention.
+- Initial value: `1` (ADR-0008, "Versioned Block Envelope").
 
 `header`
 
@@ -114,7 +114,10 @@ accepted.
 
 ### 5.1 Header Version
 
-`header_version` identifies the header schema.
+`header_version` identifies the header schema. `u16`, Structure Version
+convention, initial value `1` (ADR-0008, "Versioned Block Envelope") —
+independent of `block_version`/`body_version`, not nested under them
+(ADR-0022's "Nested Structure Versions" rule).
 
 Unknown header versions are rejected unless upgrade rules define acceptance.
 
@@ -152,12 +155,28 @@ the consensus profile.
 
 `parent_block_hash` identifies the canonical parent header.
 
+**Decided: block hash mechanism** (ADR-0008, "Header Hash"):
+
+```text
+block_hash = HASH_PROFILE_0x0001("hnchain.block.header.v1", HNCS(BlockHeader))
+```
+
+Reuses `HASH_PROFILE_0x0001` (ADR-0005) with its own reserved domain
+tag, matching every other hash decided so far — no second hash
+profile. ADR-0005's other block-scoped tag, `hnchain.block.id.v1`,
+stays unassigned: nothing decided yet needs a second block-scoped
+digest.
+
 Genesis parent semantics are open.
 
 ### 5.7 Proposer
 
 `proposer` is the canonical identity of the validator or authority that proposed
-the block.
+the block. `bytes32`, an `address_body` (ADR-0003) — same shape as
+`TransactionEnvelope.sender` and for the same reason (ADR-0008,
+"Proposer"). Usually a `validator` namespace address, but the field is
+namespace-opaque, so a genesis or system-authority proposer can use a
+`protocol` namespace address in the same field.
 
 Display names are not consensus values.
 
@@ -260,6 +279,10 @@ BlockBodyV1
   evidence
   extra_data
 ```
+
+`body_version` is `u16`, Structure Version convention, initial value `1`
+(ADR-0008, "Versioned Block Envelope") — independent of
+`block_version`/`header_version`.
 
 The body contains data required to verify header commitments and execute the
 block.
@@ -455,14 +478,11 @@ Test vectors are mandatory before production implementation.
 - final header schema
 - final body schema
 - genesis mapping
-- initial block version
-- initial header version
-- initial body version
-- block hash profile
 - transaction root construction
-- receipt schema
+- receipt schema (`ReceiptV1` core shape decided, ADR-0006 "Receipts" —
+  `fee_charged`/`resource_usage`/`emitted_event_references` still open)
 - receipt root construction
-- event schema
+- event schema (not decided — gated on HNVM)
 - event root construction
 - evidence schema
 - consensus metadata schema
