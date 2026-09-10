@@ -12,6 +12,8 @@ description = "HNChain cryptographic identity and primitive wrappers."
 hn-core = { path = "../hn-core" }
 hn-hncs = { path = "../hn-hncs" }
 sha2 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [lints]
 workspace = true
