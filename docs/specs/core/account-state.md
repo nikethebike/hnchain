@@ -18,7 +18,8 @@ cryptographic algorithms, transaction format, fee model, VM execution, or
 consensus rules. Those must be defined in separate specifications.
 
 This specification is constrained by
-`docs/adr/ADR-0000-protocol-invariants.md`.
+`docs/adr/ADR-0000-protocol-invariants.md` and
+`docs/adr/ADR-0007-state-tree.md`.
 
 ## 2. Design Goals
 
@@ -406,9 +407,14 @@ The following decisions are required before implementation:
 - native token unit and numeric width
 - nonce model
 - canonical serialization format
-- state trie or alternative authenticated data structure
 - storage backend abstraction
 - metadata size limits
 - extension registry and activation process
 - account lifecycle rules
 - transaction access-list model
+
+"State trie or alternative authenticated data structure" is resolved by
+`docs/adr/ADR-0007-state-tree.md` (profile `hn-smt-256-v1`) and removed from
+this list. ADR-0007 also defines where each section in the `AccountState`
+structure above (§3) lives in the tree: see its SectionId registry and
+Account Extensions Domain sections.
