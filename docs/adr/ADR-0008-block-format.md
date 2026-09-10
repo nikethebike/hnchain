@@ -15,6 +15,7 @@ Depends On:
 - ADR-0005: Hash Algorithms
 - ADR-0006: Transaction Format
 - ADR-0007: State Tree
+- ADR-0022: Protocol Versioning
 
 Supersedes: None
 
@@ -57,6 +58,7 @@ BlockHeader
   height
   round
   epoch
+  protocol_epoch
   parent_block_hash
   proposer
   timestamp
@@ -160,10 +162,53 @@ the same replay-protection-across-a-lineage-split reason it appears in
 `round` identifies consensus retry or voting round semantics when the selected
 consensus protocol uses rounds.
 
-`epoch` identifies validator set and protocol-parameter periods when the
-selected consensus protocol uses epochs.
+`epoch` identifies validator set periods when the selected consensus
+protocol uses them (for example, validator set rotation). This is a
+**consensus-protocol concept**, owned by the future consensus
+specification — distinct from `protocol_epoch` below, which this ADR
+owns and which exists regardless of which consensus protocol HNChain
+selects.
 
-The exact semantics are defined by consensus specifications.
+The exact semantics of `epoch` are defined by consensus specifications.
+
+### Protocol Epoch
+
+**Decided, closing a real gap**: `BlockHeader` gets a dedicated
+`protocol_epoch` field, `u64`, separate from `epoch` above.
+
+ADR-0022 (Protocol Versioning, Accepted) mandates this exact field:
+"recorded at the block level; the exact field, width, and encoding are
+owned by ADR-0008" — and explicitly warns it "should be present in the
+block header from genesis... rather than retrofitted," since adding it
+later is a breaking header change. ADR-0008's `BlockHeader` never
+actually added it: the pre-existing `epoch` field's old description
+("validator set *and protocol-parameter* periods") read close enough
+to ADR-0022's `protocol_epoch` to obscure that they are different
+concepts with different owners and different purposes — `epoch` is a
+consensus-protocol detail that may not even apply to every consensus
+protocol HNChain could select; `protocol_epoch` is mandatory,
+consensus-protocol-independent, and exists specifically so a node can
+tell "which set of ADR-defined structure-version profiles is active at
+this height" without reference to any particular consensus mechanism.
+Reinterpreting the existing `epoch` field to mean `protocol_epoch`
+instead of adding a new one was considered and rejected: ADR-0022
+explicitly needs `protocol_epoch` to exist independently of whatever a
+consensus protocol's own epoch concept turns out to be (a chain running
+a round-based, epoch-free consensus protocol would still need
+`protocol_epoch`, but would have no use for the consensus `epoch`
+field at all) — collapsing them into one field would silently
+reintroduce the coupling ADR-0022 was written to prevent.
+
+`protocol_epoch` is `u64`, matching `height`'s width convention
+(monotonically increasing, network-scoped, per ADR-0022). It is not
+nested under any other structure version (ADR-0022, "Nested Structure
+Versions": nesting must be stated by the owning document, and this is
+the owning document stating the opposite — `protocol_epoch` is
+independent by construction, since its entire purpose is to name a set
+of otherwise-independent structure versions, not to be one itself).
+Governance and activation rules for advancing it are explicitly owned
+by a future governance ADR (ADR-0022, Deferred Decisions), not decided
+here — this ADR only fixes the field's existence, position, and width.
 
 ### Proposer
 

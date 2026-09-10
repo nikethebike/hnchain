@@ -13,6 +13,7 @@ Depends On:
 - `docs/adr/ADR-0006-transaction-format.md`
 - `docs/adr/ADR-0007-state-tree.md`
 - `docs/adr/ADR-0008-block-format.md`
+- `docs/adr/ADR-0022-protocol-versioning.md`
 
 ## 1. Purpose
 
@@ -92,6 +93,7 @@ BlockHeaderV1
   height
   round
   epoch
+  protocol_epoch
   parent_block_hash
   proposer
   timestamp
@@ -146,10 +148,23 @@ block format finalization process.
 For consensus protocols without rounds, the field may be fixed by the consensus
 profile.
 
-### 5.5 Epoch
+### 5.5 Epoch And Protocol Epoch
 
-`epoch` identifies validator set and protocol-parameter periods if supported by
-the consensus profile.
+`epoch` identifies validator set periods if supported by the consensus
+profile — a consensus-protocol concept, owned by the future consensus
+specification.
+
+**Decided** (ADR-0008, "Protocol Epoch"): `protocol_epoch` is a
+separate `u64` field, not the same as `epoch` above and not owned by
+the consensus protocol. It fulfills ADR-0022 (Protocol Versioning,
+Accepted)'s mandate for a dedicated, consensus-protocol-independent
+field naming which set of ADR-defined structure-version profiles is
+active at this height, used only for hard-fork/activation signaling —
+a real gap fixed this pass, since `BlockHeaderV1` never previously
+carried it (the old, single `epoch` field's "protocol-parameter
+periods" wording obscured that these are two different concepts with
+two different owners). Governance/activation rules for advancing it
+remain owned by a future governance ADR.
 
 ### 5.6 Parent Block Hash
 

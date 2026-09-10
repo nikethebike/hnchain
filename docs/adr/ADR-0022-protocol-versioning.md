@@ -15,6 +15,7 @@ Supersedes: None
 Referenced By:
 
 - ADR-0003: Address Format
+- ADR-0008: Block Format
 
 ## Context
 
@@ -288,7 +289,9 @@ fork-choice or activation decisions is a major protocol change.
 
 ## Deferred Decisions
 
-- exact `protocol_epoch` field width and encoding (owned by ADR-0008)
+- ~~exact `protocol_epoch` field width and encoding (owned by ADR-0008)~~
+  — decided: `u64`, its own `BlockHeader` field distinct from the
+  consensus-protocol `epoch` field (ADR-0008, "Protocol Epoch")
 - governance and activation process for advancing `protocol_epoch` (owned by
   a future governance ADR)
 - whether devnet and testnet carry `protocol_epoch` from their first genesis
