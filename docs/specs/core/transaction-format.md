@@ -66,7 +66,9 @@ The canonical binary encoding is HNCS.
 
 ### 4.1 Transaction Version
 
-`tx_version` identifies the transaction envelope format.
+`tx_version` identifies the transaction envelope format. `u16`, a
+Structure Version matching the convention used everywhere else in this
+project. Decided in ADR-0006, "Versioned Envelope".
 
 Unknown transaction versions are rejected unless protocol upgrade rules define
 acceptance or migration behavior.
@@ -88,27 +90,31 @@ Both fields are included in signing payloads and replay protection.
 
 ### 4.3 Transaction Type
 
-`tx_type` identifies payload semantics.
-
-Initial conceptual registry:
+`tx_type` identifies payload semantics. `u8`, closed registry (ADR-0006,
+"Transaction Type"):
 
 ```text
-transfer
-contract_deploy
-contract_call
-stake
-unstake
-validator_update
-governance
-permission_update
-system
+0x00  reserved, invalid
+0x01  transfer
+0x02  contract_deploy
+0x03  contract_call
+0x04  stake
+0x05  unstake
+0x06  validator_update
+0x07  governance
+0x08  permission_update
+0x09  system
 ```
 
-Every active transaction type requires a dedicated schema and validation rules.
+Every active transaction type requires a dedicated schema and validation
+rules — this registry assigns identifiers only, it does not activate any
+type's payload behavior.
 
 ### 4.4 Sender
 
-`sender` is a canonical address payload.
+`sender` is a canonical address payload. `bytes32` — the sender's own
+`address_body` (ADR-0003), not a full `AddressPayload`. Decided in
+ADR-0006, "Sender".
 
 Display address strings are not used in consensus transaction encoding.
 
@@ -314,7 +320,6 @@ Boundary rules:
 ## 12. Open Architecture Decisions
 
 - final HNCS schema
-- final transaction type identifiers
 - final fee model
 - final validity window fields
 - final access list enforcement

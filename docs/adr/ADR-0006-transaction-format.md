@@ -68,6 +68,11 @@ Every transaction includes `tx_version`.
 Nodes must not infer transaction format from byte length, payload shape, RPC
 method, wallet version, or signature algorithm.
 
+**Decided: `tx_version` type.** `u16`, a Structure Version in ADR-0022's
+sense, matching the width convention already used for every other
+structure version field in this project (`envelope_version`,
+`nonce_version`, and similar).
+
 ### Chain And Network Binding
 
 Every transaction binds to `chain_id` and `network_id`.
@@ -134,12 +139,51 @@ Initial conceptual types:
 Unknown transaction types are rejected unless activated by protocol upgrade
 rules.
 
+**Decided: `tx_type` registry.** `u8`, closed for `tx_version = 1`
+(matching the "rejected unless activated by protocol upgrade" rule above;
+not a self-assigned range — there is no legitimate scenario for two
+independently-created `tx_type` values to coexist, the same reasoning
+already used for `chain_id`).
+
+```text
+0x00  reserved, invalid
+0x01  transfer
+0x02  contract_deploy
+0x03  contract_call
+0x04  stake
+0x05  unstake
+0x06  validator_update
+0x07  governance
+0x08  permission_update
+0x09  system
+```
+
+This registry assigns identifiers only; it does not decide any payload's
+schema, validation rules, or activation status (Payload, below, remains
+open per-type). `permission_update` and the `governance`/`stake`/
+`unstake`/`validator_update`/`system` types in particular reference
+account/protocol capabilities (Permission section, protocol module
+domains) that are not yet activated — their `tx_type` value is reserved
+here, not their behavior.
+
 ### Sender
 
 The sender is a canonical address payload, not a display string.
 
 The sender account must authorize the transaction through signatures or another
 approved authorization proof.
+
+**Decided: `sender` field shape.** `bytes32`, the sender's own
+`address_body` (ADR-0003) — not a full `AddressPayload`. This matches
+`EnvelopeValueV1.address`'s precedent (account-state.md §4.1) and avoids
+redundancy: `AddressPayload.network_id` would duplicate the envelope's
+own already-bound `network_id` field, and `address_namespace` would
+always be `account` (`0x01`) since only accounts submit transactions —
+contracts and validators are invoked by transactions, they do not send
+them. Everything needed to re-derive and verify `sender` against a
+signature is already present elsewhere in the envelope
+(`network_id` here, `algorithm_id` in the matching `SignatureEnvelope`,
+ADR-0002) or is currently a single fixed value (`address_version = 1`).
 
 ### Nonce
 
@@ -262,8 +306,16 @@ Every signature must bind to:
 - signing purpose
 - canonical signing payload
 
+`signatures` is a list of `SignatureEnvelope` (ADR-0002, Accepted:
+`envelope_version`, `algorithm_id`, `key_reference`, `signature`,
+`verification_context`) — that container shape is already decided by
+ADR-0002 and is not redecided here; this ADR decides what goes into
+`verification_context` (Signing Payload, below), not the envelope that
+carries it.
+
 Multi-signature and threshold authorization require explicit account permission
-rules before activation.
+rules before activation — deferred along with account-state.md §4.5
+Permission State, which is itself not yet activated.
 
 ### Transaction ID
 
@@ -373,12 +425,12 @@ change.
 
 ## Open Decisions
 
-- final transaction envelope fields (`chain_id`/`network_id` now decided
-  above; remaining fields still open)
+- final transaction envelope fields (`chain_id`/`network_id`/`tx_version`/
+  `tx_type`/`sender` now decided above; `fee_limit`/`validity_window`/
+  `access_list`/`payload` still open)
 - final fee model
 - final validity window semantics
 - access list enforcement model
-- initial transaction type registry
 - receipt model
 - event model
 - transaction ID hash profile
