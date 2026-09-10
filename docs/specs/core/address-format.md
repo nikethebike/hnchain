@@ -1,6 +1,6 @@
 # HNChain Core Specification: Address Format
 
-Status: Draft
+Status: Accepted
 
 Version: 0.1.0
 
