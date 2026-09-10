@@ -281,8 +281,8 @@ Transaction validation proceeds from cheap checks to expensive checks:
 
 ```text
 bytes
-  -> HNCS decode
   -> size limits
+  -> HNCS decode
   -> version check
   -> chain and network check
   -> transaction type check
@@ -292,6 +292,10 @@ bytes
   -> access list precheck
   -> state transition execution
 ```
+
+`size limits` runs first, on raw encoded bytes, before HNCS decode —
+`MAX_TRANSACTION_SIZE` (ADR-0006, "Transaction Size Limit") must reject
+an oversized blob before spending CPU decoding it, not after.
 
 Consensus validity is defined by block validation and state transition rules.
 
@@ -335,8 +339,10 @@ Boundary rules:
 - Signatures must bind to verification context.
 - Transaction IDs must use domain-separated hash profiles.
 - Unknown versions and transaction types must be rejected before activation.
-- Transaction sizes must be bounded.
-- Payload sizes must be bounded.
+- Transaction sizes must be bounded: `MAX_TRANSACTION_SIZE = 262144` bytes
+  (256 KiB), decided in ADR-0006, "Transaction Size Limit" — checked on
+  raw encoded bytes before HNCS decode.
+- Payload sizes must be bounded (per-type; still open, §5).
 - Access lists must not cause nondeterministic execution.
 - Fee prechecks must limit resource exhaustion.
 - Failed execution behavior must be deterministic.
@@ -346,7 +352,6 @@ Boundary rules:
 - final HNCS schema
 - final fee model
 - final access list enforcement
-- final transaction size limits
 - final receipt schema
 - final event schema
 - final signing payload field list (hash mechanism decided; see §7)

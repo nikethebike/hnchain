@@ -225,8 +225,8 @@ Conceptual validation flow:
 
 ```text
 block_bytes
-  -> HNCS decode
   -> size limits
+  -> HNCS decode
   -> version checks
   -> chain and network checks
   -> parent lookup

@@ -405,6 +405,21 @@ change the ID, and the malleability risk framing would not apply to
 is likewise not finalized until `fee_limit`/`access_list` are, same
 caveat as above.
 
+### Transaction Size Limit
+
+**Decided: `MAX_TRANSACTION_SIZE = 262144` bytes (256 KiB)**, checked on
+raw encoded bytes as the first validation stage, before HNCS decode.
+
+An implementation-level resource/DoS bound, not a derived consensus
+value — the same class of decision as `hn-crypto`'s
+`PUBLIC_KEY_MAX_LEN` and `hn-state`'s `MAX_ASSET_HOLDINGS`: picked for
+generous headroom over any currently-imaginable payload (the largest
+candidate, `contract_deploy` bytecode, comfortably fits well under this
+bound for realistic contracts) rather than derived bottom-up, since
+`payload`'s own per-type size limits are not decided yet (§5, still
+open). Raise this bound later if a real payload type needs more; never
+lower it silently once transactions exist on any live network.
+
 ### Validation Before Execution
 
 Nodes must perform cheap validation before expensive execution.
@@ -413,8 +428,8 @@ Initial validation stages:
 
 ```text
 bytes
-  -> HNCS decode
   -> size limits
+  -> HNCS decode
   -> version check
   -> chain and network check
   -> transaction type check
@@ -516,7 +531,6 @@ change.
   list still blocked on fee_limit/access_list)
 - multi-signature activation model
 - threshold authorization model
-- transaction size limits
 - mempool admission policy
 
 ## Related Specifications

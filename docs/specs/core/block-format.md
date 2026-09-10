@@ -355,12 +355,12 @@ Conceptual validation:
 
 ```text
 canonical_block_bytes
+  -> size limits
   -> HNCS decode
   -> envelope version check
   -> header version check
   -> body version check
   -> chain and network check
-  -> size limits
   -> parent header lookup
   -> header hash computation
   -> transaction root verification
