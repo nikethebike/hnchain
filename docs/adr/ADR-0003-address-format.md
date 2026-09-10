@@ -161,6 +161,40 @@ The checksum protects address entry and transport. It is not a cryptographic
 integrity mechanism and must not replace canonical hashing or signature
 verification.
 
+**Decided: HRP scope.** The human-readable prefix (HRP) encodes `network_id`
+only. It must not encode `address_namespace` or any other payload field.
+
+This follows the same principle Network Separation above already applies to
+`network_id` itself: "Human-readable prefixes are useful, but they are not
+sufficient... for consensus. The network identifier must be inside the
+canonical payload." Payload is normative; HRP is not. Encoding namespace in
+the HRP as well (for example, a distinct prefix per namespace, as some
+Cosmos-family chains do) would create a second, non-consensus signal for a
+fact the payload already states, with no mechanism forcing the two to agree
+— exactly the class of risk already rejected for network separation, just
+applied to a different field. A decoded `address_namespace` that disagrees
+with what a namespace-specific HRP implied would be an unresolvable
+conflict with no principled way to prefer one signal over the other.
+
+Wallets and explorers display `address_namespace` from the decoded payload,
+not from the prefix. `address_namespace` does not need its own HRP to be
+human-visible.
+
+**Decided: HRP-network_id consistency.** Wallets, CLI tools, and explorers
+must decode `network_id` from the payload and verify it matches the network
+the presented HRP claims, before displaying or accepting the address for a
+transaction targeting that network. A mismatch must be rejected or
+prominently surfaced as a warning, not silently accepted.
+
+Nothing prevents constructing a syntactically valid address whose HRP and
+encoded `network_id` disagree, since the HRP is not part of consensus and
+carries no cryptographic binding to the payload on its own — only the
+Bech32m checksum ties the HRP to the byte string as typed, which protects
+against transcription errors, not against a deliberately mismatched pair
+assembled by an attacker. Checking this consistency is therefore an
+application-level responsibility, not something the encoding format
+enforces by construction. See Security Considerations, "HRP spoofing."
+
 ## Initial Address Namespaces
 
 ### Account Address
@@ -341,6 +375,20 @@ Cross-network replay:
 
 - Risk: an address from one network is accepted on another network.
 - Mitigation: include `network_id` in canonical payload and signing context.
+
+HRP spoofing:
+
+- Risk: an address is presented with a mainnet-looking HRP while its decoded
+  `network_id` actually names a different network (or the reverse), because
+  the HRP is not part of consensus and carries no binding to the payload's
+  content beyond the Bech32m checksum protecting against transcription
+  errors, not against a deliberately assembled mismatched pair.
+- Mitigation: wallets, CLI tools, and explorers must decode `network_id` and
+  verify it matches the presented HRP before displaying or accepting the
+  address, rejecting or prominently warning on mismatch (Human-Readable
+  Encoding above). This is the same class of risk as Address truncation
+  below: a human-facing display convention lying about what the canonical
+  payload actually contains.
 
 Namespace confusion:
 
