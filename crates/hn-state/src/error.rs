@@ -61,6 +61,19 @@ pub enum StateError {
         /// The rejected version.
         value: u16,
     },
+    /// A decoded `LifecycleValueV1.lifecycle_version` does not match
+    /// [`crate::lifecycle_value::LIFECYCLE_VERSION_1`], the only shape
+    /// this implementation understands.
+    UnsupportedLifecycleVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `LifecycleValueV1.state` byte is not a member of the
+    /// closed `state` registry (account-state.md §4.9).
+    InvalidLifecycleState {
+        /// The rejected byte.
+        value: u8,
+    },
 }
 
 impl From<HashError> for StateError {
@@ -98,6 +111,12 @@ impl core::fmt::Display for StateError {
             }
             Self::UnsupportedAssetVersion { value } => {
                 write!(formatter, "unsupported asset_version: {value}")
+            }
+            Self::UnsupportedLifecycleVersion { value } => {
+                write!(formatter, "unsupported lifecycle_version: {value}")
+            }
+            Self::InvalidLifecycleState { value } => {
+                write!(formatter, "invalid lifecycle state: 0x{value:02x}")
             }
         }
     }

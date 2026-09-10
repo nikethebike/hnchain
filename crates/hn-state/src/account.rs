@@ -46,7 +46,8 @@ pub enum AccountSection {
     /// variable-cardinality collection, unlike [`Self::Balance`]
     /// (account-state.md §4.7).
     Asset = 0x06,
-    /// Account lifecycle state (account-state.md §4.9).
+    /// Account lifecycle state: current state only, not transition
+    /// rules (account-state.md §4.9).
     Lifecycle = 0x07,
 }
 

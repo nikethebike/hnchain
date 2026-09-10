@@ -428,6 +428,40 @@ Lifecycle transitions must define:
 `Destroyed` must not mean silent deletion unless state tree and historical proof
 rules explicitly allow it.
 
+**Decided: lifecycle storage representation only.** This decides how the
+current lifecycle state is represented as a stored leaf value — a closed
+registry over the 6 states already named above — not the transition list
+directly above (required authorization, allowed source/target states,
+balance/asset/metadata/extension/storage-record handling, state root
+impact, proof/archival behavior), which remains open, owned by a future
+account state transition specification (`## 5` below is conceptual only,
+not yet a decided rule set).
+
+```text
+LifecycleValueV1
+  u16 lifecycle_version = 1
+  u8  state
+```
+
+`state` registry, closed for this profile:
+
+```text
+0x00  Created
+0x01  Active
+0x02  Frozen
+0x03  Deprecated
+0x04  Archived
+0x05  Destroyed
+```
+
+Fields:
+
+- `lifecycle_version`: `u16`, a Structure Version, matching this account
+  section's sibling schemas' width convention.
+- `state`: `u8`. Unlike `account_type` (§3.1), no value is reserved as
+  invalid: every one of the 6 named lifecycle states above is a real,
+  reachable state, so the registry has no unused sentinel.
+
 ## 5. Deterministic State Transitions
 
 All account changes occur through deterministic transition functions:
