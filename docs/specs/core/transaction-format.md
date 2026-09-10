@@ -183,12 +183,10 @@ specification.
 
 `access_list` describes expected state access.
 
-Conceptual structure:
-
 ```text
-AccessList
-  reads
-  writes
+AccessListV1
+  set<bytes32> reads
+  set<bytes32> writes
 ```
 
 Access entries may reference:
@@ -211,7 +209,22 @@ would commit that undesigned execution model to a Solana-like
 upfront-declaration discipline. A future HNVM-specific ADR may still add
 stricter enforcement for specific `tx_type`s that support it.
 
-The concrete `reads`/`writes` entry shape is still open.
+**Decided: entry structure** (ADR-0006, "Access List"). Each entry is a
+`state_key` (ADR-0007) — the same 32-byte value the state tree already
+uses as its one uniform leaf address for every domain, including all
+five reference categories listed above (`accounts`, `contract_storage`,
+`assets`, `validators`, and every protocol module, ADR-0007 "State
+Domains"). This is not an independent design choice: it falls directly
+out of ADR-0007 already being Accepted and already unifying all of
+these under one tree, so access list entries need no domain-specific
+structure or a second registry — an execution engine comparing two
+transactions' access sets is a flat 32-byte comparison regardless of
+domain. `reads` and `writes` are independent bounded canonical HNCS
+sets, each capped at `MAX_ACCESS_LIST_ENTRIES = 256` (an implementation
+DoS bound, not derived — meaningful only because of the hint-only model
+above, since a declared entry can never make a valid transaction
+invalid). A key may appear in both sets; a read-modify-write is not a
+conflict with itself.
 
 ## 5. Payloads
 
@@ -279,9 +292,8 @@ signing_digest = HASH_PROFILE_0x0001(
   "hnchain.transaction.signing.v1", HNCS(TransactionSigningPayload))
 ```
 
-The full field list above is not final until `access_list`'s concrete
-structure is decided (§4.8) — `validity_window` and `fee_limit`'s type
-are now decided (§4.7, §4.6).
+Every field's shape except `payload` is now decided (§4.1-§4.8);
+`payload`'s per-`tx_type` schema (§5) is the one remaining open piece.
 
 ## 8. Transaction ID
 
@@ -378,8 +390,8 @@ Boundary rules:
 - final fee model (mechanism decided; see §4.6 — amount, refunds,
   distribution, burn policy, and priority market remain economic
   decisions)
-- final access list structure (enforcement model decided; see §4.8)
+- final `payload` schemas per `tx_type` (§5) — the one remaining
+  envelope/signing-payload field; every other field is now decided
 - final receipt schema
 - final event schema
-- final signing payload field list (hash mechanism decided; see §7)
 - final mempool policy boundaries

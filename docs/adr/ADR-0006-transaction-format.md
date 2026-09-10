@@ -365,6 +365,40 @@ still add stricter, enforced access declarations for specific `tx_type`s
 whose execution model supports it; this decision does not foreclose that,
 it just does not assume it now.
 
+**Decided: access list entry structure.**
+
+```text
+AccessListV1
+  set<bytes32> reads
+  set<bytes32> writes
+```
+
+Each entry is a `state_key` (ADR-0007) — the same 32-byte value the
+state tree itself already uses as its one uniform leaf address, not a
+bespoke "logical reference" type. This falls directly out of ADR-0007
+already being Accepted, not an independent design choice: `accounts`,
+`contract_storage`, `assets`, `validators`, and every governance/system/
+bridge-mapped protocol module (the exact five reference categories
+transaction-format.md §4.8 lists) are already leaves of the *same*
+single global tree (ADR-0007, "State Domains"), each addressed by
+`domain_id`/`section_id`-or-`extension_id`/`object_id`/`subkey` through
+`state_key_core`/`state_key_extension` — both already produce this exact
+32-byte `Digest`. Reusing it means an access list entry needs no
+domain-specific structure or a second registry to cover "which kind of
+thing is this" — the state tree already answers that, and an execution
+engine comparing two transactions' access sets for conflicts is a flat
+32-byte comparison regardless of what domain either entry came from.
+
+`reads` and `writes` are independent bounded canonical sets (HNCS `set`,
+ADR-0004 — sorted by encoded bytes, duplicates rejected), each capped at
+`MAX_ACCESS_LIST_ENTRIES = 256`. A key may legitimately appear in both
+(a read-modify-write is not a conflict with itself). The cap is an
+implementation DoS bound, same class as `MAX_TRANSACTION_SIZE` and
+`MAX_ASSET_HOLDINGS` — picked for headroom, not derived, and only
+meaningful given the hint-only model decided above: since a declared
+entry can never make a valid transaction invalid, the cap only needs to
+bound processing cost, not correctness.
+
 ### Payload
 
 The payload is typed by `tx_type`.
@@ -437,10 +471,10 @@ domain tag itself, not a separate field. "chain ID" and "network ID" are
 the already-decided `chain_id`/`network_id` fields (above), not
 duplicated identifiers.
 
-`TransactionSigningPayload`'s full field list is not finalized here: it
-mirrors `TransactionEnvelope` minus `signatures`, so it cannot be closed
-before `access_list`'s concrete structure is (Access List — still open;
-`validity_window` and `fee_limit`'s type are now decided above).
+`TransactionSigningPayload` mirrors `TransactionEnvelope` minus
+`signatures`. Every field's shape except `payload` is now decided (above
+and in Access List, Fees, Validity Window); `payload`'s own per-`tx_type`
+schema (§5) is the one remaining open piece of either structure.
 
 ### Transaction ID
 
@@ -465,9 +499,9 @@ makes transaction malleability meaningful to guard against at all (see
 Security Considerations, "Transaction malleability"): if `tx_id` excluded
 `signatures`, a different valid signature over the same intent would not
 change the ID, and the malleability risk framing would not apply to
-`tx_id` in the first place. `TransactionEnvelope`'s own full field list
-is likewise not finalized until `access_list`'s concrete structure is,
-same caveat as above.
+`tx_id` in the first place. `TransactionEnvelope`'s own field list has
+the same one remaining gap as the signing payload above: `payload`'s
+per-`tx_type` schema.
 
 ### Transaction Size Limit
 
@@ -584,23 +618,20 @@ change.
 
 ## Open Decisions
 
-- final transaction envelope fields (`chain_id`/`network_id`/`tx_version`/
-  `tx_type`/`sender`/`validity_window`/`fee_limit`'s type now decided
-  above; `access_list`'s enforcement model is decided but its concrete
-  structure is not, `payload` still open)
+- final transaction envelope fields (every field except `payload` is now
+  decided above: `chain_id`/`network_id`/`tx_version`/`tx_type`/`sender`/
+  `validity_window`/`fee_limit`'s type/`access_list`; `payload` remains
+  open, typed per `tx_type` — a separate, large per-type track, §5)
 - final fee model (mechanism decided above — type, payer, cap-not-exact,
   failed-execution obligation; amount, refund arithmetic, validator
   distribution, burn policy, storage costs, and priority-fee market
   behavior remain economic decisions owned by a future tokenomics and
   HNVM metering specification)
-- access list structure (enforcement model is decided above — hint-only;
-  the concrete `reads`/`writes` entry shape referencing accounts,
-  contract storage keys, asset identifiers, validator state, and
-  protocol module state is not)
 - receipt model
 - event model
-- signing payload schema (hash mechanism now decided above; full field
-  list still blocked on access list structure)
+- signing payload schema (hash mechanism and full field list now decided
+  above; only `payload`'s own per-`tx_type` shape remains open, same
+  caveat as the envelope)
 - multi-signature activation model
 - threshold authorization model
 - mempool admission policy
