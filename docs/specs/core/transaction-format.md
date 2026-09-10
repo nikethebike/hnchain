@@ -187,7 +187,19 @@ Access entries may reference:
 - validator state
 - protocol module state
 
-The access list enforcement model is open.
+**Decided: hint-only, not consensus-enforced** (ADR-0006, "Access List").
+A mismatch between declared and actual state access is never a validity
+error; execution engines may use `access_list` for scheduling, conflict
+detection, and fee estimation, but must always verify actual access
+independently. Follows Ethereum's EIP-2930 model rather than Solana's
+protocol-enforced one, since HNChain's `contract_call` implies dynamic,
+EVM-like contract execution through a future HNVM whose access patterns
+cannot always be statically predicted — deciding strict enforcement now
+would commit that undesigned execution model to a Solana-like
+upfront-declaration discipline. A future HNVM-specific ADR may still add
+stricter enforcement for specific `tx_type`s that support it.
+
+The concrete `reads`/`writes` entry shape is still open.
 
 ## 5. Payloads
 
@@ -351,7 +363,7 @@ Boundary rules:
 
 - final HNCS schema
 - final fee model
-- final access list enforcement
+- final access list structure (enforcement model decided; see §4.8)
 - final receipt schema
 - final event schema
 - final signing payload field list (hash mechanism decided; see §7)

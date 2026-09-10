@@ -301,6 +301,33 @@ fallback behavior for undeclared access.
 
 If access lists are hints only, they must not affect consensus validity.
 
+**Decided: hint-only, not consensus-enforced.** A mismatch between a
+transaction's declared `access_list` and its actual state access during
+execution is never a validity error. Execution engines may use
+`access_list` for scheduling, conflict detection, and fee estimation, but
+must always verify actual access independently and fall back to
+sequential or re-execution semantics on an undeclared-access conflict,
+never reject the transaction for the mismatch itself.
+
+This follows Ethereum's EIP-2930 model, not Solana's strict
+protocol-enforced one. The two differ in what they demand of the
+execution environment, not just in strictness: Solana's strict
+enforcement works because its runtime *requires* programs to declare
+every accessed account upfront — a programming model decision baked in
+from day one. HNChain's `tx_type` registry already includes
+`contract_call`, implying dynamic, EVM-like contract execution through a
+future HNVM whose design does not exist yet; a general-purpose contract's
+storage access can depend on runtime branching in ways that are not
+always statically predictable, which is precisely why Ethereum treats its
+own access lists as hints rather than a consensus boundary. Deciding
+strict enforcement now would commit HNVM's future execution model to a
+Solana-like account-declaration discipline before HNVM itself is
+designed — a much larger, earlier architectural commitment than this
+transaction-format decision should make. A future HNVM-specific ADR may
+still add stricter, enforced access declarations for specific `tx_type`s
+whose execution model supports it; this decision does not foreclose that,
+it just does not assume it now.
+
 ### Payload
 
 The payload is typed by `tx_type`.
@@ -521,14 +548,18 @@ change.
 ## Open Decisions
 
 - final transaction envelope fields (`chain_id`/`network_id`/`tx_version`/
-  `tx_type`/`sender`/`validity_window` now decided above; `fee_limit`/
-  `access_list`/`payload` still open)
+  `tx_type`/`sender`/`validity_window` now decided above; `fee_limit`
+  still fully open, `access_list`'s enforcement model is decided but its
+  concrete structure is not, `payload` still open)
 - final fee model
-- access list enforcement model
+- access list structure (enforcement model is decided above — hint-only;
+  the concrete `reads`/`writes` entry shape referencing accounts,
+  contract storage keys, asset identifiers, validator state, and
+  protocol module state is not)
 - receipt model
 - event model
 - signing payload schema (hash mechanism now decided above; full field
-  list still blocked on fee_limit/access_list)
+  list still blocked on fee_limit and access list structure)
 - multi-signature activation model
 - threshold authorization model
 - mempool admission policy
