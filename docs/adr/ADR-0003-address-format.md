@@ -11,6 +11,8 @@ Depends On:
 - ADR-0000: Protocol Invariants
 - ADR-0001: Extended Account-Based State Model
 - ADR-0002: Cryptographic Identity
+- ADR-0005: Hash Algorithms
+- ADR-0022: Protocol Versioning
 
 Supersedes: None
 
@@ -280,6 +282,15 @@ the presented HRP claims, before displaying or accepting the address for a
 transaction targeting that network. A mismatch must be rejected or
 prominently surfaced as a warning, not silently accepted.
 
+"Matches" is exact-value equality for the mainnet and testnet HRPs (their
+HRP claims exactly `network_id = 0x0001` or `0x0002` respectively) and
+range membership for the devnet HRP (its HRP claims `network_id` falls
+inside `0x8000..0xFFFF`, per Network Separation's devnet range — not one
+fixed value, since devnets are deliberately many and self-assigned). A
+devnet-HRP address whose decoded `network_id` falls outside that range is
+exactly as much a mismatch as a mainnet-HRP address decoding to
+`network_id = 0x0002`.
+
 Nothing prevents constructing a syntactically valid address whose HRP and
 encoded `network_id` disagree, since the HRP is not part of consensus and
 carries no cryptographic binding to the payload on its own — only the
@@ -377,7 +388,10 @@ not accepted.
 - canonical binary payload for consensus
 - Bech32m-style text encoding for wallets, CLI, RPC, and explorer
 - lowercase HRP
-- separate HRPs for mainnet, testnet, and local development networks
+- separate HRPs for mainnet, testnet, and local development networks — one
+  devnet HRP covering the whole self-assigned devnet `network_id` range, not
+  one HRP per devnet instance; see HRP-network_id consistency below for
+  exact-match versus range-match semantics
 - network identifier inside the binary payload
 - **Decided:** 32-byte address body, uniform across every namespace
   (account, contract, validator, protocol, bridge, identity) for
@@ -536,8 +550,14 @@ existing address version is a major protocol change.
 ## Related Specifications
 
 - `docs/adr/ADR-0004-canonical-serialization.md`
+- `docs/adr/ADR-0005-hash-algorithms.md`
+- `docs/adr/ADR-0006-transaction-format.md`
+- `docs/adr/ADR-0008-block-format.md`
+- `docs/adr/ADR-0022-protocol-versioning.md`
 - `docs/specs/core/address-format.md`
 - `docs/specs/core/canonical-serialization.md`
+- `docs/specs/core/transaction-format.md`
+- `docs/specs/core/genesis.md`
 
 ## Open Decisions
 
