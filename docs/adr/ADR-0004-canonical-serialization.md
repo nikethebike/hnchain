@@ -82,6 +82,20 @@ HNCS encoding is valid only relative to a declared schema.
 Self-describing field names, runtime reflection, unbounded maps, and implicit
 type inference are not part of consensus encoding.
 
+**Decided: no wire-level type identifiers.** This closes the "numeric
+identifiers for primitive and compound types" open item by resolving it as
+not needed, rather than picking numbers: HNCS is schema-driven, not
+self-describing (this rule, and Field Order below: "No field tags are
+encoded"). A decoder always knows the expected type from the schema it is
+decoding against, the same way it already knows field order and count —
+there is never a point where HNCS bytes must be inspected to determine
+what type follows, so a wire-level type tag would be dead weight, not a
+missing piece. This is distinct from `extension_id` (Extensions below),
+which is a schema-level identifier carried in the bytes because it selects
+between genuinely different extension schemas at decode time — HNCS's
+core primitive and compound types never need that, because the schema for
+any given field position is always already fixed.
+
 ### Versioned Objects
 
 Every top-level protocol object includes an explicit object version.
@@ -100,8 +114,14 @@ order is explicitly generated from the protocol schema.
 Consensus integers use fixed-width unsigned or signed integer types selected by
 schema.
 
-Integer byte order is little-endian unless a future accepted serialization
-profile changes this before implementation.
+**Decided: byte order.** Integer byte order is little-endian. This closes
+the "final byte order before implementation" open item: every accepted
+consensus document and the reference implementation (`hn-hncs`) already use
+little-endian throughout (ADR-0005's `DomainSeparatedHashInputV1`, ADR-0007's
+state key and node preimages, ADR-0003's `AddressPayload` fields), so this
+is ratifying settled practice, not introducing a new choice. Changing byte
+order remains a breaking protocol change (Compatibility below) requiring an
+explicit HNCS profile version bump, not something this decision reopens.
 
 Variable-length integers are rejected for consensus core objects in the initial
 profile because they add extra canonicality and overflow surface.
@@ -217,6 +237,73 @@ Decoders must reject trailing bytes after a complete value.
 Every variable-length field must have an explicit maximum size.
 
 Decoders must enforce limits before allocation where possible.
+
+### Canonical Error Taxonomy
+
+**Decided.** Every HNCS decoder rejects malformed input as one of exactly
+these kinds, ratifying what the reference implementation
+(`crates/hn-hncs/src/error.rs`) already defines and tests:
+
+```text
+invalid_bool               non-canonical boolean byte
+invalid_presence           non-canonical optional presence byte
+unexpected_eof             input ended before a value could be decoded
+length_limit_exceeded      a variable-length value exceeds its schema max
+count_limit_exceeded       a collection count exceeds its schema max
+length_field_overflow      a host length cannot fit the HNCS length field
+invalid_utf8               a decoded string is not valid UTF-8
+unsorted_set                a decoded set is not bytewise-ascending
+duplicate_set_element      a decoded set has a duplicate canonical element
+unsorted_map                a decoded map is not sorted by canonical key
+duplicate_map_key          a decoded map has a duplicate canonical key
+trailing_bytes             bytes remain after a complete value
+```
+
+This is a closed set for HNCS v0.1: a new HNCS-level failure mode is a
+profile change (Compatibility below), not an addition an individual object
+schema can make. Object-specific validation failures (for example, a
+domain not in a registry, or a value outside a business rule) are that
+object's own errors, not HNCS errors, and must not be represented by
+reusing or overloading one of the kinds above.
+
+### Conformance Vector Format
+
+**Decided.** This closes the "test vector file format" open item by
+ratifying the shape already used by every existing HNCS conformance file
+(`tests/conformance/core/hncs-primitives-v0.1.json`,
+`hncs-compound-v0.1.json`) rather than defining a new one:
+
+```text
+{
+  schema, version, status, depends_on,
+  scope: { included, excluded },
+  notes,
+  <one or more type-family groups, e.g. "optional", "lists", "sets", "maps">: {
+    canonical:  [{ name, type, value | semantic_inputs, hex }],
+    inequality: [{ name, type, left_hex, right_hex, expected_equal }],
+    invalid:    [{ name, type, hex, error }]
+  }
+}
+```
+
+Rules:
+
+- `hex` fields are lowercase hex strings of the exact canonical bytes.
+- `error` values are Canonical Error Taxonomy kinds above, exactly as
+  spelled there (`snake_case`), not implementation-specific messages.
+- `canonical.semantic_inputs`, when present, lists multiple differently
+  *ordered* semantic inputs (for sets and maps) that must all encode to the
+  same canonical `hex` — proving order-independence, not just correctness
+  of one encoding.
+- a runner loads the JSON and asserts against it; the JSON is never
+  generated by, or derived from, the runner's own implementation under
+  test (state-tree-v0.1.json's independent-oracle cross-check is the
+  reference practice, though not mandatory for every simpler vector set).
+
+Non-HNCS conformance files (for example, a future consensus object's own
+vectors) may follow a different shape suited to what they test; this
+format is specifically for HNCS-level primitive and compound encoding
+vectors.
 
 ## Initial Type Set
 
@@ -397,14 +484,16 @@ Before any consensus implementation is accepted:
 - Cross-language test vectors must be supported before a second implementation
   is considered compatible.
 
+Resolved and removed from this list: final byte order (little-endian,
+Integer Encoding), numeric identifiers for primitive and compound types
+(resolved as not needed, Schema Required), and test vector file format
+(Conformance Vector Format).
+
 ## Open Decisions
 
-- final byte order before implementation
 - schema definition language
-- numeric identifiers for primitive and compound types
 - exact extension record encoding
 - maximum length defaults
-- test vector file format
 - code generation strategy for Rust or Go
 - whether non-consensus network messages reuse HNCS or use transport-specific
   schemas
