@@ -10,6 +10,7 @@ Depends On:
 
 - ADR-0000: Protocol Invariants
 - ADR-0002: Cryptographic Identity
+- ADR-0003: Address Format
 - ADR-0004: Canonical Serialization
 - ADR-0005: Hash Algorithms
 - ADR-0006: Transaction Format
@@ -108,6 +109,36 @@ Every non-genesis block references exactly one `parent_block_hash`.
 
 The parent hash links the block to a unique canonical parent header under the
 active hash profile.
+
+### Chain ID
+
+**Decided: `chain_id` format.** `chain_id` is `uint8`, a small closed
+registry grown only through explicit governance action, not the
+closed-registry-plus-self-assigned-range model `network_id` uses (ADR-0003,
+"Network Separation").
+
+```text
+0x00  reserved, invalid
+0x01  the HNChain lineage (initial genesis)
+```
+
+The two fields serve different purposes and change at different rates:
+`network_id` identifies the environment (mainnet/testnet/devnet) and needs
+room for many concurrent, disposable, self-assigned devnet instances (see
+ADR-0003's reasoning for `network_id` being `uint16`). `chain_id` identifies
+the HNChain protocol lineage itself and changes only on an irreconcilable
+governance fork — a rare, deliberate, centrally-coordinated event, not
+something anyone spins up unilaterally. There is no legitimate scenario
+where two independently-created `chain_id` values need to coexist without
+a governance decision behind each one, so there is no need for a
+self-assigned range the way devnets needed one for `network_id`. `uint8`
+gives 255 usable values, which is far more headroom than a rare,
+deliberate event will ever need.
+
+`chain_id` is not part of `AddressPayload` (ADR-0003, "no `chain_id` in
+`AddressPayload`"); it appears in `BlockHeader` here and in
+`TransactionEnvelope` (ADR-0006 / transaction-format.md §4.2) for replay
+protection across a lineage split.
 
 ### Height, Round, And Epoch
 
