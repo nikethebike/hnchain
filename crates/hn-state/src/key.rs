@@ -11,6 +11,12 @@ use crate::error::StateResult;
 /// generously (64 bytes covers the 32-byte profile ADR-0003 proposes, plus
 /// headroom for a future post-quantum address body) rather than derived
 /// from a not-yet-accepted specification.
+///
+/// TODO(ADR-0003): once Address Format is Accepted, re-check this bound
+/// against the final canonical address body length for every address
+/// namespace it defines. Raise it here if any namespace's body would not
+/// fit; do not shrink it silently, since that would reject previously
+/// valid `object_id` values.
 pub const OBJECT_ID_MAX_LEN: usize = 64;
 
 /// Maximum length, in bytes, of a state key's `subkey` field. Every leaf
