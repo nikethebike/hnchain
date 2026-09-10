@@ -1,6 +1,6 @@
 # ADR-0022: Protocol Versioning
 
-Status: Proposed
+Status: Accepted
 
 Date: 2026-09-10
 
