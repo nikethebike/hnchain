@@ -115,6 +115,7 @@ Initial conceptual domain tags:
 
 - `hnchain.address.account.v1`
 - `hnchain.address.contract.v1`
+- `hnchain.address.validator.v1`
 - `hnchain.transaction.id.v1`
 - `hnchain.transaction.signing.v1`
 - `hnchain.receipt.v1`
@@ -187,6 +188,7 @@ Initial domain digest lengths:
 ```text
 address account          32 bytes
 address contract         32 bytes
+address validator        32 bytes
 transaction id           32 bytes
 transaction signing      32 bytes
 receipt id               32 bytes

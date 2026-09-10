@@ -418,6 +418,34 @@ Contract address derivation must bind to:
 
 Used for validator identity inside consensus and staking.
 
+**Decided: validator address derivation function.**
+
+```text
+address_body = HASH_PROFILE_0x0001(
+  domain = "hnchain.address.validator.v1",
+  payload = HNCS(ValidatorAddressInputV1)
+)
+
+ValidatorAddressInputV1
+  u16   address_version = 1
+  u16   network_id
+  u8    address_namespace = 0x03
+  u8    derivation_scheme
+  u16   algorithm_id
+  bytes public_key
+```
+
+Identical in shape to Account Address's derivation — `derivation_scheme =
+0x01` (`DirectPublicKey`) in `validator`'s own namespace-scoped registry,
+`public_key` the raw signing key bytes for `algorithm_id`, not a
+`KeyDescriptor` commitment — except `public_key` here is the validator's
+`validator_consensus` key (ADR-0002), not an `account_signing` key, and
+the domain tag and namespace (`0x03`) are validator's own. This is exactly
+why validator address must not be treated as equivalent to account
+address: it is an independent identity derived from a different key, in a
+different namespace, under a different domain tag, not a reinterpretation
+of the same bytes.
+
 Validator address must not be treated as equivalent to account address unless a
 specific binding is present in validator state.
 
@@ -463,6 +491,36 @@ not a generic one.
 bookkeeping, not reached through any `protocol`-namespace address. Nothing
 in the genesis module list is addressed there.
 
+**Decided: protocol address is genesis-assigned, not derived.** Unlike
+`account`/`contract`/`validator`, `protocol` addresses have no
+`address_body` derivation function: there is no key or deployment input to
+derive from, only a small, deliberately reserved module list. Consistent
+with "reserved by genesis or governance-controlled activation rules"
+above — reservation, not computation — each genesis module gets a fixed
+`address_body` assigned directly in the genesis specification, not
+computed by a hash function:
+
+```text
+address_body = 31 zero bytes || module_id (1 byte)
+
+module_id:
+  0x01  treasury
+  0x02  governance
+  0x03  staking
+  0x04  slashing
+  0x05  bridge registry
+```
+
+This is deliberately the simplest possible encoding — no domain tag, no
+`HASH_PROFILE_0x0001` call — because there is nothing to hash: a fixed,
+auditable constant is more transparent for a small curated set than a
+derivation formula would be, and collision with any hash-derived address
+in another namespace is not a concern addresses must guard against here,
+the way ADR-0003 already treats `address_namespace` as sufficient
+separation elsewhere. Reserving more than 5 module IDs (up to 255 before
+needing a wider encoding) is not expected before this needs revisiting
+under the post-genesis extension process (Deferred Decisions).
+
 Whether additional protocol modules can be reserved after genesis without a
 hard fork, and through what governance process, is deferred — see Deferred
 Decisions. It depends on a future governance ADR that does not exist yet,
@@ -489,6 +547,14 @@ Used for HN Identity records if identity becomes a distinct protocol namespace.
 
 Identity address semantics must not be overloaded onto account addresses without
 an explicit binding model.
+
+**Deliberately left open, not derived.** Unlike `validator` (a direct
+key-derivation parallel to `account`, closed above), "HN Identity record"
+is not concretized anywhere else in this repository's documents — the
+namespace reservation itself is conditional ("if identity becomes a
+distinct protocol namespace"). Deriving a formula now would mean inventing
+protocol behavior for a feature that is not yet specified, which this ADR
+does not do. See Open Decisions.
 
 ## Recommended Initial Profile
 
@@ -674,10 +740,12 @@ existing address version is a major protocol change.
 ## Open Decisions
 
 - final mainnet, testnet, and devnet human-readable prefixes
-- address body derivation function for `validator`, `protocol`, and
-  `identity` namespaces (`account` and `contract` are resolved: Account
-  Address and Contract Address above; `bridge` is resolved separately:
-  Bridge Address)
+- `identity` namespace: whether "HN Identity record" becomes concrete at
+  all, and if so, its address derivation (Identity Address above).
+  `account`, `contract`, and `validator` are resolved (Account Address,
+  Contract Address, Validator Address above); `protocol` needs no
+  derivation function at all, being genesis-assigned (Protocol Address
+  above); `bridge` is resolved separately (Bridge Address)
 - bridge chain identifier format
 - display and truncation requirements for wallets and explorers
 

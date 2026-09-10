@@ -10,6 +10,8 @@ mod address;
 mod contract_address;
 mod hash;
 mod identity;
+mod protocol_address;
+mod validator_address;
 
 pub use address::{
     ADDRESS_VERSION_1, DerivationScheme, NAMESPACE_ACCOUNT, PUBLIC_KEY_MAX_LEN,
@@ -24,6 +26,10 @@ pub use hash::{
 pub use identity::{
     ED25519_ALGORITHM_ID, ED25519_PUBLIC_KEY_LEN, ED25519_SIGNATURE_LEN, Ed25519KeyPair,
     IdentityError, IdentityResult, KeyDescriptor, KeyRole,
+};
+pub use protocol_address::{NAMESPACE_PROTOCOL, ProtocolModule};
+pub use validator_address::{
+    NAMESPACE_VALIDATOR, ValidatorDerivationScheme, validator_address_body,
 };
 
 #[cfg(test)]
