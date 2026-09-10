@@ -1,12 +1,11 @@
 {
   "schema": "hnchain.conformance.core.state-tree",
   "version": "0.1.0",
-  "status": "draft",
-  "status_meaning": "\"draft\" grades the coverage and curation of this vector set, not the correctness or finality of the hn-smt-256-v1 math it tests: ADR-0005 and ADR-0007 are both Accepted, and every hex value in this file is cross-checked against an independent oracle (see notes), not merely self-consistent with one implementation. A vector set can be \"draft\" while the specification it conforms to is fully Accepted; do not infer that the state tree design is still open from this field.",
-  "promote_to_stable_when": [
-    "ADR-0003 (Address Format) reaches Accepted and object_id_max_len (see hn-state::key::OBJECT_ID_MAX_LEN) is confirmed to still fit every address namespace's final canonical body length"
-  ],
+  "status": "stable",
+  "status_meaning": "Promoted from \"draft\" to \"stable\": all promote_to_stable_when conditions are met as of ADR-0003 reaching Accepted (hn-state::key::OBJECT_ID_MAX_LEN = 64 bytes confirmed to still fit ADR-0003's decided 32-byte address_body). \"stable\" still only grades this vector set's coverage and curation, not a separate claim about the hn-smt-256-v1 math beyond what ADR-0005/ADR-0007/ADR-0003 already being Accepted already means.",
+  "promote_to_stable_when": [],
   "depends_on": [
+    "hnchain.adr.ADR-0003@accepted",
     "hnchain.adr.ADR-0005@accepted",
     "hnchain.adr.ADR-0007@accepted"
   ],
@@ -28,7 +27,7 @@
     ]
   },
   "notes": [
-    "object_id values below are 32-byte opaque placeholders standing in for a canonical account address; ADR-0003 (Address Format) is Proposed, not Accepted, so no specific address encoding is assumed here.",
+    "object_id values below are 32-byte opaque placeholders standing in for a canonical account address; ADR-0003 (Address Format, Accepted) fixes the address_body length at 32 bytes but not yet the exact derivation function, so these values are not derived the way a real address would be.",
     "value bytes below are opaque canonical payload placeholders standing in for a section or extension's HNCS-encoded value; the account state binary schema is not yet finalized and is out of scope for this vector set.",
     "object_id and subkey are bounded to 64 and 64 bytes respectively by the reference implementation; this is an implementation-level resource bound, not a consensus value."
   ],

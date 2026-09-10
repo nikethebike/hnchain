@@ -1,6 +1,6 @@
 # ADR-0003: Address Format
 
-Status: Proposed
+Status: Accepted
 
 Date: 2026-07-18
 

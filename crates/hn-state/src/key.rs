@@ -6,17 +6,13 @@ use crate::error::StateResult;
 /// Maximum length, in bytes, of a state key's `object_id` field.
 ///
 /// This is an implementation-level resource bound on the HNCS length
-/// field, not a consensus value. ADR-0003 (Address Format) has not yet
-/// fixed a final canonical address body length, so this bound is chosen
-/// generously (64 bytes covers the 32-byte profile ADR-0003 proposes, plus
-/// headroom for a future post-quantum address body) rather than derived
-/// from a not-yet-accepted specification.
-///
-/// TODO(ADR-0003): once Address Format is Accepted, re-check this bound
-/// against the final canonical address body length for every address
-/// namespace it defines. Raise it here if any namespace's body would not
-/// fit; do not shrink it silently, since that would reject previously
-/// valid `object_id` values.
+/// field, not a consensus value. ADR-0003 (Address Format, Accepted) fixes
+/// `address_body` at 32 bytes, uniform across every namespace, for
+/// `address_version = 1`. 64 bytes comfortably covers that with headroom
+/// for a future post-quantum address body under a later `address_version`;
+/// no change needed unless a future `address_version` exceeds it, in which
+/// case raise this bound rather than shrinking it, since shrinking would
+/// reject previously valid `object_id` values.
 pub const OBJECT_ID_MAX_LEN: usize = 64;
 
 /// Maximum length, in bytes, of a state key's `subkey` field. Every leaf

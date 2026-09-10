@@ -12,6 +12,10 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0003: Address Format
+
 ## Context
 
 ADR-0000 requires explicit versioning for every protocol object, network
