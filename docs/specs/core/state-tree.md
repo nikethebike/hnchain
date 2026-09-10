@@ -10,8 +10,12 @@ Depends On:
 - `docs/adr/ADR-0001-account-state-model.md`
 - `docs/adr/ADR-0004-canonical-serialization.md`
 - `docs/adr/ADR-0005-hash-algorithms.md`
-- `docs/adr/ADR-0006-transaction-format.md`
+- `docs/adr/ADR-0007-state-tree.md`
 - `docs/adr/ADR-0019-storage-state-interfaces.md`
+
+Referenced By:
+
+- `tests/conformance/core/state-tree-v0.1.json`
 
 ## 1. Purpose
 
@@ -59,17 +63,20 @@ StateCommitmentV1
 `state_version`
 
 - Protocol version of the state commitment structure.
-- Initial value: open.
+- Initial value: `1` (ADR-0007).
 
 `tree_profile`
 
 - Identifier of the active authenticated tree rules.
-- Initial value: open.
+- Initial value: `0x0001` (`hn-smt-256-v1`, ADR-0007). Per ADR-0022, this is
+  a Structure Version and `state_key_version` (§5) is nested under it, not
+  independent: a future `tree_profile` change should be assumed to require
+  a new key derivation scheme too.
 
 `hash_profile`
 
 - Identifier of the hash algorithm and domain separation rules used by the tree.
-- Initial value: defined by the accepted hash algorithm specification.
+- Initial value: `0x0001` (`hn-sha512-256-v1`, ADR-0005).
 
 `block_height`
 
@@ -81,46 +88,55 @@ StateCommitmentV1
 
 ## 4. State Domains
 
-State is divided into protocol domains.
-
-Initial domain registry:
+State is divided into protocol domains, each an explicit numeric consensus
+identifier (ADR-0007). `0x0000` is reserved and invalid for committed state.
 
 ```text
-accounts
-account_extensions
-contracts
-contract_storage
-assets
-validators
-governance
-metadata
-system
+0x0001  accounts
+0x0002  account_extensions
+0x0003  contracts
+0x0004  contract_storage
+0x0005  assets
+0x0006  validators
+0x0007  governance
+0x0008  metadata
+0x0009  system
 ```
 
-Domain identifiers are consensus values. Display names are documentation labels.
+Display names above are documentation labels; the numeric identifier is the
+consensus value.
+
+The `accounts` domain has a closed SectionId registry (envelope, identity,
+balance, nonce, permission, metadata, asset, lifecycle), and
+`account_extensions` splits into a registry leaf (`extension_id = 0x0000`)
+and per-extension payload leaves (`0x0001..0xFFFF`); see ADR-0007's Accounts
+Domain: Sections and Account Extensions Domain sections.
 
 Adding a domain requires a protocol change record and activation rule.
 
 ## 5. State Keys
 
-Every committed value is addressed by a canonical state key.
-
-Conceptual function:
+Every committed value is addressed by a canonical state key, resolved by
+ADR-0007 into two input schemas: a core schema for domain sections
+(addressed by `section_id`) and an extension schema for extension records
+(addressed by `extension_id`).
 
 ```text
-STATE_KEY(domain, object_id, subkey) -> bytes
+state_key = HASH_PROFILE_0x0001("hnchain.state.key.v1", HNCS(StateKeyInputV1 | StateKeyInputExtensionV1))
 ```
 
-The final function must be domain-separated and deterministic.
+The output is exactly 32 bytes. `domain_id` and `section_id` are `uint8`;
+`extension_id` is `uint16`; `object_id` and `subkey` are canonical bytes,
+length-delimited per ADR-0004, bounded by the reference implementation to
+64 bytes each (`hn-state::key::{OBJECT_ID_MAX_LEN, SUBKEY_MAX_LEN}` — an
+implementation resource bound, not a consensus value; see ADR-0007's note on
+revisiting it once ADR-0003 fixes a final address body length). The exact
+byte layout for both schemas is defined in ADR-0007's Canonical State Keys
+section, not repeated here.
 
-It must define:
-
-- input encodings
-- output length
-- hash profile
-- reserved domains
-- invalid inputs
-- test vectors
+The state key encodes object identity only — domain, section or extension,
+object, subkey. It never encodes schema version or content; those live in
+the committed value (§6).
 
 State keys must not use RPC strings, JSON objects, local database keys, or
 filesystem paths as consensus input.
@@ -152,33 +168,42 @@ Examples:
 
 ## 7. Tree Nodes
 
-The exact node structure depends on `tree_profile`.
-
-Every accepted tree profile must define:
-
-- node types
-- canonical node encoding
-- child ordering
-- empty node representation
-- leaf representation
-- internal node representation
-- compressed path representation, if supported
-- node hash domains
-- proof verification rules
-
-Conceptual node classes:
+The exact node structure depends on `tree_profile`. For `tree_profile =
+0x0001` (`hn-smt-256-v1`), ADR-0007 defines exactly three node classes;
+compressed path nodes are not supported and must be rejected if
+encountered:
 
 ```text
 EmptyNode
 LeafNode
 InternalNode
-CompressedPathNode
 ```
 
-If a tree profile does not support compressed paths, it must explicitly reject
-`CompressedPathNode`.
+Each has a domain-separated hash (`hnchain.state.empty.v1`,
+`hnchain.state.leaf.v1`, `hnchain.state.internal.v1`). Empty subtree hashes
+are defined recursively from `empty_hash[0]` up to `empty_hash[256]`
+(the empty state root); internal node preimages are always
+`left_child_hash || right_child_hash`, where the child at bit `0` of the
+routed `state_key` (read MSB-first) is left and bit `1` is right — never
+reordered by comparing hash values. Exact formulas are in ADR-0007's Node
+Types, Empty Root Construction, Leaf Preimage, and Internal Node Child
+Order sections.
+
+A future tree profile that supports compressed paths, or any other node
+class, must define its own node types, encoding, and hash domains the same
+way; it does not inherit `hn-smt-256-v1`'s three-node-class shape.
 
 ## 8. Root Computation
+
+HNChain uses a single global state root (ADR-0007), not a composite root or
+per-domain roots: state domains are separated through state key derivation
+(§5), not separate root fields in the block header.
+
+The canonical update order is bytewise ascending order of 32-byte state
+keys, applied after all of a block's transaction effects are validated and
+merged into a final write set; the state tree layer accepts that write set
+as given and does not itself resolve write-set conflicts (ADR-0007,
+Updates).
 
 Root computation is deterministic.
 
@@ -351,29 +376,38 @@ Implementations must bound:
 
 ## 16. Test Vectors
 
-The accepted version of this specification must include test vectors for:
+`tests/conformance/core/state-tree-v0.1.json`, with its runner in
+`crates/hn-state/tests/state_tree_conformance.rs`, is this specification's
+conformance suite for the `hn-smt-256-v1` tree math: empty-root recursion,
+core and extension state key derivation (including an invalid oversized
+`object_id`/`subkey` case), leaf and internal node hashing, state root
+computation over single/two-account and extension registry-plus-payload
+write sets, and update-order independence (including a rejected duplicate
+`state_key` case). Every value in it is cross-checked against an
+independent oracle, not only self-consistent with the reference
+implementation.
 
-- empty state root
-- single account insertion
-- account update
-- account deletion or lifecycle transition
-- extension insertion
-- multiple domain updates
-- inclusion proof
-- non-inclusion proof
-- malformed proof rejection
-- deterministic batch ordering
+Still missing from that vector set, tracked as its own `promote_to_stable_when`
+condition rather than duplicated here: `object_id`/`subkey` vectors using a
+real (not opaque-placeholder) canonical address once ADR-0003 is Accepted.
 
-Test vectors are mandatory before production implementation.
+Proof vectors (inclusion, non-inclusion, malformed proof rejection) and
+account lifecycle/deletion vectors are not yet covered: proof wire format
+is an ADR-0007 Deferred Decision (§17), and account lifecycle transitions
+depend on a value schema this specification does not define (§6). Both
+remain required before production implementation, per this section's
+original intent.
 
 ## 17. Open Decisions
 
-- initial `state_version`
-- initial `tree_profile`
-- initial state key length
-- final domain registry numeric identifiers
-- composite root or single tree root
-- empty state root
+Resolved by ADR-0007 and removed from this list: initial `state_version`
+(`1`), initial `tree_profile` (`0x0001`, `hn-smt-256-v1`), initial state
+key length (32 bytes), final domain registry numeric identifiers
+(`0x0001`-`0x0009`), composite root or single tree root (single global
+root), and empty state root (recursive `empty_hash[0..256]`).
+
+Still open, matching ADR-0007's own Deferred Decisions:
+
 - proof wire format
 - snapshot manifest format
 - pruning window
