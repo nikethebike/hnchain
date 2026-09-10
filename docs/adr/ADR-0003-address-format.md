@@ -197,6 +197,13 @@ Used for bridge-related accounting and external chain commitments.
 Bridge addresses must bind to explicit bridge namespace and chain identifiers to
 avoid cross-chain replay and asset confusion.
 
+The bridge address body is a hash commitment over
+`(external_chain_id, external_account_reference)` under `HASH_PROFILE_0x0001`,
+not the raw external chain identifier or account reference embedded directly.
+This keeps the bridge namespace's body the same fixed length as every other
+namespace (see Recommended Initial Profile) regardless of how long an
+external chain's own identifiers or account references happen to be.
+
 ### Identity Address
 
 Used for HN Identity records if identity becomes a distinct protocol namespace.
@@ -206,19 +213,44 @@ an explicit binding model.
 
 ## Recommended Initial Profile
 
-This ADR proposes, but does not yet accept, the following initial profile:
+This ADR proposes, but does not yet accept as a whole, the following initial
+profile. Individual elements are resolved incrementally as they are decided;
+each says so explicitly. Elements without such a note are still proposed,
+not accepted.
 
 - canonical binary payload for consensus
 - Bech32m-style text encoding for wallets, CLI, RPC, and explorer
 - lowercase HRP
 - separate HRPs for mainnet, testnet, and local development networks
 - network identifier inside the binary payload
-- 32-byte address body for initial classical account and contract addresses
+- **Decided:** 32-byte address body, uniform across every namespace
+  (account, contract, validator, protocol, bridge, identity) for
+  `address_version = 1`. See "Address Body Length" below.
 - variable-length payload support for future address versions
 
-The 32-byte address body is a profile choice, not a universal invariant.
-Post-quantum, identity-commitment, or special protocol addresses may require
-different body lengths in later versions.
+### Address Body Length
+
+**Decided.** `address_body` is 32 bytes for every namespace under
+`address_version = 1`. This is not a per-namespace choice: every namespace's
+derivation direction above is a `HASH_PROFILE_0x0001` consumer (account and
+contract directly; validator and identity by the same pattern; protocol by
+reservation over the same 32-byte space; bridge via an explicit hash
+commitment, see Bridge Address above), and ADR-0005 fixes that profile's
+digest length at exactly 32 bytes for every active consensus hash domain.
+A uniform body length follows from that rather than being an independent
+decision to defend namespace by namespace.
+
+This is a profile choice for `address_version = 1`, not a universal
+invariant: `address_namespace` and `address_version` already exist as
+separate fields in `AddressPayload`, so a future `address_version` can
+introduce a different (including variable, or namespace-dependent) body
+length — for post-quantum key material, for example — without
+reinterpreting `address_version = 1` addresses or requiring a namespace
+split that `address_version = 1` does not have.
+
+32 bytes is also the value `hn-state::key::OBJECT_ID_MAX_LEN` (64 bytes)
+was chosen ahead of this decision to accommodate; no change to that
+constant is needed (see its `TODO(ADR-0003)` note).
 
 ## Rejected Options
 
@@ -335,7 +367,6 @@ existing address version is a major protocol change.
 
 - final mainnet, testnet, and devnet human-readable prefixes
 - binary size and type of `network_id`
-- initial account address body length
 - address body derivation function
 - whether addresses bind directly to key descriptors or identity commitments
 - contract address derivation inputs
