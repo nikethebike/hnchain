@@ -82,14 +82,31 @@ length, checksum behavior, or account type.
 
 Every address includes `address_namespace`.
 
-Initial conceptual namespaces:
+**Decided.** `address_namespace` is `uint8`, mirroring `domain_id` in
+ADR-0007: a small closed registry gets an explicit numeric constant per
+value, not a string or a Rust-level enum, so consensus meaning does not
+depend on the implementation language's type system.
 
-- `account`
-- `contract`
-- `validator`
-- `protocol`
-- `bridge`
-- `identity`
+Namespace registry for `address_version = 1`:
+
+```text
+0x00  reserved, invalid for committed addresses
+0x01  account
+0x02  contract
+0x03  validator
+0x04  protocol
+0x05  bridge
+0x06  identity
+```
+
+This registry is closed for `address_version = 1`, the same way ADR-0007
+closes its SectionId registry "for tree profile `0x0001`". Adding a
+namespace is not possible within `address_version = 1`; it requires a new
+`address_version`, which is already a major protocol change under Versioned
+Address Format above. The general "adding a new address namespace" bullet
+in Compatibility below is therefore satisfied by, and does not need a
+process separate from, the existing rules for introducing a new
+`address_version`.
 
 Namespaces prevent accidental reuse of the same bytes for different protocol
 domains.
@@ -187,8 +204,19 @@ specific binding is present in validator state.
 Used for protocol-owned modules such as treasury, governance system contracts,
 staking, slashing, bridge registries, and future native modules.
 
-Protocol addresses must be reserved by genesis or governance-controlled
-activation rules.
+**Decided (genesis list only).** The set of protocol modules reserved at
+`address_version = 1` genesis — treasury, governance, staking, slashing,
+bridge registry — is fixed once and enumerated in the genesis specification,
+not in this ADR. This is a different question from namespace numbering
+above: it is about which specific protocol-address values exist within the
+already-numbered `protocol` namespace (`0x04`), not about the namespace
+registry itself.
+
+Whether additional protocol modules can be reserved after genesis without a
+hard fork, and through what governance process, is deferred — see Deferred
+Decisions. It depends on a future governance ADR that does not exist yet,
+so this ADR fixes only the genesis-time list and does not attempt to
+specify an extension process ahead of that governance ADR.
 
 ### Bridge Address
 
@@ -354,6 +382,12 @@ only if:
 - unsupported nodes have deterministic rejection behavior
 - state transition rules for the namespace are defined
 
+For `address_namespace` specifically: since its registry is closed for
+`address_version = 1` (Namespace Separation above), "adding a new address
+namespace" can only happen by introducing a new `address_version`. The four
+conditions above apply to that new version's namespace registry as a whole;
+no namespace-specific process beyond them is needed.
+
 Changing equality, decoding, checksum validation, or derivation semantics for an
 existing address version is a major protocol change.
 
@@ -370,9 +404,17 @@ existing address version is a major protocol change.
 - address body derivation function
 - whether addresses bind directly to key descriptors or identity commitments
 - contract address derivation inputs
-- protocol namespace reservation process
 - bridge chain identifier format
 - display and truncation requirements for wallets and explorers
+
+## Deferred Decisions
+
+- protocol namespace extension process: whether protocol modules beyond the
+  `address_version = 1` genesis list (treasury, governance, staking,
+  slashing, bridge registry) can be reserved later without a hard fork, and
+  through what governance process. Depends on a future governance ADR that
+  does not exist yet; not a blocker for accepting this ADR's genesis-time
+  list.
 
 ## References
 
