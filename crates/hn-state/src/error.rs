@@ -40,6 +40,13 @@ pub enum StateError {
         /// The rejected version.
         value: u16,
     },
+    /// A decoded `NonceValueV1.nonce_version` does not match
+    /// [`crate::nonce_value::NONCE_VERSION_1`], the only shape this
+    /// implementation understands.
+    UnsupportedNonceVersion {
+        /// The rejected version.
+        value: u16,
+    },
 }
 
 impl From<HashError> for StateError {
@@ -68,6 +75,9 @@ impl core::fmt::Display for StateError {
             }
             Self::UnsupportedEnvelopeVersion { value } => {
                 write!(formatter, "unsupported envelope_version: {value}")
+            }
+            Self::UnsupportedNonceVersion { value } => {
+                write!(formatter, "unsupported nonce_version: {value}")
             }
         }
     }

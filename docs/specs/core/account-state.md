@@ -223,14 +223,37 @@ forbidden in consensus state.
 
 Nonce state prevents transaction replay and defines account transaction ordering.
 
-The nonce model must be specified before transaction validation is implemented.
-At minimum, the model must define:
+The full nonce model must be specified before transaction validation is
+implemented. At minimum, the model must define:
 
 - nonce width
 - initial nonce
 - increment rules
 - replay protection domain
 - behavior for failed execution
+
+**Decided: nonce storage width only.** This section decides how a nonce is
+represented as a stored leaf value — nonce width and initial value — not the
+full nonce model above. Replay protection domain, increment timing, ordering
+rules, and behavior for failed execution are transaction-validation semantics
+owned by ADR-0006 (Transaction Format, still Proposed) and remain open there;
+this schema decodes and stores whatever `u64` count ADR-0006 eventually
+specifies the rules for, without assuming any of those rules itself.
+
+```text
+NonceValueV1
+  u16 nonce_version = 1
+  u64 nonce
+```
+
+Fields:
+
+- `nonce_version`: `u16`, a Structure Version in ADR-0022's sense, matching
+  `envelope_version`'s width convention.
+- `nonce`: `u64`, matching `hn_core::AccountNonce`'s existing width and
+  initial value (`0`) — this schema does not introduce a new nonce type, it
+  gives the already-implemented `AccountNonce` a canonical on-chain storage
+  encoding.
 
 ### 4.5 Permission State
 

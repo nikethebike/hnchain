@@ -12,15 +12,16 @@
 //! the `accounts` and `account_extensions` domain-specific key derivation
 //! ADR-0007 defines on top of those primitives. Each account section's
 //! value schema, once decided in `docs/specs/core/account-state.md`, gets
-//! its own module (for example [`envelope_value`]); sections whose value
-//! schema is not yet decided are still treated as opaque already-canonical
-//! HNCS bytes by callers of this crate.
+//! its own module (for example [`envelope_value`], [`nonce_value`]);
+//! sections whose value schema is not yet decided are still treated as
+//! opaque already-canonical HNCS bytes by callers of this crate.
 
 mod account;
 mod envelope_value;
 mod error;
 mod key;
 mod node;
+mod nonce_value;
 mod tree;
 
 pub use account::{
@@ -32,6 +33,7 @@ pub use envelope_value::{AccountType, ENVELOPE_VERSION_1, EnvelopeValueV1, Secti
 pub use error::{StateError, StateResult};
 pub use key::{OBJECT_ID_MAX_LEN, SUBKEY_MAX_LEN, state_key_core, state_key_extension};
 pub use node::{EmptyHashTable, TREE_DEPTH, TREE_PROFILE_ID, internal_hash, leaf_hash, value_hash};
+pub use nonce_value::{NONCE_VERSION_1, NonceValueV1};
 pub use tree::{Leaf, compute_state_root};
 
 #[cfg(test)]
