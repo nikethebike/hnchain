@@ -384,6 +384,35 @@ above: it is about which specific protocol-address values exist within the
 already-numbered `protocol` namespace (`0x04`), not about the namespace
 registry itself.
 
+**Decided: state domain per module.** The `protocol` namespace names which
+addresses exist; it does not say where their state lives. Each genesis
+module lands in the ADR-0007 state domain that matches its actual
+cardinality, not a single catch-all:
+
+```text
+governance  -> governance domain (0x0007)  — one singleton object
+treasury    -> system domain (0x0009)      — one singleton object
+staking     -> validators domain (0x0006)  — per-validator/delegator records
+slashing    -> validators domain (0x0006)  — per-validator penalty history
+bridge registry -> bridge domain (0x000A)  — one singleton object
+```
+
+The criterion is singleton versus partitioned collection, not topical
+similarity: `staking` and `slashing` are not grouped with `treasury` in
+`system` just because all three are "protocol modules" — they hold one
+record per validator or delegator, the same partitioning shape
+`validators` already has, and `system` has no such per-entity structure.
+Putting them there would misrepresent a collection as a single
+configuration record. `bridge registry` (which external chains and assets
+are supported, custody rules) belongs in the `bridge` domain reserved for
+bridge objects generally, not `system`, for the same reason ADR-0007
+reserved that domain ID in the first place: it is a bridge-domain object,
+not a generic one.
+
+`metadata` (`0x0008`) holds none of these: it is protocol-internal
+bookkeeping, not reached through any `protocol`-namespace address. Nothing
+in the genesis module list is addressed there.
+
 Whether additional protocol modules can be reserved after genesis without a
 hard fork, and through what governance process, is deferred — see Deferred
 Decisions. It depends on a future governance ADR that does not exist yet,

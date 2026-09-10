@@ -99,15 +99,17 @@ shaped like `AccountState` at all — folding them into `account_type` would
 mean pretending they share a structure they were already accepted as not
 sharing.
 
-`system` is deferred rather than resolved either way: whether HNChain's
-protocol-owned modules (treasury, governance, staking, and so on) are
-`AccountState` instances tagged `account_type = system`, or their own
-segregated category, depends on how the `protocol` `address_namespace`
-(ADR-0003, covering exactly those modules) relates to ADR-0007's
-`governance`/`metadata`/`system` state domains — a namespace-to-domain
-mapping question this document does not resolve. See
-`docs/adr/ADR-0007-state-tree.md`'s State Domains section for the current
-state domain registry.
+`system` is resolved the same way, not merely deferred: it is not an
+`account_type` value either. ADR-0003's `protocol` namespace (covering
+treasury, governance, staking, slashing, and bridge registry) maps to the
+`governance`, `system`, `validators`, and `bridge` state domains by each
+module's own cardinality (ADR-0007, State Domains, "Decided: `protocol`
+namespace to domain mapping") — never to `accounts` (`0x0001`). That
+mapping holds regardless of which specific domain a given protocol module
+lands in, so removing `system` from `account_type` does not depend on
+knowing that mapping's details, only on knowing none of its outcomes is
+`accounts`. See `docs/adr/ADR-0007-state-tree.md`'s State Domains section
+for the current mapping.
 
 Account type is consensus-relevant.
 

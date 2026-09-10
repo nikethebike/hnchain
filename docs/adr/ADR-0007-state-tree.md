@@ -241,11 +241,43 @@ Compatibility's existing "unique identifier, canonical encoding,
 deterministic rejection, state transition rules" process, not a tree
 profile bump.
 
-The relationship between ADR-0003's `protocol` namespace (one value,
-`0x04`) and this registry's `governance`/`metadata`/`system` domains
-(three values) is not yet mapped — which of the three domains a given
-`protocol`-namespace address's state lands in is a separate open question,
-not resolved by this addition.
+**Decided: `protocol` namespace to domain mapping.** ADR-0003's `protocol`
+namespace (`0x04`) is one address namespace, but its genesis modules do not
+all land in one domain — each goes to whichever domain matches its actual
+cardinality (ADR-0003, Protocol Address, "Decided: state domain per
+module"):
+
+```text
+governance      -> governance (0x0007)   singleton
+treasury        -> system (0x0009)       singleton
+staking         -> validators (0x0006)   per-validator/delegator records
+slashing        -> validators (0x0006)   per-validator penalty history
+bridge registry -> bridge (0x000A)       singleton
+```
+
+`system` (`0x0009`) is scoped narrowly by this: a bucket for
+protocol-owned **singleton** objects — one record for the whole network,
+like `contract_storage` is scoped to per-contract storage cells rather than
+"anything contract-related." It is not a general catch-all for every
+protocol module; `staking` and `slashing` are not there despite being
+named alongside `treasury` in ADR-0003's module list, because they are
+per-validator/delegator partitioned collections, the same shape
+`validators` already handles, not singleton configuration records.
+
+`validators` (`0x0006`) therefore holds more than validator identity and
+consensus state: staking and slashing records live there too, keyed per
+validator or delegator, not in `system`.
+
+`bridge` (`0x000A`) holds the bridge registry (a singleton: which external
+chains and assets are supported, custody rules) alongside the individual
+per-external-chain-commitment accounting objects ADR-0003's Bridge Address
+already describes (a partitioned collection) — both are bridge-domain
+objects, distinguished by `object_id` within the domain, not by different
+domains.
+
+`metadata` (`0x0008`) is not addressed by any `protocol`-namespace address
+at all: it is protocol-internal bookkeeping, not a target any transaction
+sends to.
 
 The `accounts` and `account_extensions` domains define additional per-domain
 leaf structure, specified below.
