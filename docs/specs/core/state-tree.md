@@ -1,6 +1,6 @@
 # HNChain Core Specification: State Tree
 
-Status: Proposed
+Status: Accepted
 
 Version: 0.1.0
 
