@@ -18,7 +18,9 @@ cryptographic algorithms, transaction format, fee model, VM execution, or
 consensus rules. Those must be defined in separate specifications.
 
 This specification is constrained by
-`docs/adr/ADR-0000-protocol-invariants.md` and
+`docs/adr/ADR-0000-protocol-invariants.md`,
+`docs/adr/ADR-0001-account-state-model.md`,
+`docs/adr/ADR-0002-cryptographic-identity.md`, and
 `docs/adr/ADR-0007-state-tree.md`.
 
 ## 2. Design Goals
@@ -44,16 +46,27 @@ AccountState
   account_type
   address
   identity
-  balances
+  balance
   nonce
-  permissions
+  permission
   metadata
-  assets
-  extensions
+  asset
+  extension
   lifecycle
 ```
 
 Each section has its own version and validation rules.
+
+`identity` through `lifecycle` above are named to match ADR-0007's SectionId
+registry exactly (`envelope`, `identity`, `balance`, `nonce`, `permission`,
+`metadata`, `asset`, `lifecycle` — §4.1-4.9 below use the same singular
+names), except `extension`: it is deliberately not part of that registry.
+ADR-0007 addresses it through the separate `account_extensions` domain
+instead (§4.8), because its cardinality and payload size differ from the
+fixed core sections.
+
+`address` is an `AddressPayload` (ADR-0003) with `address_namespace = 0x01`
+(`account`).
 
 The canonical binary representation must be defined in the serialization
 specification before implementation.
@@ -80,7 +93,9 @@ Type-specific behavior must be defined by the owning protocol specification.
 An account does not depend on one raw public key.
 
 Accounts bind to cryptographic identity through key descriptors, role bindings,
-or identity commitments defined by the cryptographic identity specification.
+or identity commitments defined by the cryptographic identity specification —
+concretely, ADR-0002's `KeyDescriptor` (Accepted: algorithm-agile, Ed25519
+active for `account_signing` at `algorithm_id = 0x0001`).
 
 This allows key rotation, multisignature, session keys, hardware wallets, and
 future post-quantum migration without redefining account identity.
@@ -402,8 +417,9 @@ Lazy extension inconsistency:
 
 The following decisions are required before implementation:
 
-- cryptographic identity
-- account address derivation
+- account address derivation function (namespace, length, and payload
+  exclusion are resolved; the exact `HASH_PROFILE_0x0001` inputs are not —
+  see below)
 - native token unit and numeric width
 - nonce model
 - canonical serialization format
@@ -413,8 +429,22 @@ The following decisions are required before implementation:
 - account lifecycle rules
 - transaction access-list model
 
-"State trie or alternative authenticated data structure" is resolved by
-`docs/adr/ADR-0007-state-tree.md` (profile `hn-smt-256-v1`) and removed from
-this list. ADR-0007 also defines where each section in the `AccountState`
-structure above (§3) lives in the tree: see its SectionId registry and
-Account Extensions Domain sections.
+Resolved and removed from this list:
+
+- "state trie or alternative authenticated data structure" is resolved by
+  `docs/adr/ADR-0007-state-tree.md` (profile `hn-smt-256-v1`). ADR-0007 also
+  defines where each section in the `AccountState` structure above (§3)
+  lives in the tree: see its SectionId registry and Account Extensions
+  Domain sections.
+- "cryptographic identity" is resolved by `docs/adr/ADR-0002-cryptographic-
+  identity.md` (Accepted): the `KeyDescriptor`/`SignatureEnvelope` model,
+  algorithm-agile with Ed25519 (`algorithm_id = 0x0001`) as the only active
+  consensus signing algorithm for `account_signing` at genesis. Key
+  rotation transaction semantics and the threshold/multisignature identity
+  model remain ADR-0002 Deferred Decisions, not blockers for this item.
+- "account address derivation" is partially resolved by
+  `docs/adr/ADR-0003-address-format.md` (Accepted): `address_namespace`,
+  `address_body` length (32 bytes), and the absence of `chain_id`/
+  `checksum_profile` from `AddressPayload` are all decided. Narrowed to
+  "account address derivation function" above, since ADR-0003 itself still
+  leaves "address body derivation function" open.
