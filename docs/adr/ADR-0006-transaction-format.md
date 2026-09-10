@@ -265,6 +265,30 @@ The validity window must use consensus-defined height, epoch, or time semantics.
 
 It must not depend on local node wall-clock time.
 
+**Decided: height-based, not epoch-based.**
+
+```text
+ValidityWindowV1
+  optional u64 min_height
+  optional u64 max_height
+```
+
+`min_height`/`max_height` reference `hn_core::BlockHeight` (already `u64`).
+Epoch-based bounds (`hn_core::Epoch`, also already `u64`) are not used for
+this general mechanism: epochs span many blocks (validator-set/
+protocol-parameter periods), far too coarse a granularity for bounding how
+long an ordinary transaction may sit unconfirmed — the validity window's
+purpose here, distinct from nonce's replay protection. A future
+epoch-scoped transaction type (for example `validator_update`) may still
+reference `epoch` in its own payload; that is a per-payload decision (§5),
+not this general envelope field.
+
+Both bounds are independently optional (HNCS `optional`, ADR-0004), not a
+sentinel value: `min_height` absent means no lower bound (valid from
+genesis); `max_height` absent means no expiry. Nesting `validity_window`
+itself in another `optional` would be redundant — "no window" is already
+expressible as both bounds absent.
+
 ### Access List
 
 Transactions may declare read and write access sets.
@@ -351,8 +375,8 @@ duplicated identifiers.
 
 `TransactionSigningPayload`'s full field list is not finalized here: it
 mirrors `TransactionEnvelope` minus `signatures`, so it cannot be closed
-before `fee_limit`, `validity_window`, and `access_list` are (Fees,
-Validity Window, Access List — all still open).
+before `fee_limit` and `access_list` are (Fees, Access List — still open;
+`validity_window`'s shape is now decided above).
 
 ### Transaction ID
 
@@ -378,8 +402,8 @@ Security Considerations, "Transaction malleability"): if `tx_id` excluded
 `signatures`, a different valid signature over the same intent would not
 change the ID, and the malleability risk framing would not apply to
 `tx_id` in the first place. `TransactionEnvelope`'s own full field list
-is likewise not finalized until `fee_limit`/`validity_window`/
-`access_list` are, same caveat as above.
+is likewise not finalized until `fee_limit`/`access_list` are, same
+caveat as above.
 
 ### Validation Before Execution
 
@@ -482,15 +506,14 @@ change.
 ## Open Decisions
 
 - final transaction envelope fields (`chain_id`/`network_id`/`tx_version`/
-  `tx_type`/`sender` now decided above; `fee_limit`/`validity_window`/
+  `tx_type`/`sender`/`validity_window` now decided above; `fee_limit`/
   `access_list`/`payload` still open)
 - final fee model
-- final validity window semantics
 - access list enforcement model
 - receipt model
 - event model
 - signing payload schema (hash mechanism now decided above; full field
-  list still blocked on fee_limit/validity_window/access_list)
+  list still blocked on fee_limit/access_list)
 - multi-signature activation model
 - threshold authorization model
 - transaction size limits

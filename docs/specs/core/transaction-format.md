@@ -148,16 +148,21 @@ This specification does not finalize the fee market.
 
 ### 4.7 Validity Window
 
-`validity_window` limits when a transaction may be included.
-
-Candidate forms:
+`validity_window` limits when a transaction may be included. Decided in
+ADR-0006, "Validity Window": height-based, not epoch-based — epochs are
+too coarse (validator-set/protocol-parameter periods) to usefully bound
+how long an ordinary transaction may sit unconfirmed.
 
 ```text
-min_height
-max_height
-min_epoch
-max_epoch
+ValidityWindowV1
+  optional u64 min_height
+  optional u64 max_height
 ```
+
+Both bounds reference `hn_core::BlockHeight` and are independently
+optional (absent `min_height` = valid from genesis; absent `max_height`
+= no expiry) — not a sentinel value, and not nested in an outer
+`optional`, since "no window" is already both bounds absent.
 
 Consensus-time or block-time fields require a separate time semantics
 specification.
@@ -250,8 +255,8 @@ signing_digest = HASH_PROFILE_0x0001(
   "hnchain.transaction.signing.v1", HNCS(TransactionSigningPayload))
 ```
 
-The full field list above is not final until `fee_limit`, `validity_window`,
-and `access_list` are decided (§4.6, §4.7, §4.8).
+The full field list above is not final until `fee_limit` and `access_list`
+are decided (§4.6, §4.8) — `validity_window`'s shape is now decided (§4.7).
 
 ## 8. Transaction ID
 
@@ -340,7 +345,6 @@ Boundary rules:
 
 - final HNCS schema
 - final fee model
-- final validity window fields
 - final access list enforcement
 - final transaction size limits
 - final receipt schema
