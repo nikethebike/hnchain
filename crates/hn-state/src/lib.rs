@@ -17,6 +17,8 @@
 //! opaque already-canonical HNCS bytes by callers of this crate.
 
 mod account;
+mod asset_value;
+mod balance_value;
 mod envelope_value;
 mod error;
 mod key;
@@ -29,6 +31,8 @@ pub use account::{
     account_extension_payload_state_key, account_extension_registry_state_key,
     account_section_state_key,
 };
+pub use asset_value::{ASSET_VERSION_1, AssetValueV1, MAX_ASSET_HOLDINGS};
+pub use balance_value::{BALANCE_VERSION_1, BalanceValueV1};
 pub use envelope_value::{AccountType, ENVELOPE_VERSION_1, EnvelopeValueV1, SectionVersionsV1};
 pub use error::{StateError, StateResult};
 pub use key::{OBJECT_ID_MAX_LEN, SUBKEY_MAX_LEN, state_key_core, state_key_extension};

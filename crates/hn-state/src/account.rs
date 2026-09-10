@@ -32,7 +32,7 @@ pub enum AccountSection {
     Envelope = 0x00,
     /// Cryptographic identity binding (account-state.md §3.2).
     Identity = 0x01,
-    /// Native currency and protocol-approved asset balances
+    /// Native HNCOIN balance only; a singleton, unlike [`Self::Asset`]
     /// (account-state.md §4.3).
     Balance = 0x02,
     /// Replay protection / transaction ordering (account-state.md §4.4).
@@ -41,8 +41,10 @@ pub enum AccountSection {
     Permission = 0x04,
     /// Bounded protocol-level account metadata (account-state.md §4.6).
     Metadata = 0x05,
-    /// Per-account asset balance line items, referencing definitions in
-    /// the `assets` domain (account-state.md §4.7).
+    /// Per-account non-native (protocol-level, bridged) asset balance
+    /// line items, referencing definitions in the `assets` domain; a
+    /// variable-cardinality collection, unlike [`Self::Balance`]
+    /// (account-state.md §4.7).
     Asset = 0x06,
     /// Account lifecycle state (account-state.md §4.9).
     Lifecycle = 0x07,

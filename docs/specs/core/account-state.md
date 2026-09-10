@@ -211,13 +211,38 @@ semantics.
 
 ### 4.3 Balance State
 
-Balance state represents native HNChain currency and protocol-approved asset
-balances.
+Balance state represents the account's native HNCOIN balance only. Non-native
+asset balances (protocol-level, bridged) are held in §4.7 Asset State instead
+— see there for the split rationale.
 
 Balance mutation is allowed only through valid state transitions.
 
 Balance values must use fixed-width unsigned integers. Floating point values are
 forbidden in consensus state.
+
+**Decided: balance value schema.**
+
+```text
+BalanceValueV1
+  u16  balance_version = 1
+  u128 native_balance
+```
+
+Fields:
+
+- `balance_version`: `u16`, a Structure Version in ADR-0022's sense, matching
+  `envelope_version`/`nonce_version`'s width convention.
+- `native_balance`: `u128`. Native currency is a singleton per account —
+  every account has exactly one native balance, always present — unlike
+  non-native assets (§4.7), which form a variable-cardinality collection;
+  this singleton-vs-collection test is what splits the two sections' scope
+  (the same test already used for the protocol namespace's domain mapping
+  in ADR-0007). `u128`, not `u64`, is a storage-width decision only:
+  headroom against intermediate-computation overflow (fee/reward
+  multiplication and similar), not a supply, allocation, or fee decision —
+  those remain owned by a future tokenomics specification and are not
+  decided by this schema; this section does not assume or encode any
+  particular initial balance.
 
 ### 4.4 Nonce State
 
@@ -288,27 +313,56 @@ before activation.
 
 ### 4.7 Asset State
 
-Asset state describes assets supported by the account: this section holds
-each held asset's balance line item, keyed by the owning account. It does
-not define the assets themselves.
+Asset state describes the account's non-native asset holdings: this section
+holds each held asset's balance line item, keyed by the owning account. It
+does not define the assets themselves. Native HNCOIN is out of scope here —
+it is a singleton, held in §4.3 Balance State instead.
 
 The asset model must distinguish between:
 
-- native currency
 - protocol-level assets
-- contract-defined assets
 - bridged assets
+- contract-defined assets
 
-Native, protocol-level, and bridged asset *definitions* (supply, decimals,
-mint/burn authority) live in ADR-0007's `assets` state domain (`0x0005`),
-keyed by a curated `asset_id`, not in this account section and not behind
-their own address (ADR-0003 deliberately has no `asset` address namespace).
-Contract-defined assets are defined in `contract_storage` under the
-issuing contract's own address instead. This section's balance line items
-reference those definitions; they do not duplicate them.
+Protocol-level and bridged asset *definitions* (supply, decimals, mint/burn
+authority) live in ADR-0007's `assets` state domain (`0x0005`), keyed by a
+curated `asset_id`, not in this account section and not behind their own
+address (ADR-0003 deliberately has no `asset` address namespace). This
+section's balance line items reference those definitions by `asset_id`;
+they do not duplicate them. Contract-defined assets are defined, and their
+holder balances tracked, in `contract_storage` under the issuing contract's
+own address instead (the same place ERC-20-style token balances would live
+under an account-based model) — they are not represented in this section at
+all, since they are not keyed by the curated `asset_id` registry.
 
 No asset class may be introduced without explicit supply, ownership, and
 validation rules.
+
+**Decided: asset value schema (protocol-level and bridged assets only).**
+
+```text
+AssetValueV1
+  u16 asset_version = 1
+  map<u16 asset_id, u128 amount>
+```
+
+Fields:
+
+- `asset_version`: `u16`, a Structure Version, matching this account
+  section's sibling schemas' width convention.
+- the map: a bounded (`MAX_ASSET_HOLDINGS = 1024`), canonically-sorted
+  `asset_id -> amount` map (HNCS `map<K, V>`, ADR-0004) — variable
+  cardinality is exactly why this is a collection and not a fixed
+  positional structure like the envelope's `section_versions`, per the
+  singleton-vs-collection split above. Absent from the map means a zero
+  balance; there is no explicit zero-amount entry.
+- `asset_id`: `u16`, matching the width of other curated/moderate-size
+  registries in this codebase (`extension_id`, `hash_profile_id`) rather
+  than a permissionless-derivation-sized registry — the `assets` domain's
+  `asset_id` is protocol-curated (ADR-0007, ADR-0003), not
+  self-assigned.
+- `amount`: `u128`, matching `native_balance`'s width for the same
+  overflow-headroom reason; not itself an economic decision.
 
 ### 4.8 Extension State
 

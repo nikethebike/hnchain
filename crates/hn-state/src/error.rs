@@ -47,6 +47,20 @@ pub enum StateError {
         /// The rejected version.
         value: u16,
     },
+    /// A decoded `BalanceValueV1.balance_version` does not match
+    /// [`crate::balance_value::BALANCE_VERSION_1`], the only shape this
+    /// implementation understands.
+    UnsupportedBalanceVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `AssetValueV1.asset_version` does not match
+    /// [`crate::asset_value::ASSET_VERSION_1`], the only shape this
+    /// implementation understands.
+    UnsupportedAssetVersion {
+        /// The rejected version.
+        value: u16,
+    },
 }
 
 impl From<HashError> for StateError {
@@ -78,6 +92,12 @@ impl core::fmt::Display for StateError {
             }
             Self::UnsupportedNonceVersion { value } => {
                 write!(formatter, "unsupported nonce_version: {value}")
+            }
+            Self::UnsupportedBalanceVersion { value } => {
+                write!(formatter, "unsupported balance_version: {value}")
+            }
+            Self::UnsupportedAssetVersion { value } => {
+                write!(formatter, "unsupported asset_version: {value}")
             }
         }
     }

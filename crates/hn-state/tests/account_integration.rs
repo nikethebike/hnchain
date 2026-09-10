@@ -1,10 +1,10 @@
 //! End-to-end proof that `hn-crypto`'s address derivation and `hn-state`'s
 //! `hn-smt-256-v1` key derivation / tree math actually compose: derive an
 //! account address, derive its envelope/section/extension state keys,
-//! hash real `EnvelopeValueV1`/`NonceValueV1` leaves plus placeholder
-//! leaves for the sections whose value schema is not yet decided, and
-//! compute a state root — the full path a real state transition would
-//! take for the `accounts` domain.
+//! hash real `EnvelopeValueV1`/`NonceValueV1`/`BalanceValueV1`/
+//! `AssetValueV1` leaves plus placeholder leaves for the sections whose
+//! value schema is not yet decided, and compute a state root — the full
+//! path a real state transition would take for the `accounts` domain.
 //!
 //! Every expected value is cross-checked against an independent Python
 //! oracle, not derived from this crate's own implementation.
@@ -12,9 +12,10 @@
 use hn_core::AccountNonce;
 use hn_crypto::account_address_body;
 use hn_state::{
-    AccountSection, AccountType, EmptyHashTable, EnvelopeValueV1, NonceValueV1, SectionVersionsV1,
-    account_extension_payload_state_key, account_extension_registry_state_key,
-    account_section_state_key, compute_state_root, leaf_hash, value_hash,
+    AccountSection, AccountType, AssetValueV1, BalanceValueV1, EmptyHashTable, EnvelopeValueV1,
+    NonceValueV1, SectionVersionsV1, account_extension_payload_state_key,
+    account_extension_registry_state_key, account_section_state_key, compute_state_root, leaf_hash,
+    value_hash,
 };
 
 const PUBLIC_KEY: [u8; 32] = [
@@ -124,12 +125,20 @@ fn full_account_state_root_matches_independent_oracle() -> TestResult {
     let nonce_vh = value_hash(&nonce.encode())?;
     leaves.push((nonce_key, leaf_hash(&nonce_key, &nonce_vh)?));
 
+    let balance = BalanceValueV1 { native_balance: 0 };
+    let balance_key = account_section_state_key(&account_address, AccountSection::Balance)?;
+    let balance_vh = value_hash(&balance.encode())?;
+    leaves.push((balance_key, leaf_hash(&balance_key, &balance_vh)?));
+
+    let asset = AssetValueV1 { holdings: vec![] };
+    let asset_key = account_section_state_key(&account_address, AccountSection::Asset)?;
+    let asset_vh = value_hash(&asset.encode()?)?;
+    leaves.push((asset_key, leaf_hash(&asset_key, &asset_vh)?));
+
     let placeholder_sections = [
         (AccountSection::Identity, "identity-placeholder-v1"),
-        (AccountSection::Balance, "balance-placeholder-v1"),
         (AccountSection::Permission, "permission-placeholder-v1"),
         (AccountSection::Metadata, "metadata-placeholder-v1"),
-        (AccountSection::Asset, "asset-placeholder-v1"),
         (AccountSection::Lifecycle, "lifecycle-placeholder-v1"),
     ];
     for (section, placeholder) in placeholder_sections {
@@ -151,7 +160,7 @@ fn full_account_state_root_matches_independent_oracle() -> TestResult {
 
     assert_eq!(
         hex(&root),
-        "09aca9e69ce687d017d9121163d74b66a2034eb4952deee1856e223b19369c93"
+        "db461ca8658392a0493085ba2acf3f475c9ff4b151ebb5f5ef4efd28508da840"
     );
 
     Ok(())
