@@ -4,7 +4,6 @@
   "status": "draft",
   "status_meaning": "\"draft\" grades the coverage and curation of this vector set, not the correctness or finality of the hn-smt-256-v1 math it tests: ADR-0005 and ADR-0007 are both Accepted, and every hex value in this file is cross-checked against an independent oracle (see notes), not merely self-consistent with one implementation. A vector set can be \"draft\" while the specification it conforms to is fully Accepted; do not infer that the state tree design is still open from this field.",
   "promote_to_stable_when": [
-    "at least one canonical roots/state_keys vector exercises a non-empty subkey (every vector here currently uses subkey_len = 0, so that HNCS framing path is exercised structurally by the invalid/too-long case only, never with real non-empty data)",
     "ADR-0003 (Address Format) reaches Accepted and object_id_max_len (see hn-state::key::OBJECT_ID_MAX_LEN) is confirmed to still fit every address namespace's final canonical body length",
     "docs/specs/core/state-tree.md references this file as its conformance suite"
   ],
@@ -110,6 +109,16 @@
         "object_id_hex": "1111111111111111111111111111111111111111111111111111111111111111",
         "subkey_hex": "",
         "hex": "1c2f4ef58f7a421f44aed21d4b9db4bbd910b09cc6ade0c862c5de9ad5e86f8d"
+      },
+      {
+        "name": "core-with-nonempty-subkey",
+        "note": "synthetic vector exercising the subkey HNCS framing path with real content; not a real v1 leaf class, since ADR-0007 requires subkey_len = 0 for every leaf class defined by domains accounts/account_extensions today. Exists so this path is covered by more than the oversized-subkey invalid case; see promote_to_stable_when.",
+        "kind": "core",
+        "domain_id": 1,
+        "section_id": 0,
+        "object_id_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+        "subkey_hex": "deadbeef",
+        "hex": "e6e7b6479d7c406392beccc7c3da99eec9b100adf48612d2527a6246ea9aa3c4"
       }
     ],
     "invalid": [
