@@ -6,6 +6,7 @@ use crate::{
     balance_value::BalanceValueV1,
     error::{StateError, StateResult},
     node::{leaf_hash, value_hash},
+    receipt::{ReceiptStatus, ReceiptV1},
     transfer_payload::TransferPayloadV1,
     tree::Leaf,
 };
@@ -46,6 +47,47 @@ pub fn apply_transfer(
     match payload.asset_id {
         None => apply_balance_transfer(sender, recipient, payload.amount),
         Some(asset_id) => apply_asset_transfer(sender, recipient, asset_id, payload.amount),
+    }
+}
+
+/// Applies a `transfer` and produces its [`ReceiptV1`] (ADR-0006,
+/// "Receipts") in one step, so callers building a real write set never
+/// have to reimplement the mapping from [`apply_transfer`]'s result to
+/// a receipt themselves. `tx_id` is the caller-computed transaction ID
+/// (ADR-0006, "Transaction ID") this receipt belongs to.
+///
+/// The expected validation-precondition failures
+/// ([`StateError::InsufficientBalance`], [`StateError::BalanceOverflow`])
+/// are legitimate transaction outcomes, not bugs: they become a
+/// `ReceiptStatus::Failed` receipt with no leaves to write, matching the
+/// already-decided Nonce/Fees rule that a failed execution still
+/// applies (only the payload's own state effects revert — nonce and
+/// fee leaves, outside this function's scope, still update elsewhere).
+/// Any other error — for example [`StateError::Encoding`] failing on a
+/// value this function just constructed — is a real internal error and
+/// is propagated, never folded into a receipt.
+pub fn apply_transfer_with_receipt(
+    sender: &TransferParty,
+    recipient: &TransferParty,
+    payload: &TransferPayloadV1,
+    tx_id: Digest,
+) -> StateResult<(Option<[Leaf; 2]>, ReceiptV1)> {
+    match apply_transfer(sender, recipient, payload) {
+        Ok(leaves) => Ok((
+            Some(leaves),
+            ReceiptV1 {
+                tx_id,
+                status: ReceiptStatus::Success,
+            },
+        )),
+        Err(StateError::InsufficientBalance | StateError::BalanceOverflow) => Ok((
+            None,
+            ReceiptV1 {
+                tx_id,
+                status: ReceiptStatus::Failed,
+            },
+        )),
+        Err(other) => Err(other),
     }
 }
 
@@ -137,8 +179,11 @@ fn asset_leaf(address: &Digest, holdings: Vec<(u16, u128)>) -> StateResult<Leaf>
 
 #[cfg(test)]
 mod tests {
-    use super::{TransferParty, apply_transfer};
-    use crate::{AssetValueV1, BalanceValueV1, StateError, TransferPayloadV1, error::StateResult};
+    use super::{TransferParty, apply_transfer, apply_transfer_with_receipt};
+    use crate::{
+        AssetValueV1, BalanceValueV1, ReceiptStatus, StateError, TransferPayloadV1,
+        error::StateResult,
+    };
 
     const SENDER_ADDRESS: [u8; 32] = [0x11; 32];
     const RECIPIENT_ADDRESS: [u8; 32] = [0x22; 32];
@@ -187,6 +232,44 @@ mod tests {
             apply_transfer(&sender, &recipient, &payload),
             Err(StateError::InsufficientBalance)
         );
+    }
+
+    const TX_ID: [u8; 32] = [0x99; 32];
+
+    #[test]
+    fn successful_transfer_yields_leaves_and_success_receipt() -> StateResult<()> {
+        let sender = party(SENDER_ADDRESS, 1_000, vec![]);
+        let recipient = party(RECIPIENT_ADDRESS, 100, vec![]);
+        let payload = TransferPayloadV1 {
+            recipient: RECIPIENT_ADDRESS,
+            asset_id: None,
+            amount: 300,
+        };
+
+        let (leaves, receipt) = apply_transfer_with_receipt(&sender, &recipient, &payload, TX_ID)?;
+
+        assert!(leaves.is_some());
+        assert_eq!(receipt.tx_id, TX_ID);
+        assert_eq!(receipt.status, ReceiptStatus::Success);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_transfer_yields_no_leaves_and_failed_receipt() -> StateResult<()> {
+        let sender = party(SENDER_ADDRESS, 10, vec![]);
+        let recipient = party(RECIPIENT_ADDRESS, 0, vec![]);
+        let payload = TransferPayloadV1 {
+            recipient: RECIPIENT_ADDRESS,
+            asset_id: None,
+            amount: 11,
+        };
+
+        let (leaves, receipt) = apply_transfer_with_receipt(&sender, &recipient, &payload, TX_ID)?;
+
+        assert!(leaves.is_none());
+        assert_eq!(receipt.tx_id, TX_ID);
+        assert_eq!(receipt.status, ReceiptStatus::Failed);
+        Ok(())
     }
 
     #[test]

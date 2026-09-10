@@ -89,6 +89,19 @@ pub enum StateError {
     /// Applying a `transfer`'s credit side would overflow the
     /// recipient's applicable balance's `u128` range.
     BalanceOverflow,
+    /// A decoded `ReceiptV1.receipt_version` does not match
+    /// [`crate::receipt::RECEIPT_VERSION_1`], the only shape this
+    /// implementation understands.
+    UnsupportedReceiptVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `ReceiptV1.status` byte is not a member of the closed
+    /// `status` registry (ADR-0006, "Receipts").
+    InvalidReceiptStatus {
+        /// The rejected byte.
+        value: u8,
+    },
 }
 
 impl From<HashError> for StateError {
@@ -139,6 +152,12 @@ impl core::fmt::Display for StateError {
             Self::InsufficientBalance => formatter.write_str("insufficient balance for transfer"),
             Self::BalanceOverflow => {
                 formatter.write_str("transfer credit would overflow recipient balance")
+            }
+            Self::UnsupportedReceiptVersion { value } => {
+                write!(formatter, "unsupported receipt_version: {value}")
+            }
+            Self::InvalidReceiptStatus { value } => {
+                write!(formatter, "invalid receipt status: 0x{value:02x}")
             }
         }
     }
