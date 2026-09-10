@@ -4,8 +4,7 @@
   "status": "draft",
   "status_meaning": "\"draft\" grades the coverage and curation of this vector set, not the correctness or finality of the hn-smt-256-v1 math it tests: ADR-0005 and ADR-0007 are both Accepted, and every hex value in this file is cross-checked against an independent oracle (see notes), not merely self-consistent with one implementation. A vector set can be \"draft\" while the specification it conforms to is fully Accepted; do not infer that the state tree design is still open from this field.",
   "promote_to_stable_when": [
-    "ADR-0003 (Address Format) reaches Accepted and object_id_max_len (see hn-state::key::OBJECT_ID_MAX_LEN) is confirmed to still fit every address namespace's final canonical body length",
-    "docs/specs/core/state-tree.md references this file as its conformance suite"
+    "ADR-0003 (Address Format) reaches Accepted and object_id_max_len (see hn-state::key::OBJECT_ID_MAX_LEN) is confirmed to still fit every address namespace's final canonical body length"
   ],
   "depends_on": [
     "hnchain.adr.ADR-0005@accepted",
