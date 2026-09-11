@@ -770,32 +770,43 @@ rules and light-client compatibility analysis.
 Every economic-parameter item below (cap value, bond, epoch length,
 unbonding period) is owned by ADR-0023 (Tokenomics And Economic Model),
 not this ADR — this ADR decides the mechanism each one plugs into, never
-the value itself.
+the value itself. Several are now resolved there.
 
-- `MAX_ACTIVE_SET_SIZE` value (`K`) (derivation mechanism decided above
-  — bounded, top-K by `voting_power` descending; the cap value itself
-  is the remaining parameter — ADR-0023)
+- `MAX_ACTIVE_SET_SIZE` value (`K`) — **resolved, ADR-0023: `K = 100`**
+  (derivation mechanism decided above — bounded, top-K by
+  `voting_power` descending)
 - voting power's *maximum value bound* and zero-power behavior (model,
   capping algorithm, integer type, overflow behavior, and rounding
   behavior all decided above — `u128`, checked arithmetic, floor only;
   a bound below `u128::MAX` and what zero stake/power means for active
-  set membership are the remaining narrower questions — ADR-0023)
-- minimum validator bond (ADR-0023)
-- delegation support (ADR-0023)
-- stake caps (`cap_numerator`/`cap_denominator` value and
-  Sybil-resistance rules — capping algorithm mechanism decided above —
-  ADR-0023)
-- epoch length (transition mechanism decided above; the constant itself
-  is not — ADR-0023)
-- key rotation delay (ADR-0023)
-- unbonding period (distinct from activation/deactivation, which are
-  now decided as a mechanism above — "Decided: admission mechanism" —
-  ADR-0023)
-- jail duration (activation mechanism, timing, reactivation, and key
-  rotation interaction decided — ADR-0015, "Decided: jailing activation
-  mechanism"; only the duration constant remains — ADR-0023)
-- slashing activation (ADR-0015 owns the evidence/jailing mechanism;
-  activation criteria and amounts are ADR-0023)
+  set membership are the remaining narrower questions — ADR-0023, still
+  open)
+- minimum validator bond — still open (ADR-0023: deliberately not
+  fixed to an absolute HNCOIN figure without a stable price estimate;
+  may end up denominated some other way, e.g. as a share of supply)
+- delegation support — **resolved, ADR-0023: supported from genesis**;
+  stake concentration limits still open (no dominant industry practice
+  yet)
+- stake caps — **resolved, ADR-0023: `cap_numerator/cap_denominator =
+  1/10`** (no single validator may exceed 10% of a round's voting
+  power; capping algorithm mechanism decided above)
+- epoch length — still open, specifically blocked on `block_time`
+  (an ADR-0009 consensus-timeout-class tunable, itself not yet decided
+  — transition mechanism is decided above, only the constant, and its
+  own prerequisite, remain)
+- key rotation delay (ADR-0023, still open)
+- unbonding period — **resolved, ADR-0023: 21 days** (distinct from
+  activation/deactivation, which are decided as a mechanism above —
+  "Decided: admission mechanism"; the actual fund-release
+  implementation for `apply_unstake` is separate follow-up work, not
+  yet implemented)
+- jail duration / release condition — **resolved, ADR-0015: no
+  duration at all.** `validator_activate` is valid directly from
+  `Jailed` (not only `Candidate`/`Inactive`) — see ADR-0015's own
+  "Reactivation" text, updated.
+- slashing activation — **resolved, ADR-0023: not activated.**
+  Jailing (already decided, ADR-0015) stays the only active
+  accountability mechanism; monetary slashing amounts remain deferred.
 - validator metadata schema
 - light-client validator set proof format
 - hardware and bandwidth requirements

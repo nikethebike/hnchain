@@ -232,26 +232,31 @@ section's own precondition, jailing is activated now.
   keep signing and contributing to `total_voting_power` for up to a
   full epoch after being caught, undermining jailing's actual
   containment purpose during exactly the window it matters most.
-- **Reactivation.** No special-case rule: jailing's own lifecycle edge
-  already lands on `inactive` (ADR-0010's penalty path,
-  `active → jailed → inactive`), and `inactive → active` already has a
-  mechanism — the same explicit, deliberate `validator_activate`
-  operation ADR-0010's "Decided: admission mechanism" already defined
-  for any not-currently-active validator meeting the minimum bond. A
-  formerly-jailed validator does not silently resume consensus duty the
-  moment a jail condition lapses, for the same reason admission itself
-  is opt-in rather than automatic: the operator should choose when
-  they're ready to accept that exposure again, not have it imposed by a
-  timer alone.
+- **Reactivation — decided: no jail duration, direct from `jailed`.**
+  `validator_activate` is valid directly from `jailed`, not only from
+  `candidate`/`inactive` — there is no intermediate mandatory `inactive`
+  step and no cooldown timer between being jailed and being eligible to
+  reactivate. `jailed` status itself already *is* the penalty
+  (exclusion from signer eligibility and `total_voting_power`, "Timing,"
+  above) — a formerly-jailed validator does not silently resume
+  consensus duty the moment a jail condition lapses, for the same
+  reason admission itself is opt-in rather than automatic: the operator
+  must still take the explicit `validator_activate` step, they are just
+  not additionally forced to wait an arbitrary duration first. Asked
+  the user explicitly (ADR-0023's economic-parameter batch pass) rather
+  than assumed — genuinely two designs (immediate opt-in vs. a minimum
+  cooldown before opt-in becomes available), the former chosen
+  specifically so a validator caught equivocating can reactivate as
+  soon as the operator is willing to accept that exposure again, with
+  no separate numeric constant needed at all.
 - **Key rotation interaction.** None beyond what ADR-0010's own "Key
   Rotation" already specifies — jailing does not add or remove any key
   rotation rule; a jailed validator's keys are neither frozen nor forced
   to rotate by this decision.
-- **What stays open.** The jail *duration* or release condition itself
-  (a tunable constant — same later-batch nature as `unbonding period`,
-  not decided here) and `reward effect` (blocked entirely: no reward
-  mechanism exists anywhere in this project yet, not just unspecified
-  amounts).
+- **What stays open.** `reward effect` only — no reward mechanism
+  exists anywhere in this project yet, not just unspecified amounts.
+  Jail duration itself is now resolved (immediately above): there is
+  none.
 
 **Downtime is explicitly out of scope for this decision.** Not a fresh
 open question so much as already resolved by existing text: "Penalizing
@@ -286,6 +291,13 @@ same document that now owns voting power's exact
 `cap_numerator`/`cap_denominator` and minimum validator bond (ADR-0010)
 — one owning ADR, not a staking/delegation/tokenomics track scattered
 across several.
+
+ADR-0023's own economic-parameter batch pass has since resolved several
+of this list's prerequisites (delegation: supported; unbonding period:
+21 days) without activating slashing itself — resolving a prerequisite
+is not the same as satisfying all of them, and `penalty amounts`,
+`delegator impact`, and `governance limits` remain fully open. Jailing
+stays the only active accountability mechanism.
 
 ## Rejected Options
 
@@ -426,20 +438,21 @@ algorithm migrations.
 
 ## Open Decisions
 
-Economic-value items below (evidence fees, jail duration constant,
-slashing activation/amounts, delegator impact, unbonding interaction,
-correlated failure policy) are owned by ADR-0023 (Tokenomics And
-Economic Model), not this ADR.
+Remaining economic-value items below (slashing activation/amounts,
+delegator impact, correlated failure policy) are owned by ADR-0023
+(Tokenomics And Economic Model), not this ADR. Two items ADR-0023's own
+batch pass already resolved: evidence fees (none — evidence submission
+stays free, to avoid discouraging legitimate reports, matching common
+BFT-network practice) and jail duration (none needed — "Reactivation,"
+above).
 
 - evidence validity window
-- evidence fees (ADR-0023)
-- jail duration / release condition (trigger, timing, reactivation, and
-  key rotation interaction all decided above — "Decided: jailing
-  activation mechanism"; only the duration constant remains — ADR-0023)
-- slashing activation criteria (ADR-0023)
-- slashing amounts (ADR-0023)
+- slashing activation criteria — **resolved, ADR-0023: not activated**
+  (jailing stays the only active accountability mechanism)
+- slashing amounts (ADR-0023, still open — blocked on activation)
 - delegator impact (ADR-0023)
-- unbonding interaction (ADR-0023)
+- unbonding interaction (ADR-0023 — unbonding period itself is now
+  decided, 21 days; its interaction with an evidence window is not)
 - correlated failure policy (ADR-0023)
 - incident response path
 - evidence proof size limits

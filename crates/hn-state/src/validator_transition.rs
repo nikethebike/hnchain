@@ -137,10 +137,10 @@ pub fn apply_unstake_with_receipt(
 ///   ([`ValidatorAlreadyRegistered`](StateError::ValidatorAlreadyRegistered)
 ///   otherwise). Creates a new record: `validator_id = sender`,
 ///   `bonded_stake = 0`, `voting_power = 0`, `status = Registered`.
-/// - `Activate`: `Candidate` or `Inactive` → `Active` — the latter is
-///   the jailing-release reactivation path (ADR-0015, "Decided: jailing
-///   activation mechanism": "reuses the already-decided
-///   `validator_activate` operation... from `inactive`").
+/// - `Activate`: `Candidate`, `Inactive`, or `Jailed` → `Active`. The
+///   `Jailed` case is the jailing-release reactivation path (ADR-0015,
+///   "Reactivation" — no jail duration or cooldown: `Jailed` reactivates
+///   directly, with no mandatory intermediate `Inactive` step).
 /// - `Deactivate`: `Active` → `Inactive`.
 /// - `Exit`: `Inactive` → `Exited` — the lifecycle diagram's only
 ///   `exited` edge (ADR-0010); a `Candidate`/`Registered` validator
@@ -183,7 +183,11 @@ pub fn apply_validator_update(
             let record = require_record(existing, sender)?;
             require_status(
                 record,
-                &[ValidatorStatus::Candidate, ValidatorStatus::Inactive],
+                &[
+                    ValidatorStatus::Candidate,
+                    ValidatorStatus::Inactive,
+                    ValidatorStatus::Jailed,
+                ],
                 payload.operation,
             )?;
             ValidatorRecordV1 {
@@ -453,12 +457,16 @@ mod tests {
     }
 
     #[test]
-    fn activate_succeeds_from_candidate_and_inactive() -> StateResult<()> {
+    fn activate_succeeds_from_candidate_inactive_and_jailed() -> StateResult<()> {
         let payload = ValidatorUpdatePayloadV1 {
             operation: ValidatorOperation::Activate,
             new_consensus_key: None,
         };
-        for status in [ValidatorStatus::Candidate, ValidatorStatus::Inactive] {
+        for status in [
+            ValidatorStatus::Candidate,
+            ValidatorStatus::Inactive,
+            ValidatorStatus::Jailed,
+        ] {
             let existing = record(0, 0, status);
             let [leaf] = apply_validator_update(Some(&existing), SENDER, &payload)?;
             let expected = ValidatorRecordV1 {

@@ -388,19 +388,26 @@ consensus-critical once this ADR reaches Accepted status.
 
 ## Open Decisions
 
+Two items this ADR originally left open are now resolved by ADR-0023's
+own economic-parameter batch pass, not by this ADR: HNCOIN's atomic
+unit/decimals (**resolved: `DECIMALS = 9`, atomic unit `hnit`** — ADR-
+0023, "Decided: HNCOIN Decimals And Atomic Unit"), fee burn ratio /
+validator fee distribution split (**resolved: 70% validator / 30%
+burn** — ADR-0023, "Decided: Validator Reward / Fee Distribution"), and
+protocol treasury funding (**resolved: none — the Liquidity &
+Ecosystem Reserve already covers this role** — ADR-0023, "Decided: No
+Protocol Treasury"). This ADR's own text is not amended to restate
+those values, per ADR-0023's own "One Owning Document" rule.
+
 Deliberately not decided by this ADR (owned elsewhere, or genuinely
 separate follow-up work):
 
-- fee amount/market model, fee burn ratio, validator fee distribution
-  split (ADR-0023 — mechanism decided, ADR-0006; amount open)
+- the fixed fee rate itself and minimum fee floor (ADR-0023 — model
+  decided there, "Decided: Fee Model For `tx_version = 1`"; the amount
+  is not)
 - burn's concrete `tx_type`/wire mechanism (this ADR decides the
   invariant burn must satisfy; ADR-0006's `tx_type` registry has no
   `burn` entry yet)
-- HNCOIN's atomic unit / decimal convention for `native_balance: u128`
-  (ADR-0001) — this ADR's amounts are whole-HNCOIN figures; whether
-  `native_balance` counts whole HNCOIN or a smaller atomic unit (the
-  wei/satoshi pattern) is undecided and does not affect this ADR's
-  supply invariants either way
 - genesis allocation account key material, multisignature
   configuration, hardware-wallet requirements, timelocks, and Founder
   allocation vesting schedule (genesis-security specification, not yet
@@ -411,9 +418,6 @@ separate follow-up work):
 - supply accounting mechanism (explicit running counter vs.
   reconstructed by summing account balances — an ADR-0007
   implementation-specification choice, not a monetary-policy one)
-- protocol treasury (whitepaper §12.6, "Development Funding") funding
-  mechanism — a distinct, still fully open concept from this ADR's
-  Liquidity & Ecosystem Reserve (see "Consistency With ADR-0003," above)
 
 ## Related Specifications
 
