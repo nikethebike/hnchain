@@ -44,14 +44,24 @@
 //! concrete `hn_crypto::SignatureEnvelope` (ADR-0002), not raw bounded
 //! bytes. [`validator_record`] adds `ValidatorRecordV1` (ADR-0010,
 //! deliberately narrower than the full conceptual struct — see its own
-//! documentation), and [`active_set`] adds the `ACTIVE_SET(epoch)`
-//! derivation function and the live not-jailed overlay check
-//! (ADR-0010/ADR-0015) — together, the active-set query interface
+//! documentation), [`validator`] adds the `validators` domain's own
+//! key derivation ([`validator_section_state_key`], mirroring
+//! [`account_section_state_key`]'s role for the `accounts` domain, ADR-0007
+//! domain `0x0006`) — the concrete, real gap validators had that accounts
+//! did not, and [`active_set`] adds the `ACTIVE_SET(epoch)` derivation
+//! function and the live not-jailed overlay check (ADR-0010/ADR-0015).
+//! Together these are the active-set query interface
 //! `QuorumCertificate::decode`'s own documentation flags as still
-//! missing. Real signature *verification* and full quorum-satisfaction
+//! missing — deliberately as storage-agnostic pure functions taking an
+//! already-fetched candidate slice, the same boundary this crate's own
+//! charter draws everywhere else, not a new `StateReader`-style trait:
+//! `hn-storage` remains a genuine empty stub with no real backend or
+//! caller to design a storage-access abstraction against yet, and
+//! inventing one now would be speculative architecture ahead of any real
+//! need. Real signature *verification* and full quorum-satisfaction
 //! checking, which need a resolved `KeyDescriptor` per signer
 //! (`SignatureEnvelope::verify` takes one rather than looking it up) and
-//! a storage-backed way to fetch `candidates` at a given height, remain
+//! an actual storage engine behind these key-derivation functions, remain
 //! out of scope for this crate.
 
 mod access_list;
@@ -74,6 +84,7 @@ mod transfer;
 mod transfer_payload;
 mod tree;
 mod tx_id;
+mod validator;
 mod validator_digest;
 mod validator_record;
 mod validity_window;
@@ -103,6 +114,7 @@ pub use transfer::{TransferParty, apply_transfer, apply_transfer_with_receipt};
 pub use transfer_payload::{TRANSFER_PAYLOAD_VERSION_1, TransferPayloadV1};
 pub use tree::{Leaf, compute_state_root};
 pub use tx_id::tx_id;
+pub use validator::{DOMAIN_VALIDATORS, ValidatorSection, validator_section_state_key};
 pub use validator_digest::validator_digest;
 pub use validator_record::{RECORD_VERSION_1, ValidatorRecordV1, ValidatorStatus};
 pub use validity_window::ValidityWindowV1;

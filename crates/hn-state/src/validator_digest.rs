@@ -8,11 +8,12 @@ use crate::error::StateResult;
 /// `HASH_PROFILE_0x0001("hnchain.validator.record.v1", HNCS(ValidatorRecordV1))`
 ///
 /// `record_bytes` is expected to already be the canonical HNCS encoding
-/// of `ValidatorRecordV1`; this crate does not define a concrete
-/// `ValidatorRecordV1` schema (several of its fields, such as
-/// `voting_power`'s integer width, are not decided yet), matching how
+/// of [`crate::ValidatorRecordV1`] (`ValidatorRecordV1::encode()`'s
+/// output) — this function still treats it as opaque bytes rather than
+/// taking a `&ValidatorRecordV1` directly, matching how
 /// [`crate::block_hash`] and [`crate::tx_id`] treat their own input as
-/// already-canonical bytes rather than defining the schema itself.
+/// already-canonical bytes rather than defining/consuming the schema
+/// itself.
 ///
 /// Callers combine these digests, sorted by ascending `validator_id`,
 /// into `validators_root` via [`crate::list_merkle_root`].
