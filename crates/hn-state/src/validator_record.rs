@@ -55,7 +55,7 @@ impl ValidatorStatus {
         }
     }
 
-    const fn as_u8(self) -> u8 {
+    pub(crate) const fn as_u8(self) -> u8 {
         self as u8
     }
 }
@@ -87,12 +87,22 @@ impl ValidatorStatus {
 pub struct ValidatorRecordV1 {
     /// A stable protocol identifier, independent of `consensus_key`
     /// (ADR-0012, "Decided: `validator_id` width, not its exact
-    /// derivation" — width only, `bytes32`, is decided).
+    /// derivation"; ADR-0010, "Decided: `validator_id` derivation" —
+    /// the controlling account's own `address_body`).
     pub validator_id: Digest,
     /// The validator's `validator_consensus` signing key (ADR-0002).
     pub consensus_key: KeyDescriptor,
-    /// Capped bonded stake (ADR-0010, "Decided: capped stake-weighted
+    /// Raw bonded stake (ADR-0010, "Decided: `bonded_stake`, distinct
+    /// from `voting_power`") — mutated directly by `stake`/`unstake`
+    /// (ADR-0006). Distinct from `voting_power`: the capping algorithm
+    /// computes `voting_power` from the *entire* candidate set's
+    /// `bonded_stake` total, so it cannot be recomputed synchronously
+    /// inside a single validator's own stake change.
+    pub bonded_stake: u128,
+    /// Capped voting power (ADR-0010, "Decided: capped stake-weighted
     /// voting power" / "Decided: voting power integer type — `u128`").
+    /// Changed only by the capping algorithm's own full-candidate-set
+    /// recomputation, never directly by a transaction.
     pub voting_power: u128,
     /// Lifecycle status (ADR-0010, "Validator Status").
     pub status: ValidatorStatus,
@@ -148,6 +158,7 @@ impl ValidatorRecordV1 {
         write_u16(&mut out, RECORD_VERSION_1);
         write_fixed_bytes(&mut out, &self.validator_id);
         encode_key_descriptor(&mut out, &self.consensus_key).map_err(StateError::Encoding)?;
+        write_u128(&mut out, self.bonded_stake);
         write_u128(&mut out, self.voting_power);
         write_u8(&mut out, self.status.as_u8());
         Ok(out)
@@ -169,6 +180,7 @@ impl ValidatorRecordV1 {
             .read_fixed_bytes::<32>()
             .map_err(StateError::Encoding)?;
         let consensus_key = decode_key_descriptor(&mut decoder)?;
+        let bonded_stake = decoder.read_u128().map_err(StateError::Encoding)?;
         let voting_power = decoder.read_u128().map_err(StateError::Encoding)?;
         let status = ValidatorStatus::from_u8(decoder.read_u8().map_err(StateError::Encoding)?)?;
 
@@ -177,6 +189,7 @@ impl ValidatorRecordV1 {
         Ok(Self {
             validator_id,
             consensus_key,
+            bonded_stake,
             voting_power,
             status,
         })
@@ -208,6 +221,7 @@ mod tests {
                 PUBLIC_KEY,
             )
             .map_err(StateError::InvalidConsensusKey)?,
+            bonded_stake: 2_000_000,
             voting_power: 1_000_000,
             status: ValidatorStatus::Active,
         })
@@ -217,7 +231,7 @@ mod tests {
     fn encodes_matching_independent_oracle() -> StateResult<()> {
         assert_eq!(
             hex(&sample()?.encode()?),
-            "01004444444444444444444444444444444444444444444444444444444444444444010020000000d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c977873740420f0000000000000000000000000003"
+            "01004444444444444444444444444444444444444444444444444444444444444444010020000000d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c977873780841e0000000000000000000000000040420f0000000000000000000000000003"
         );
         Ok(())
     }

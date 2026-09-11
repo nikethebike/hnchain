@@ -57,6 +57,10 @@ fn validator(
     ValidatorRecordV1 {
         validator_id,
         consensus_key: keypair.key_descriptor(),
+        // Equal to voting_power, matching hn-state's own
+        // validator_integration.rs — this test isn't about
+        // bonded_stake's own distinction from voting_power.
+        bonded_stake: voting_power,
         voting_power,
         status,
     }
@@ -102,7 +106,7 @@ fn store_round_trip_matches_hand_built_state_root() -> TestResult {
     // hand-assembled).
     assert_eq!(
         hex(&root),
-        "7511e0300eba66f8461468e17275b4f337fa6b9ff77b521b25f7f10b96c3b9f2"
+        "13fd1da2fa6eddf6ff6641f448572c3b421cc5b7cc2d1ef7f4ab58691423d35a"
     );
 
     Ok(())

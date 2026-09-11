@@ -147,6 +147,10 @@ mod tests {
                 PUBLIC_KEY,
             )
             .map_err(StateError::InvalidConsensusKey)?,
+            // Irrelevant to what these tests exercise (ranking/
+            // eligibility by voting_power/status) — set equal to
+            // voting_power for a reasonable default.
+            bonded_stake: voting_power,
             voting_power,
             status,
         })

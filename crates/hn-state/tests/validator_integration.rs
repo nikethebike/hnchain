@@ -33,6 +33,12 @@ fn validator(
     ValidatorRecordV1 {
         validator_id,
         consensus_key: keypair.key_descriptor(),
+        // Equal to voting_power here: this test exercises state-tree/
+        // active-set composition, not bonded_stake's own independence
+        // from voting_power (see validator_record.rs's unit tests and
+        // ADR-0010, "Decided: `bonded_stake`, distinct from
+        // `voting_power`" for that distinction).
+        bonded_stake: voting_power,
         voting_power,
         status,
     }
@@ -87,7 +93,7 @@ fn validator_records_derive_expected_state_keys_and_root() -> TestResult {
     let root = compute_state_root(&leaves, &empty_table)?;
     assert_eq!(
         hex(&root),
-        "7511e0300eba66f8461468e17275b4f337fa6b9ff77b521b25f7f10b96c3b9f2"
+        "13fd1da2fa6eddf6ff6641f448572c3b421cc5b7cc2d1ef7f4ab58691423d35a"
     );
 
     Ok(())
@@ -134,7 +140,7 @@ fn active_set_and_jailing_overlay_compose_with_real_records() -> TestResult {
     let validators_root = list_merkle_root(&digests)?;
     assert_eq!(
         hex(&validators_root),
-        "d8f5ee5a352998da01b94a0fc4da0dc8886da896c48c44fed5384d1760247d38"
+        "535e69dad146c5bbf7f9cf36777ea9db2eed03c866d775e7e8664a8cd4ecec3d"
     );
 
     Ok(())

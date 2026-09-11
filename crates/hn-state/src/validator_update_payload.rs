@@ -54,7 +54,7 @@ impl ValidatorOperation {
         }
     }
 
-    const fn as_u8(self) -> u8 {
+    pub(crate) const fn as_u8(self) -> u8 {
         self as u8
     }
 

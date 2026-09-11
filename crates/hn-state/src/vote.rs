@@ -878,6 +878,7 @@ mod tests {
         let record = ValidatorRecordV1 {
             validator_id,
             consensus_key: keypair.key_descriptor(),
+            bonded_stake: voting_power,
             voting_power,
             status,
         };
@@ -1022,6 +1023,7 @@ mod tests {
             let record = ValidatorRecordV1 {
                 validator_id,
                 consensus_key: keypair.key_descriptor(),
+                bonded_stake: 100,
                 voting_power: 100,
                 status: ValidatorStatus::Active,
             };

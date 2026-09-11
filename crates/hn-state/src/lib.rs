@@ -99,14 +99,22 @@
 //! `ValidatorUpdatePayloadV1`, both of which carry a `KeyDescriptor` on
 //! the wire the same way.
 //!
+//! [`validator_transition`] adds `apply_stake`/`apply_unstake`/
+//! `apply_validator_update`, mirroring `apply_transfer`'s own split
+//! between codec ([`stake_payload`]/[`unstake_payload`]/
+//! [`validator_update_payload`]) and state transition: `stake`/
+//! `unstake` mutate `bonded_stake` directly via checked arithmetic
+//! (never `voting_power`, which only the capping algorithm's own
+//! full-candidate-set recomputation may change — still not implemented
+//! anywhere in this crate); `validator_update` is a five-way match over
+//! `ValidatorOperation` enforcing the lifecycle diagram's own status
+//! preconditions (ADR-0010), with `register` the only operation that
+//! creates a `ValidatorRecordV1` rather than mutating an existing one.
+//!
 //! A real durable storage backend (`hn-storage`'s own "initial storage
 //! backend" choice, ADR-0019, still open — an in-memory `StateReader`/
 //! `StateWriter` implementation proves the trait boundary, not a
-//! persistence guarantee) and the `stake`/`unstake`/`validator_update`
-//! *state transitions* (decoding a payload is this crate's concern the
-//! same way `apply_transfer` is separate from `TransferPayloadV1`;
-//! applying one is not yet implemented) remain out of scope for this
-//! crate.
+//! persistence guarantee) remains out of scope for this crate.
 
 mod access_list;
 mod account;
@@ -134,6 +142,7 @@ mod unstake_payload;
 mod validator;
 mod validator_digest;
 mod validator_record;
+mod validator_transition;
 mod validator_update_payload;
 mod validity_window;
 mod vote;
@@ -168,6 +177,10 @@ pub use unstake_payload::{UNSTAKE_PAYLOAD_VERSION_1, UnstakePayloadV1};
 pub use validator::{DOMAIN_VALIDATORS, ValidatorSection, validator_section_state_key};
 pub use validator_digest::validator_digest;
 pub use validator_record::{RECORD_VERSION_1, ValidatorRecordV1, ValidatorStatus};
+pub use validator_transition::{
+    apply_stake, apply_stake_with_receipt, apply_unstake, apply_unstake_with_receipt,
+    apply_validator_update, apply_validator_update_with_receipt,
+};
 pub use validator_update_payload::{
     VALIDATOR_UPDATE_PAYLOAD_VERSION_1, ValidatorOperation, ValidatorUpdatePayloadV1,
 };

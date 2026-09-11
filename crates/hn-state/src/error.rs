@@ -231,6 +231,27 @@ pub enum StateError {
     /// otherwise (ADR-0006, "Decided: `stake`/`unstake`/
     /// `validator_update` payload shapes").
     ValidatorUpdateKeyPresenceMismatch,
+    /// Applying a `stake` would overflow the target `ValidatorRecordV1.
+    /// bonded_stake`'s `u128` range.
+    BondedStakeOverflow,
+    /// A `stake`/`unstake` (ADR-0006, "Payload") would debit more than
+    /// the target's current `bonded_stake` — the validation
+    /// precondition "`bonded_stake` must be at least `amount`" failed.
+    InsufficientBondedStake,
+    /// A `validator_update { operation: register }` named a `sender`
+    /// that already has a `ValidatorRecordV1` — `register` creates a
+    /// new record, it does not update an existing one.
+    ValidatorAlreadyRegistered,
+    /// A `validator_update` operation is not valid from the target
+    /// `ValidatorRecordV1`'s current `status` (for example `activate`
+    /// on an already-`Active` record, or `exit` on anything but
+    /// `Inactive`).
+    InvalidValidatorStatusTransition {
+        /// The record's current status byte.
+        status: u8,
+        /// The attempted operation byte.
+        operation: u8,
+    },
 }
 
 impl From<HashError> for StateError {
@@ -359,6 +380,17 @@ impl core::fmt::Display for StateError {
             }
             Self::ValidatorUpdateKeyPresenceMismatch => formatter
                 .write_str("new_consensus_key presence does not match validator_update operation"),
+            Self::BondedStakeOverflow => formatter.write_str("stake would overflow bonded_stake"),
+            Self::InsufficientBondedStake => {
+                formatter.write_str("insufficient bonded_stake for unstake")
+            }
+            Self::ValidatorAlreadyRegistered => {
+                formatter.write_str("validator_update register: sender already has a record")
+            }
+            Self::InvalidValidatorStatusTransition { status, operation } => write!(
+                formatter,
+                "validator_update operation 0x{operation:02x} is invalid from status 0x{status:02x}"
+            ),
         }
     }
 }
