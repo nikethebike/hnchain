@@ -39,6 +39,7 @@ docs/
     ADR-0021-rust-workspace-policy.md
     ADR-0022-protocol-versioning.md
     ADR-0023-tokenomics-and-economic-model.md
+    ADR-0024-hncoin-monetary-policy.md
 
   specs/
     core/

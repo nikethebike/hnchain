@@ -15,9 +15,15 @@ It defines the purpose of the genesis message, the genesis manifest, document
 commitments, and security requirements.
 
 This document does not define the final block header format, final hash
-algorithm, final serialization encoding, genesis allocation, validator set, or
-state tree structure. The final relationship between genesis data and the normal
+algorithm, final serialization encoding, validator set, or state tree
+structure. The final relationship between genesis data and the normal
 block envelope is defined by the block format specification.
+
+HNCOIN's genesis allocation (total supply, and the amount held by each
+of the three genesis accounts) is decided by
+`docs/adr/ADR-0024-hncoin-monetary-policy.md` — this document does not
+redefine those amounts, only how genesis data as a whole is
+constructed and committed.
 
 This specification is constrained by:
 

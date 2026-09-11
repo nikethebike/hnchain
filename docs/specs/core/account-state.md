@@ -240,9 +240,10 @@ Fields:
   in ADR-0007). `u128`, not `u64`, is a storage-width decision only:
   headroom against intermediate-computation overflow (fee/reward
   multiplication and similar), not a supply, allocation, or fee decision —
-  those remain owned by ADR-0023 (Tokenomics And Economic Model) and are
-  not decided by this schema; this section does not assume or encode any
-  particular initial balance.
+  supply and genesis allocation are owned by ADR-0024 (HNCOIN Monetary
+  Policy), fee amounts by ADR-0023 (Tokenomics And Economic Model), and
+  neither is decided by this schema; this section does not itself assign
+  any particular initial balance to any account.
 
 ### 4.4 Nonce State
 

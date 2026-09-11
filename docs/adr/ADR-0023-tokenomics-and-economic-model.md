@@ -18,6 +18,12 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0024: HNCOIN Monetary Policy (resolves the "Monetary policy" and
+  "Genesis allocation" areas below — a focused sub-ADR under this one's
+  umbrella, the same relationship ADR-0011/ADR-0015 have to ADR-0009)
+
 ## Context
 
 Every economic or monetary parameter in this project — genesis supply,
@@ -57,11 +63,14 @@ format, ADR-0006's transaction format, the consensus track itself).
 Every value this ADR eventually decides is subject to the project's own
 standing constraint: no economic or monetary parameter — including an
 explicit zero — may be encoded in implementation before being accepted
-here. Values already floated in the whitepaper (a 100,000,000 HNC
-maximum supply target, a 70%/30% validator/burn fee split, 0% annual
-inflation) are candidates the whitepaper itself already marks as **not
-accepted** — carried into this ADR as starting points for discussion,
-not as decisions.
+here. Values the whitepaper floated as illustrative and explicitly
+**not accepted** (a 100,000,000 HNC maximum supply target, 0% annual
+inflation) are superseded by ADR-0024's own different, now-accepted
+numbers (a 1,000,000,000 HNCOIN maximum supply; 0% inflation confirmed,
+but as a decided value, not an illustrative one). The whitepaper's other
+still-unaccepted candidate, a 70%/30% validator/burn fee split, remains
+exactly that — a candidate, not a decision — under this ADR's own Fees
+area, below.
 
 ## Decision
 
@@ -70,11 +79,14 @@ incrementally, across the following areas — mirroring the whitepaper's
 own Chapter XIII structure so every whitepaper-flagged open item has a
 home here:
 
-- **Monetary policy**: maximum supply (fixed vs. open-ended), initial
-  distribution mechanism, emission/inflation schedule.
-- **Genesis allocation**: how the initial supply (if any is pre-minted
-  rather than earned) is split across founders/team, community,
-  ecosystem, treasury, and validators — vesting, if any.
+- **Monetary policy** — **Decided, ADR-0024**: fixed `1,000,000,000
+  HNCOIN` maximum supply, created entirely at genesis, no post-genesis
+  minting, 0% inflation, no halving (nothing to halve).
+- **Genesis allocation** — **Decided, ADR-0024**: three genesis
+  accounts — Liquidity & Ecosystem Reserve (80%), Founder (10%),
+  Community & Airdrop (10%). Key material, multisig, vesting, and
+  spending-authorization detail for those three accounts remain open
+  (ADR-0024's own Open Decisions).
 - **Fee economics**: the amount/market model on top of ADR-0006's
   already-decided mechanism — base fee or congestion pricing, priority
   fees, minimum fee floor, burn ratio, validator distribution, storage
@@ -91,12 +103,16 @@ home here:
   `1 HNC = 1 vote` by default, per the whitepaper's own rejection of
   that as a default principle).
 
-No value in any of these areas is decided by this initial version of
-the ADR. Status stays `Proposed` until a meaningful subset is actually
-accepted; unlike most other ADRs in this project, this one is expected
-to be amended repeatedly over many sessions as each area is worked, the
-same way ADR-0006/ADR-0009/ADR-0010 were each built up decision by
-decision rather than written complete on day one.
+No value in any of these areas was decided by this ADR's initial
+version; monetary policy and genesis allocation are now decided, via
+ADR-0024, a focused sub-ADR rather than an edit to this document
+(mirroring ADR-0009's own relationship to ADR-0010/ADR-0011/ADR-0015).
+The remaining five areas are still open. Status stays `Proposed` until
+a meaningful subset is directly accepted here; unlike most other ADRs
+in this project, this one is expected to be amended repeatedly over
+many sessions as each area is worked, the same way ADR-0006/ADR-0009/
+ADR-0010 were each built up decision by decision rather than written
+complete on day one.
 
 ## Normative Rules
 
@@ -162,7 +178,7 @@ to prevent.
 
 ## Alternatives Considered
 
-### Fixed Maximum Supply, No Continuing Emission
+### Fixed Maximum Supply, No Continuing Emission (Selected — ADR-0024)
 
 Advantages:
 
@@ -172,10 +188,12 @@ Advantages:
 Disadvantages:
 
 - long-term validator security budget depends entirely on fees once
-  genesis allocation is exhausted
+  genesis allocation is exhausted — resolved by ADR-0024's own
+  decision to fund validator rewards from transaction fees, not
+  emission
 - no emission-funded treasury or ongoing security subsidy
 
-### Continuing Emission (Inflationary Issuance)
+### Continuing Emission (Inflationary Issuance) (Rejected — ADR-0024)
 
 Advantages:
 
@@ -207,8 +225,9 @@ Validator security budget:
 - Risk: a fixed supply with no emission, combined with fees too low to
   fund security, leaves validators economically unable to secure the
   network long-term.
-- Mitigation: economic modeling and simulation before accepting a
-  monetary policy without a continuing security subsidy.
+- Mitigation: ADR-0024 already resolves the *mechanism* (fee-funded,
+  never emission-funded); economic modeling of the fee *amount* itself
+  is still required before this ADR's own Fees area is accepted.
 
 Wealth-concentration governance capture:
 
@@ -244,13 +263,13 @@ event — it defines genesis, rather than changing it.
 
 ## Open Decisions
 
-Genesis supply and allocation:
-
-- maximum supply (fixed forever vs. some other policy)
-- genesis allocation split (founders/team, community, ecosystem,
-  treasury, validators) and vesting, if any
-- long-term security budget mechanism once/if genesis allocation is
-  exhausted
+Genesis supply and allocation — **resolved, see ADR-0024** (maximum
+supply, the three allocation amounts, no-post-genesis-mint, 0%
+inflation, no halving, and the fee-funded-rewards security-budget
+mechanism are all decided there). What ADR-0024 itself leaves open:
+genesis allocation account key material/multisig/vesting, the
+Community & Airdrop distribution schedule, and Liquidity & Ecosystem
+Reserve spending authorization — see ADR-0024's own Open Decisions.
 
 Fees (mechanism decided, ADR-0006 — amounts and policy open here):
 
@@ -287,7 +306,10 @@ Slashing economics (evidence/jailing mechanism decided, ADR-0015):
 - downtime penalty policy (if any — evidence-based equivocation
   jailing is already decided and does not depend on this)
 
-Treasury and development funding:
+Treasury and development funding — distinct from ADR-0024's Liquidity &
+Ecosystem Reserve (an ordinary funded account, decided) and from the
+already-decided but still-unfunded `treasury` protocol object
+(ADR-0007, `system` domain `0x0009`, keyless):
 
 - mechanism (genesis allocation with vesting, ongoing fee share,
   grants, ecosystem fund, or none)
@@ -311,3 +333,4 @@ Other:
 
 - `docs/whitepaper/HNChain-Whitepaper-v0.1-draft.md` (Chapter XIII,
   "Economic Model")
+- `docs/adr/ADR-0024-hncoin-monetary-policy.md`
