@@ -445,10 +445,12 @@ explicit migration planning.
 ## Open Decisions
 
 - active validator set selection
-- voting power parameters (model decided — ADR-0010, "Decided: capped
-  stake-weighted voting power"; integer width, cap value, and the
-  capping algorithm's mechanics are not)
-- signature aggregation scheme
+- voting power parameters (model and capping algorithm mechanism
+  decided — ADR-0010, "Decided: capped stake-weighted voting power" /
+  "Decided: capping algorithm"; integer width and cap value are not)
+- quorum certificate signer commitment representation and integer
+  width dependency (signature aggregation scheme decided — ADR-0012,
+  "Decided: individual signatures with bitmap")
 - timeout and view-change *durations* (mechanism decided above —
   ADR-0009, "Timeout And View Change"; the exact base timeout and
   backoff formula are not)

@@ -42,7 +42,8 @@ This RFC does not define:
 - final consensus protocol
 - final active vote type registry
 - final quorum threshold formula
-- final signature aggregation scheme
+- final signer commitment bit-level encoding (aggregation profile
+  itself is decided — §9)
 - final slashing penalties
 - final checkpoint interval
 
@@ -231,12 +232,17 @@ merkle_signer_root
 aggregate_signature_metadata
 ```
 
+**Decided** (ADR-0012, "Decided: individual signatures with bitmap"):
+`bitmap` over the active validator set — `sorted_validator_ids` and
+`merkle_signer_root` would each be larger than a fixed-width bitmap for a
+modest active set with no compensating benefit, and
+`aggregate_signature_metadata` is specific to an aggregate scheme this
+profile does not use. Exact bit ordering and width still open (§15).
+
 The accepted representation must define canonical ordering and malformed input
 rejection.
 
 ## 9. Aggregation Profiles
-
-Final aggregation profiles are open.
 
 Candidate profiles:
 
@@ -246,6 +252,17 @@ batch_verified_signatures
 bls_aggregate
 threshold_signature
 ```
+
+**Decided** (ADR-0012, "Decided: individual signatures with bitmap"):
+`individual_signatures` — each signer's Ed25519 signature verifies on its
+own against `validator_consensus` (ADR-0002, Accepted, Ed25519-only at
+genesis; BLS is not even reserved there, and threshold's validator-churn
+cost collides with ADR-0010's already-decided epoch-based active-set
+rotation). `batch_verified_signatures` remains available later purely as a
+verification-time optimization layered on `individual_signatures`, not a
+distinct wire format — it stays open (§15) as its own independent decision.
+`bls_aggregate`/`threshold_signature` are not chosen for this profile;
+revisiting either would need its own future ADR-0002 amendment.
 
 Every aggregation profile must define:
 
@@ -344,9 +361,12 @@ Test vectors are mandatory before production implementation.
 - final vote type registry
 - final target type registry
 - final quorum threshold formula
-- final quorum certificate schema
-- final signer commitment format
-- final aggregation profile
+- final quorum certificate schema (aggregation profile decided; see
+  §9 — signer commitment bit-level encoding and voting power integer
+  width still block a concrete schema)
+- final signer commitment bit-level encoding (kind decided; see §8)
+- final batch verification rules (independent optimization layer, not
+  a competing aggregation profile; see §9)
 - final vote signing hash profile
 - final evidence conflict rules
 - final light-client proof format

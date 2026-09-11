@@ -78,9 +78,40 @@ QuorumCertificate
   aggregate_proof
 ```
 
-The final signature aggregation scheme is open. Candidate approaches include
-individual signatures with bitmaps, batch verification, BLS aggregation, and
-threshold signatures.
+**Decided: individual signatures with bitmap.** Asked the user first — same
+weight as the consensus family and voting power model choices, per the
+user's own framing: the final QuorumCertificate shape hinges on it, and it
+was deliberately left undecided (not guessed) while implementing
+`ConsensusVote`.
+
+Checked against ADR-0002 (Cryptographic Identity, Accepted) before treating
+this as a free three-way choice, and found it narrows sharply: ADR-0002's
+"Accepted Initial Direction" already fixes `validator_consensus` to
+Ed25519 as "the primary and only active consensus signing suite" at
+genesis — BLS isn't even in the reserved-but-inactive list (secp256k1,
+Ed448, ML-DSA, SLH-DSA are). BLS-style pairing aggregation does not work
+on Ed25519 signatures at all; taking it would mean reopening an Accepted
+ADR to activate a new genesis algorithm, directly against that ADR's own
+stated rationale ("minimizes the active consensus surface"). Threshold
+signatures could in principle stay Ed25519-compatible (e.g. FROST), but
+this ADR's own Alternatives Considered already names "harder validator
+churn" as threshold's disadvantage — and validator churn is not
+hypothetical here: ADR-0010's already-decided epoch-based active-set
+rotation changes the set every epoch, which would force threshold
+resharing on a cadence the protocol already committed to.
+
+`QuorumCertificate.aggregate_proof` is a list of individual Ed25519
+signatures, one per signer, `signer_commitment` a bitmap over the active
+set identifying which validators signed. No new signing algorithm, no new
+dependency; batch verification (verifying many Ed25519 signatures faster)
+remains available as a pure implementation-level optimization on top of
+this format later — it does not require a different certificate structure,
+so it is not a competing branch (Alternatives Considered, below). Certificate
+size is `O(n)` in active set size, acceptable while ADR-0010's "initial
+active validator set size policy" (still open) stays modest; revisiting
+aggregation later, if the active set grows large, would need its own
+ADR-0002 amendment at that time, not a decision made now against an
+unknown target size.
 
 ## Normative Rules
 
@@ -336,8 +367,11 @@ uses.
 
 The certificate must commit to the signer set.
 
-The commitment may be represented by a canonical bitmap, sorted signer list,
-Merkle root, aggregate signature metadata, or another specified format.
+The commitment is a bitmap over the active validator set (Decision, above —
+"individual signatures with bitmap"), not an aggregate-signature-derived
+representation. The exact bitmap encoding (bit ordering against the active
+set, fixed vs. variable width) remains open, below — this decision fixes
+the commitment's *kind*, not its byte-level layout.
 
 The final representation must support deterministic verification and malformed
 signer rejection.
@@ -345,6 +379,12 @@ signer rejection.
 ### Aggregation
 
 Signature aggregation is an optimization, not a hidden consensus rule.
+
+No signature-level aggregation is performed under the decided scheme
+(Decision, above): verification checks each individual Ed25519 signature
+named by the signer bitmap. "Aggregation" in this profile refers only to
+possible future verification-time batching, never to a change in what the
+certificate carries.
 
 The certificate must define enough data to verify:
 
@@ -410,6 +450,12 @@ Disadvantages:
 - more verification work
 - less efficient for large validator sets
 
+**Selected** (Decision, above). Directly compatible with ADR-0002's
+Accepted, Ed25519-only `validator_consensus` suite — the only candidate
+here that requires no change to an already-Accepted document. Its
+disadvantages are accepted deliberately, bounded by ADR-0010's still-open
+"initial active validator set size policy" staying modest for v0.1.
+
 ### Batch Verification
 
 Advantages:
@@ -423,6 +469,12 @@ Disadvantages:
 - still large on the wire
 - batch failure handling must be deterministic
 - algorithm support varies
+
+Not a competing certificate format (Decision, above): batch verification is
+an implementation-level optimization that can apply on top of "Individual
+Signatures With Bitmap" without changing `QuorumCertificate`'s structure.
+Left fully open (Open Decisions, below) as its own later, independent
+decision.
 
 ### BLS Aggregate Signatures
 
@@ -438,6 +490,15 @@ Disadvantages:
 - requires careful rogue-key protection
 - post-quantum migration needs separate analysis
 
+**Not chosen for v0.1** (Decision, above): BLS is not an active or even
+reserved algorithm under ADR-0002 (Accepted) — its reserved-but-inactive
+list names secp256k1, Ed448, ML-DSA, and SLH-DSA, not BLS. Adopting it now
+would mean reopening an Accepted ADR to activate a new genesis algorithm,
+against that ADR's own "minimizes the active consensus surface" rationale.
+Not ruled out permanently: if the active validator set later grows large
+enough that certificate size becomes a real problem, this can be revisited
+as its own ADR-0002 amendment at that time.
+
 ### Threshold Signatures
 
 Advantages:
@@ -450,6 +511,11 @@ Disadvantages:
 - complex distributed key management
 - harder validator churn
 - difficult accountability unless signer evidence is preserved
+
+**Not chosen** (Decision, above): "harder validator churn" is not a
+theoretical concern here — ADR-0010's already-decided epoch-based active-set
+rotation changes the validator set every epoch, which would force threshold
+resharing on a schedule the protocol already committed to.
 
 ## Security Considerations
 
@@ -472,8 +538,11 @@ Quorum inflation:
 Rogue-key attacks:
 
 - Risk: aggregate signature schemes are abused by malicious key registration.
-- Mitigation: proof-of-possession or scheme-specific registration rules if BLS
-  or similar aggregation is selected.
+- Mitigation: not applicable under the decided scheme (individual signatures,
+  Decision above) — each signature verifies independently against its own
+  validator's key, so there is no aggregate public key to forge a rogue
+  contribution against. Proof-of-possession would become necessary again if
+  BLS or similar aggregation is adopted in a future revision.
 
 Certificate bloat:
 
@@ -508,12 +577,15 @@ compatibility analysis.
 
 ## Open Decisions
 
-- final quorum certificate format (`certificate_type` registry and
-  threshold formula decided above; `signer_commitment`/aggregation
-  representation still open, below)
-- signer commitment representation
-- signature aggregation scheme
-- batch verification rules
+- final quorum certificate format (`certificate_type` registry,
+  threshold formula, and signature aggregation scheme decided above;
+  signer commitment's exact bit-level encoding and voting power's
+  integer width — ADR-0010 — still block a concrete struct)
+- signer commitment bit-level encoding (kind decided above — bitmap
+  over the active set; ordering and width are not)
+- batch verification rules (optional layer on top of the decided
+  scheme, not a format fork — see "Batch Verification," Alternatives
+  Considered)
 - evidence conflict rules
 - checkpoint certificate semantics
 - light-client validator set proof format
