@@ -36,10 +36,12 @@
 //! root digests (ADR-0010, ADR-0015): `consensus_root` and
 //! [`validator_set_commitment`] are two names for the same function, not
 //! two independently-computed values. [`vote`] adds
-//! `VoteSigningPayloadV1`/`ConsensusVote` (ADR-0012); `QuorumCertificate`
-//! is not yet implementable as a concrete struct, since its
-//! `signer_commitment`/aggregation representation and the voting power
-//! integer width it depends on are still open (ADR-0010, ADR-0012).
+//! `VoteSigningPayloadV1`/`ConsensusVote` and `QuorumCertificate`
+//! (ADR-0012) — every structural question the latter depended on
+//! (aggregation scheme, signer commitment encoding, voting power integer
+//! type) is now decided (ADR-0010, ADR-0012); active-set-dependent
+//! verification (signer eligibility, signature checks, quorum
+//! satisfaction) is still out of scope for this crate.
 
 mod access_list;
 mod account;
@@ -90,8 +92,9 @@ pub use tx_id::tx_id;
 pub use validator_digest::validator_digest;
 pub use validity_window::ValidityWindowV1;
 pub use vote::{
-    CONSENSUS_PROFILE_TENDERMINT_V1, ConsensusVote, MAX_VOTE_METADATA_LEN, MAX_VOTE_SIGNATURE_LEN,
-    VOTE_VERSION_1, VoteSigningPayloadV1, VoteTargetType, VoteType,
+    CONSENSUS_PROFILE_TENDERMINT_V1, ConsensusVote, MAX_QUORUM_SIGNATURES,
+    MAX_SIGNER_COMMITMENT_LEN, MAX_VOTE_METADATA_LEN, MAX_VOTE_SIGNATURE_LEN, QC_VERSION_1,
+    QuorumCertificate, VOTE_VERSION_1, VoteSigningPayloadV1, VoteTargetType, VoteType,
 };
 
 #[cfg(test)]

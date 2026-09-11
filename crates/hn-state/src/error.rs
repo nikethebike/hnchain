@@ -133,6 +133,22 @@ pub enum StateError {
     /// an all-zero `target_hash` (ADR-0012, "Decided: `target_type`
     /// registry").
     NonCanonicalNilTarget,
+    /// A decoded `QuorumCertificate.qc_version` does not match
+    /// [`crate::vote::QC_VERSION_1`], the only shape this
+    /// implementation understands.
+    UnsupportedQcVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `QuorumCertificate`'s `aggregate_proof` entry count
+    /// does not match `signer_commitment`'s set-bit count — the two
+    /// must name the same signers in the same order (ADR-0012,
+    /// "Decided: individual signatures with bitmap").
+    SignerCountMismatch,
+    /// A decoded `QuorumCertificate` has `signed_voting_power >
+    /// total_voting_power`, which can never be a valid certificate
+    /// regardless of the active validator set.
+    SignedVotingPowerExceedsTotal,
 }
 
 impl From<HashError> for StateError {
@@ -204,6 +220,15 @@ impl core::fmt::Display for StateError {
             }
             Self::NonCanonicalNilTarget => {
                 formatter.write_str("nil vote target_hash must be all-zero")
+            }
+            Self::UnsupportedQcVersion { value } => {
+                write!(formatter, "unsupported qc_version: {value}")
+            }
+            Self::SignerCountMismatch => {
+                formatter.write_str("aggregate_proof entry count does not match signer_commitment")
+            }
+            Self::SignedVotingPowerExceedsTotal => {
+                formatter.write_str("signed_voting_power exceeds total_voting_power")
             }
         }
     }
