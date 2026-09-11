@@ -59,9 +59,40 @@ Registered
 The validator set used for consensus at a height is derived from canonical state
 and committed through block consensus metadata.
 
-The initial voting power model remains open. Candidate models include equal
-weight per active validator, stake-weighted voting power, capped stake-weighted
-voting power, and committee-based voting power.
+**Decided: capped stake-weighted voting power.** Asked the user first —
+this decision carries the same weight as choosing the consensus family
+itself (ADR-0009): it is not forced by anything already decided, and
+this ADR's own "Rejected Options" already refuses to accept plain
+stake-weighting as a default without centralization analysis.
+
+`voting_power(validator)` is proportional to bonded stake, bounded by a
+maximum share of total voting power — not plain stake-weighting (this
+ADR's own "One Coin Equals One Vote As Default" rejection: "direct
+stake weight without caps or delegation design can increase governance
+and consensus concentration risk"), and not equal weight (would need
+its own separate Sybil-resistance mechanism to replace what stake
+already provides, and makes active-set admission a much more
+consequential, politically-sensitive decision than under a
+stake-weighted model — "Equal Weight Active Validators," Alternatives
+Considered).
+
+**Committee-Based Active Set is ruled out**, not on its own merits but
+by an already-made decision: it "can reduce per-block voting overhead"
+but needs "committee selection randomness" (Alternatives Considered,
+below) to choose the committee — and ADR-0011 ("Decided: deterministic
+weighted round-robin") already committed this profile to *no*
+randomness source anywhere in consensus. A committee-based voting
+power model would silently reopen a question ADR-0011 already closed.
+
+The **exact cap value**, the **precise capping algorithm** (a simple
+"stake-weighted, then truncate at a share of the total" pass is not
+obviously stable, since capping the largest validators changes the
+total the cap itself is computed against — a fixed-point/water-filling
+subtlety, not a detail this decision resolves), Sybil-resistance rules,
+delegation design, and minimum bond all remain open (Open Decisions,
+below) — deciding the *model* does not require resolving its exact
+parameters or capping mechanics, the same scoping already used for
+`MAX_TRANSACTION_SIZE`-class decisions.
 
 ## Normative Rules
 
@@ -145,6 +176,15 @@ Every accepted consensus profile must define:
 - quorum threshold calculation
 
 Floating-point arithmetic is rejected for voting power.
+
+Voting power source is decided above (Decision: capped stake-weighted).
+Integer type/bounds, rounding/overflow behavior, and the exact total
+power calculation (including the capping algorithm's fixed-point
+behavior) remain open — the quorum threshold calculation itself is
+already decided independently of all of these (ADR-0012, "Decided:
+quorum threshold formula": `signed * 3 > total * 2`, exact integer
+arithmetic, applies unchanged regardless of voting power's width or
+source).
 
 ### Epoch Boundaries
 
@@ -303,6 +343,13 @@ Disadvantages:
 - may underprice high-economic-stake validators
 - active set admission becomes politically and economically sensitive
 
+Not chosen (Decision, above): this project's architecture already
+anticipates stake and delegation as real concepts (`stake`/`unstake`
+transaction types, ADR-0006; the `validators` domain already holding
+per-validator/delegator records, ADR-0007) — discarding economic
+weighting entirely would make that existing structure largely
+pointless for consensus purposes.
+
 ### Stake-Weighted Validators
 
 Advantages:
@@ -316,6 +363,13 @@ Disadvantages:
 - concentration risk
 - delegation markets can centralize
 - large holders may dominate consensus
+
+Not chosen in its plain form (Decision, above; Rejected Options, "One
+Coin Equals One Vote As Default"): the concentration risk here is
+exactly what this ADR's own Rejected Options section already refuses
+to accept as a default without further analysis. Capped stake weight,
+below, keeps this option's economic alignment while directly
+addressing its main documented risk.
 
 ### Capped Stake Weight
 
@@ -331,6 +385,12 @@ Disadvantages:
 - requires Sybil-resistance and delegation rules
 - more complex economics
 
+**Selected** (Decision, above). The additional complexity this option's
+own disadvantages name — cap parameters, Sybil-resistance, delegation
+rules — is exactly what stays open (Open Decisions, below); choosing
+this model does not resolve them, only which direction they get
+resolved within.
+
 ### Committee-Based Active Set
 
 Advantages:
@@ -344,6 +404,12 @@ Disadvantages:
 - committee selection randomness becomes critical
 - more complex light-client proofs
 - additional liveness and censorship risks
+
+**Ruled out** (Decision, above): "committee selection randomness
+becomes critical" directly conflicts with ADR-0011's already-decided
+"deterministic weighted round-robin, no randomness source at all." Not
+rejected on its own merits — excluded by an already-made decision in a
+different ADR.
 
 ## Security Considerations
 
@@ -406,10 +472,12 @@ rules and light-client compatibility analysis.
 ## Open Decisions
 
 - initial active validator set size policy
-- initial voting power model
+- voting power integer type/bounds, rounding/overflow behavior, and
+  the capping algorithm's exact fixed-point mechanics (model decided
+  above — capped stake-weighted; these are its remaining parameters)
 - minimum validator bond
 - delegation support
-- stake caps
+- stake caps (cap value and Sybil-resistance rules)
 - validator admission ranking
 - epoch length (transition mechanism decided above; the constant itself
   is not)

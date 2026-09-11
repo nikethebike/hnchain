@@ -216,6 +216,15 @@ It must define:
 If stake-weighted voting is selected, the model must analyze centralization
 risk and delegation concentration before acceptance.
 
+**Decided** (ADR-0010, "Decided: capped stake-weighted voting power"):
+source of weight is bonded stake, capped at a maximum share of total
+voting power — asked the user explicitly, given the weight of this
+decision and this section's own analysis requirement. Committee-based
+weighting is ruled out (needs randomness ADR-0011 already excludes from
+leader election entirely). Integer width, maximum value, the cap's
+exact value, and the capping algorithm's fixed-point mechanics remain
+open.
+
 ## 9. Epoch Transitions
 
 Validator set changes should occur at epoch boundaries.
@@ -312,8 +321,8 @@ Test vectors are mandatory before production implementation.
 
 - final validator record schema
 - final validator ID derivation
-- final voting power integer width
-- final voting power model
+- final voting power integer width and cap value (model decided; see
+  §8)
 - final active set selection algorithm
 - final maximum active set size
 - final epoch length
