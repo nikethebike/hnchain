@@ -72,12 +72,25 @@
 //! path behind it, not just an in-memory slice the caller assembled by
 //! hand.
 //!
-//! Real signature *verification* (needs `SignatureEnvelope::verify`
-//! wired to an actual resolved `KeyDescriptor` at a real call site) and
-//! a real durable storage backend (`hn-storage`'s own "initial storage
+//! `ConsensusVote::verify` ([`vote`]) is the first real call site:
+//! resolves the signer's key via `active_key` against a `StateReader`
+//! and checks the signature, not just structure. `QuorumCertificate` has
+//! no `verify` yet — not for lack of infrastructure, but a real,
+//! previously-unnoticed gap this crate's documentation now names
+//! explicitly (`QuorumCertificate`'s own doc comment): a certificate
+//! does not preserve each signer's original `vote_metadata`, so a
+//! verifier cannot always reconstruct exactly what a given signer
+//! signed. Both `ConsensusVote::verify` and any future
+//! `QuorumCertificate` verification check only the cryptographic
+//! signature — eligibility (`is_eligible_signer`), quorum satisfaction,
+//! and signer-set correctness against a real active set stay the
+//! caller's job, since verifying a single signature has no epoch/
+//! active-set context to check them against.
+//!
+//! A real durable storage backend (`hn-storage`'s own "initial storage
 //! backend" choice, ADR-0019, still open — an in-memory `StateReader`/
 //! `StateWriter` implementation proves the trait boundary, not a
-//! persistence guarantee) remain out of scope for this crate.
+//! persistence guarantee) remains out of scope for this crate.
 
 mod access_list;
 mod account;

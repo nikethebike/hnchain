@@ -5,7 +5,9 @@ use hn_hncs::{
     write_u32, write_u64, write_u128,
 };
 
+use crate::active_set::active_key;
 use crate::error::{StateError, StateResult};
+use crate::state_store::StateReader;
 
 /// `vote_version` for the current `VoteSigningPayloadV1`/`ConsensusVote`
 /// shape (ADR-0012, "Vote Context Binding").
@@ -225,10 +227,10 @@ impl VoteSigningPayloadV1 {
 /// A consensus vote (ADR-0012, "Vote Context Binding"): a signed
 /// [`VoteSigningPayloadV1`]. `signature` is a concrete
 /// [`hn_crypto::SignatureEnvelope`] (ADR-0002, "Decided:
-/// `SignatureEnvelope` concrete field list") — verification still needs
-/// an externally-resolved `KeyDescriptor` ([`SignatureEnvelope::verify`]
-/// takes one rather than looking it up), so this crate does not verify
-/// signatures itself, only encodes/decodes the envelope.
+/// `SignatureEnvelope` concrete field list"). [`ConsensusVote::verify`]
+/// resolves the signer's key itself via [`crate::active_key`], given a
+/// [`StateReader`] — this crate now verifies signatures, not just
+/// encodes/decodes the envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConsensusVote {
     /// The signed content.
@@ -259,6 +261,30 @@ impl ConsensusVote {
         decoder.finish().map_err(StateError::Encoding)?;
 
         Ok(Self { payload, signature })
+    }
+
+    /// Verifies this vote's `signature` against `payload.signing_digest()`,
+    /// resolving `payload.validator_id`'s current consensus key via
+    /// [`crate::active_key`] against `reader` — the first place this
+    /// crate connects a decoded [`SignatureEnvelope`] to an actual key
+    /// read from state, rather than a `KeyDescriptor` the caller had to
+    /// resolve some other way.
+    ///
+    /// This checks only the cryptographic signature, not eligibility:
+    /// whether `payload.validator_id` was a member of the relevant
+    /// epoch's active set, or is currently jailed, is a separate concern
+    /// this function has no context to check — see
+    /// [`crate::is_eligible_signer`], which callers combine with this.
+    pub fn verify(&self, reader: &impl StateReader) -> StateResult<()> {
+        let key = active_key(reader, &self.payload.validator_id)?.ok_or(
+            StateError::UnknownValidator {
+                validator_id: self.payload.validator_id,
+            },
+        )?;
+        let digest = self.payload.signing_digest()?;
+        self.signature
+            .verify(&key, &digest)
+            .map_err(StateError::SignatureVerificationFailed)
     }
 }
 
@@ -316,16 +342,32 @@ pub const MAX_QUORUM_SIGNATURES: usize = 8192;
 /// `NonCanonicalNilTarget` check): version/profile support, the nil-target
 /// invariant, `signed_voting_power <= total_voting_power`, and that
 /// `aggregate_proof`'s entry count matches `signer_commitment`'s set-bit
-/// count. Checks that need the active validator set for the referenced
-/// epoch — signer eligibility, signer uniqueness against real
-/// `validator_id`s, whether `signer_commitment`'s padding bits (beyond the
-/// active set's real size) are zero, whether `total_voting_power` is
-/// actually correct for that set, whether each signature verifies
-/// (needs a resolved `KeyDescriptor` per signer, [`SignatureEnvelope::verify`]),
-/// and whether the certificate meets quorum — are deliberately out of
-/// scope here; they need an active-set query interface
-/// ([`crate::active_set`]) wired to real storage-backed state, which this
-/// codebase does not have yet.
+/// count.
+///
+/// Unlike [`ConsensusVote::verify`], this type does not yet have its own
+/// `verify` — not merely for lack of an active-set query interface
+/// (that now exists: [`crate::active_set`], [`crate::active_key`]), but
+/// because of a real, previously-unnoticed gap: verifying signer `i`'s
+/// [`hn_crypto::SignatureEnvelope`] requires reconstructing exactly what
+/// that signer originally signed — a full [`VoteSigningPayloadV1`],
+/// including its `vote_metadata`. This certificate's own fields
+/// determine every other field of that reconstructed payload
+/// (`chain_id`/`network_id`/`epoch`/`height`/`round`/
+/// `validator_set_commitment`/`target_type`/`target_hash`, plus
+/// `vote_type = certificate_type` and `validator_id` = the signer named
+/// by bit `i`) but not `vote_metadata`, which this certificate does not
+/// preserve per signer. If two signers' original votes used different
+/// `vote_metadata`, there is currently no way for a verifier to know
+/// which bytes each of them actually signed. Whether votes contributing
+/// to a certificate must use empty (or otherwise canonical)
+/// `vote_metadata` — closing this gap without changing the already-
+/// decided wire format — is a real open question, not assumed here.
+/// Signer eligibility, signer uniqueness against real `validator_id`s,
+/// whether `signer_commitment`'s padding bits (beyond the active set's
+/// real size) are zero, whether `total_voting_power` is actually correct
+/// for that set, and whether the certificate meets quorum remain out of
+/// scope for the same reason `ConsensusVote::verify` doesn't check them
+/// either — see its own documentation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QuorumCertificate {
     /// Which of Tendermint's two voting stages this certificate proves
@@ -499,13 +541,16 @@ impl QuorumCertificate {
 #[cfg(test)]
 mod tests {
     use hn_core::{BlockHeight, Epoch, Round};
-    use hn_crypto::SignatureEnvelope;
+    use hn_crypto::{Ed25519KeyPair, KeyRole, SignatureEnvelope};
 
     use super::{
         ConsensusVote, QuorumCertificate, StateError, VoteSigningPayloadV1, VoteTargetType,
         VoteType,
     };
     use crate::error::StateResult;
+    use crate::state_store::StateReader;
+    use crate::validator::{ValidatorSection, validator_section_state_key};
+    use crate::validator_record::{ValidatorRecordV1, ValidatorStatus};
 
     fn envelope(byte: u8) -> SignatureEnvelope {
         SignatureEnvelope {
@@ -730,6 +775,105 @@ mod tests {
         assert_eq!(
             QuorumCertificate::decode(&bad.encode()?),
             Err(StateError::SignerCountMismatch)
+        );
+        Ok(())
+    }
+
+    /// A minimal `StateReader` test double, mirroring `active_set.rs`'s
+    /// own `MapReader` (duplicated rather than shared across test
+    /// modules — the same low-cost duplication this crate's `hex()` test
+    /// helper already accepts per file).
+    struct MapReader(std::collections::BTreeMap<super::Digest, Vec<u8>>);
+
+    impl StateReader for MapReader {
+        fn get(&self, state_key: &super::Digest) -> Option<Vec<u8>> {
+            self.0.get(state_key).cloned()
+        }
+    }
+
+    fn reader_with_validator(
+        validator_id: [u8; 32],
+        keypair: &Ed25519KeyPair,
+        voting_power: u128,
+        status: ValidatorStatus,
+    ) -> StateResult<MapReader> {
+        let record = ValidatorRecordV1 {
+            validator_id,
+            consensus_key: keypair.key_descriptor(),
+            voting_power,
+            status,
+        };
+        let key = validator_section_state_key(&validator_id, ValidatorSection::Record)?;
+        Ok(MapReader(std::collections::BTreeMap::from([(
+            key,
+            record.encode()?,
+        )])))
+    }
+
+    #[test]
+    fn consensus_vote_verify_accepts_a_real_signature() -> StateResult<()> {
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [0x99; 32]);
+        let mut payload = prevote_block();
+        payload.validator_id = [0xaa; 32];
+        let digest = payload.signing_digest()?;
+        let vote = ConsensusVote {
+            payload,
+            signature: SignatureEnvelope {
+                algorithm_id: 1,
+                signature: keypair.sign(&digest).to_vec(),
+            },
+        };
+
+        let reader = reader_with_validator([0xaa; 32], &keypair, 100, ValidatorStatus::Active)?;
+        vote.verify(&reader)
+    }
+
+    #[test]
+    fn consensus_vote_verify_rejects_a_signature_from_a_different_key() -> StateResult<()> {
+        let signer = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [0x99; 32]);
+        let stored = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [0x88; 32]);
+
+        let mut payload = prevote_block();
+        payload.validator_id = [0xaa; 32];
+        let digest = payload.signing_digest()?;
+        let vote = ConsensusVote {
+            payload,
+            signature: SignatureEnvelope {
+                algorithm_id: 1,
+                signature: signer.sign(&digest).to_vec(),
+            },
+        };
+
+        // The reader has a *different* key on file for this validator_id
+        // than the one that actually signed.
+        let reader = reader_with_validator([0xaa; 32], &stored, 100, ValidatorStatus::Active)?;
+        assert!(matches!(
+            vote.verify(&reader),
+            Err(StateError::SignatureVerificationFailed(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn consensus_vote_verify_rejects_an_unknown_validator() -> StateResult<()> {
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [0x99; 32]);
+        let mut payload = prevote_block();
+        payload.validator_id = [0xaa; 32];
+        let digest = payload.signing_digest()?;
+        let vote = ConsensusVote {
+            payload,
+            signature: SignatureEnvelope {
+                algorithm_id: 1,
+                signature: keypair.sign(&digest).to_vec(),
+            },
+        };
+
+        let reader = MapReader(std::collections::BTreeMap::new());
+        assert_eq!(
+            vote.verify(&reader),
+            Err(StateError::UnknownValidator {
+                validator_id: [0xaa; 32]
+            })
         );
         Ok(())
     }

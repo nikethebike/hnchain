@@ -1,4 +1,4 @@
-use hn_crypto::{HashError, IdentityError};
+use hn_crypto::{Digest, HashError, IdentityError};
 use hn_hncs::HncsError;
 
 /// Result type used by state key derivation and state tree operations.
@@ -179,6 +179,15 @@ pub enum StateError {
     /// [`hn_crypto::SignatureEnvelope`] — unsupported `envelope_version`,
     /// most commonly.
     InvalidSignatureEnvelope(IdentityError),
+    /// No [`crate::ValidatorRecordV1`] is stored for a referenced
+    /// `validator_id` — [`crate::active_key`] returned `None`.
+    UnknownValidator {
+        /// The referenced, unresolvable `validator_id`.
+        validator_id: Digest,
+    },
+    /// A [`hn_crypto::SignatureEnvelope::verify`] call failed — wrong
+    /// signature, algorithm mismatch, or an unsupported algorithm.
+    SignatureVerificationFailed(IdentityError),
 }
 
 impl From<HashError> for StateError {
@@ -275,8 +284,18 @@ impl core::fmt::Display for StateError {
             Self::InvalidSignatureEnvelope(error) => {
                 write!(formatter, "invalid signature envelope: {error}")
             }
+            Self::UnknownValidator { validator_id } => {
+                write!(formatter, "unknown validator_id: {}", hex(validator_id))
+            }
+            Self::SignatureVerificationFailed(error) => {
+                write!(formatter, "signature verification failed: {error}")
+            }
         }
     }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 impl std::error::Error for StateError {}
