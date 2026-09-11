@@ -160,6 +160,19 @@ active
 
 Lifecycle transitions require deterministic authorization and validation rules.
 
+**Decided** (ADR-0010, "Decided: admission mechanism"): `registered →
+candidate` is automatic (a derived condition — bonded stake meets the
+still-open minimum bond — not its own transaction, since §11's
+operation registry names no `validator_candidate` operation);
+`candidate → active` is explicit, via `validator_activate`, so an
+operator opts in rather than being drafted into consensus duty by a
+balance check alone. Both `validator_activate` and `validator_deactivate`
+take effect only at the next epoch boundary — the same one-epoch lead
+time §9 already gives validator *set* transitions generally, applied
+here per validator rather than to the aggregate set. Jailing (the
+penalty path above) is untouched by this decision — it belongs to
+ADR-0015 (Slashing And Accountability), still fully open.
+
 ## 6. Active Set Derivation
 
 The active validator set for a height or epoch is derived from canonical state.
@@ -355,9 +368,9 @@ Test vectors are mandatory before production implementation.
   capping algorithm, and integer type — `u128` — decided; see §8)
 - `MAX_ACTIVE_SET_SIZE` value (selection mechanism decided; see §6)
 - final epoch length
-- final activation delay
-- final deactivation delay
 - final key rotation delay
+- final unbonding period (activation/deactivation delay decided as a
+  mechanism — one epoch; see §5 — unbonding is distinct)
 - final validator operation transaction schemas
 - final validator set commitment format
 - final light-client proof format

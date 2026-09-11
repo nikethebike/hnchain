@@ -145,6 +145,69 @@ Initial conceptual statuses:
 Status transitions must be deterministic and authorized by account permissions
 or protocol rules.
 
+**Decided: admission mechanism (`registered → candidate → active`).**
+Continues directly from "Active Set Derivation," below, which already
+resolves the question the old "validator admission ranking" Open
+Decision implied needed answering: once the active set is bounded and
+selected every epoch by `voting_power` (top-K, decided below), there is
+no separate competitive or ranked admission step left to design —
+whether a validator actually *participates* in a given epoch is already
+fully handled by that per-epoch selection, not by a one-time admission
+gate. "Ranking" as a name for this Open Decision was a leftover from
+before that decision existed; what is actually left to define is purely
+mechanical.
+
+Grounded in `validator-set.md` §11's already-named conceptual operation
+registry (`validator_register`, `validator_bond`, `validator_activate`,
+`validator_deactivate`, ADR-0006) rather than invented from nothing:
+only `activate`/`deactivate` are named status-transition operations —
+there is no `validator_candidate` operation anywhere in that registry.
+This asymmetry is itself informative, not an oversight to fix:
+
+- `registered → candidate` is **automatic**, not transaction-triggered:
+  a `registered` validator's status is `candidate` whenever its bonded
+  stake (`validator_bond`) meets the still-open minimum bond
+  requirement — a derived condition read from canonical state, the same
+  way `EnvelopeValueV1`'s section state is read rather than separately
+  flagged. No operation exists to request it because none is needed.
+- `candidate → active` is **explicit**, via `validator_activate`: the
+  validator must deliberately opt in, rather than being silently
+  drafted into consensus duty the moment a bond threshold is crossed.
+  This matters increasingly once ADR-0015 (Slashing And Accountability,
+  still fully open) activates real penalties for active-duty failures —
+  an operator should choose when their infrastructure is ready to accept
+  that exposure, not have it imposed by a balance check alone.
+  `validator_activate`'s minimum-bond precondition is checked against
+  the same still-open minimum, without this decision fixing its value.
+- **Timing reuses "Epoch Boundaries," below, at individual-validator
+  granularity rather than introducing a second delay constant.**
+  `validator_activate` (and symmetrically `validator_deactivate`) may be
+  submitted at any height, but its status effect lands only at the next
+  epoch boundary — exactly the same one-epoch lead time already decided
+  for validator *set* transitions generally, applied here to one
+  validator's own status instead of the aggregate set. This resolves
+  "activation delay" and "deactivation delay" (Open Decisions) as a
+  *mechanism* — one epoch, no new tunable — without needing their own
+  separate constant. **Unbonding period stays genuinely open, not
+  resolved by this**: it governs when bonded funds may be *withdrawn*
+  after becoming `inactive`/`exited`, a distinct, security-motivated
+  window from mere status/consensus-participation timing (matching
+  real-world unbonding periods measured in weeks, not one epoch).
+- **Jailing is deliberately untouched here** — `active → jailed` is a
+  penalty-driven transition, not an admission concern, and belongs to
+  ADR-0015 (Slashing And Accountability), the other structural fork the
+  user named as a live candidate alongside this one. "Jailing
+  conditions" (Open Decisions) stays open.
+
+Not resolved by this decision: the minimum bond's numeric value (a
+deferred economic parameter, same group as `MAX_ACTIVE_SET_SIZE` and
+`cap_numerator`/`cap_denominator`), the concrete transaction schemas for
+`validator_register`/`validator_bond`/`validator_activate` (ADR-0006's
+own still-open "final validator operation transaction schemas"), and
+whether bonded stake falling below the minimum *after* activation has
+any automatic effect on status (a real open question, but a distinct
+one from admission — not invented here).
+
 ### Active Set Derivation
 
 The active validator set for an epoch or height must be derived deterministically
@@ -170,9 +233,10 @@ choices here:
   (Decision, "Validator Status," above). `registered`/`candidate` have
   not yet been admitted; `inactive`/`jailed`/`exited` have left or been
   suspended. How a validator *reaches* `active` (the bond check at
-  `candidate → active`) is a separate, still-open question ("validator
-  admission ranking," Open Decisions) — this decision only says which
-  status counts, not how a validator earns it.
+  `candidate → active`) is decided separately ("Decided: admission
+  mechanism," "Validator Status," above) — this decision only says
+  which status counts toward the active set, not how a validator earns
+  it.
 - **Input state / timing** — already fixed by "Epoch Boundaries," above:
   a height's active set is whichever epoch's already-snapshotted set
   that height falls under (`BlockHeader.epoch`, ADR-0008, names which
@@ -649,13 +713,11 @@ rules and light-client compatibility analysis.
 - delegation support
 - stake caps (`cap_numerator`/`cap_denominator` value and
   Sybil-resistance rules — capping algorithm mechanism decided above)
-- validator admission ranking
 - epoch length (transition mechanism decided above; the constant itself
   is not)
-- activation delay
-- deactivation delay
 - key rotation delay
-- unbonding period
+- unbonding period (distinct from activation/deactivation, which are
+  now decided as a mechanism above — "Decided: admission mechanism")
 - jailing conditions
 - slashing activation
 - validator metadata schema
