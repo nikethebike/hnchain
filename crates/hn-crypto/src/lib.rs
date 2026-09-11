@@ -11,6 +11,7 @@ mod contract_address;
 mod hash;
 mod identity;
 mod protocol_address;
+mod signature_envelope;
 mod validator_address;
 
 pub use address::{
@@ -28,6 +29,7 @@ pub use identity::{
     IdentityError, IdentityResult, KeyDescriptor, KeyRole,
 };
 pub use protocol_address::{NAMESPACE_PROTOCOL, ProtocolModule};
+pub use signature_envelope::{SIGNATURE_MAX_LEN, SignatureEnvelope};
 pub use validator_address::{
     NAMESPACE_VALIDATOR, ValidatorDerivationScheme, validator_address_body,
 };

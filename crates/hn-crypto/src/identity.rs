@@ -1,4 +1,5 @@
 use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, Verifier, VerifyingKey};
+use hn_hncs::HncsError;
 use rand_core::OsRng;
 
 /// Numeric identifier of the Ed25519 signing algorithm (ADR-0002 profile
@@ -48,6 +49,35 @@ pub enum IdentityError {
     InvalidPublicKey,
     /// Ed25519 signature verification failed.
     SignatureVerificationFailed,
+    /// A decoded `SignatureEnvelope.envelope_version` does not match
+    /// [`SignatureEnvelope::ENVELOPE_VERSION_1`], the only shape this
+    /// implementation understands.
+    UnsupportedEnvelopeVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A `SignatureEnvelope.algorithm_id` is not Ed25519
+    /// ([`ED25519_ALGORITHM_ID`]), the only algorithm this
+    /// implementation can verify against (ADR-0002, "Accepted Initial
+    /// Direction").
+    UnsupportedAlgorithm {
+        /// The rejected algorithm identifier.
+        value: u16,
+    },
+    /// A `SignatureEnvelope`'s `algorithm_id` does not match the
+    /// [`KeyDescriptor`] it is being verified against — the "`algorithm_id`
+    /// must match the referenced key descriptor" rule
+    /// (`docs/specs/core/cryptographic-identity.md` §5).
+    AlgorithmMismatch,
+    /// A `SignatureEnvelope` could not be framed or parsed as a bounded
+    /// canonical HNCS byte sequence.
+    Framing(HncsError),
+}
+
+impl From<HncsError> for IdentityError {
+    fn from(error: HncsError) -> Self {
+        Self::Framing(error)
+    }
 }
 
 impl core::fmt::Display for IdentityError {
@@ -57,6 +87,16 @@ impl core::fmt::Display for IdentityError {
             Self::SignatureVerificationFailed => {
                 formatter.write_str("Ed25519 signature verification failed")
             }
+            Self::UnsupportedEnvelopeVersion { value } => {
+                write!(formatter, "unsupported envelope_version: {value}")
+            }
+            Self::UnsupportedAlgorithm { value } => {
+                write!(formatter, "unsupported algorithm_id: {value}")
+            }
+            Self::AlgorithmMismatch => {
+                formatter.write_str("signature envelope algorithm_id does not match key descriptor")
+            }
+            Self::Framing(error) => write!(formatter, "signature envelope framing error: {error}"),
         }
     }
 }
