@@ -194,6 +194,75 @@ participation for a defined period or condition.
 Jailing may be activated before monetary slashing if the evidence rules are
 accepted and validator lifecycle rules support it.
 
+**Decided: jailing activation mechanism.** The evidence rules referenced
+above are already accepted (`evidence_type` registry, evidence digest
+mechanism, Evidence Context Binding — all decided earlier in this ADR),
+and validator lifecycle already supports it (`active → jailed →
+inactive`, ADR-0010's "Decision," penalty path) — so, per this
+section's own precondition, jailing is activated now.
+
+- **Trigger.** Any of the five defined `evidence_type` values (`double_
+  proposal`, `double_vote`, `conflicting_qc_participation`,
+  `conflicting_finality_proof_participation`, `invalid_consensus_
+  signature`) causes jailing automatically and deterministically upon
+  the evidence being accepted by consensus rules — no separate human,
+  governance, or operator step. Not an independent choice: "Evidence
+  Before Penalty" (above) already requires this, and "Manual Operator
+  Slashing" (Rejected Options) already rejects any discretionary
+  alternative. `safety_rule_violation` causes jailing too, once and if
+  a future consensus profile ever defines it — it is not a distinct
+  case requiring its own rule.
+- **Timing — immediate, via a live overlay.** Asked the user explicitly
+  — genuinely two viable designs, comparable in weight to the capping
+  algorithm decision (ADR-0010), not a derived call. Decided: jailing
+  takes effect starting at the height *after* the evidence-including
+  block, not at the next epoch boundary. A jailed validator is excluded
+  from signer eligibility and from `total_voting_power` immediately;
+  `validators_root`/`consensus_root` (ADR-0010) stay epoch-frozen as
+  already decided — jailing does not force an early re-snapshot. This
+  means QC/vote verification needs a live status check *in addition to*
+  epoch-committed validator set membership: `validator_id` must be (a) a
+  member of the epoch's committed `validators_root` **and** (b) not
+  currently `jailed` as of the height being verified. This is a real,
+  deliberate addition to what the still-missing active-set query
+  interface (`QuorumCertificate::decode`'s own documentation already
+  flags this gap) must eventually expose — not a detail this decision
+  can leave implicit. Chosen over the simpler epoch-delayed alternative
+  because the alternative would let a validator caught equivocating
+  keep signing and contributing to `total_voting_power` for up to a
+  full epoch after being caught, undermining jailing's actual
+  containment purpose during exactly the window it matters most.
+- **Reactivation.** No special-case rule: jailing's own lifecycle edge
+  already lands on `inactive` (ADR-0010's penalty path,
+  `active → jailed → inactive`), and `inactive → active` already has a
+  mechanism — the same explicit, deliberate `validator_activate`
+  operation ADR-0010's "Decided: admission mechanism" already defined
+  for any not-currently-active validator meeting the minimum bond. A
+  formerly-jailed validator does not silently resume consensus duty the
+  moment a jail condition lapses, for the same reason admission itself
+  is opt-in rather than automatic: the operator should choose when
+  they're ready to accept that exposure again, not have it imposed by a
+  timer alone.
+- **Key rotation interaction.** None beyond what ADR-0010's own "Key
+  Rotation" already specifies — jailing does not add or remove any key
+  rotation rule; a jailed validator's keys are neither frozen nor forced
+  to rotate by this decision.
+- **What stays open.** The jail *duration* or release condition itself
+  (a tunable constant — same later-batch nature as `unbonding period`,
+  not decided here) and `reward effect` (blocked entirely: no reward
+  mechanism exists anywhere in this project yet, not just unspecified
+  amounts).
+
+**Downtime is explicitly out of scope for this decision.** Not a fresh
+open question so much as already resolved by existing text: "Penalizing
+Based On Downtime Alone Without Rules" (Rejected Options, below) already
+rejects triggering *any* accountability action — jailing included, not
+only monetary slashing — from downtime alone, "until... clear measurement
+windows and fault assumptions" exist, and `slashing-and-accountability.md`
+§10 already says the same ("should not be activated without extensive
+testnet evidence"). This decision's jailing trigger is Byzantine-
+equivocation evidence only; it does not extend jailing to downtime.
+
 ### Slashing
 
 Slashing is not activated by this ADR.
@@ -209,6 +278,15 @@ Before slashing can be activated, HNChain must specify:
 - evidence windows
 - governance limits
 - recovery and incident response
+
+**Deliberately untouched by this decision pass** — jailing, above,
+does not imply or bring slashing closer to activation; every item in
+this list stays blocked on a staking/delegation/tokenomics track that
+does not exist anywhere in this project yet, the same class of named
+blocker used throughout the consensus track for anything genuinely
+gated on economics rather than mechanism (voting power's exact
+`cap_numerator`/`cap_denominator`, minimum validator bond, and this
+list, are one blocked group, not several).
 
 ## Rejected Options
 
@@ -351,8 +429,9 @@ algorithm migrations.
 
 - evidence validity window
 - evidence fees
-- jailing activation rules
-- downtime accountability
+- jail duration / release condition (trigger, timing, reactivation, and
+  key rotation interaction all decided above — "Decided: jailing
+  activation mechanism"; only the duration constant remains)
 - slashing activation criteria
 - slashing amounts
 - delegator impact

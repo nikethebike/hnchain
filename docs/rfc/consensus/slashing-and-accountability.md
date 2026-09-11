@@ -133,6 +133,13 @@ Evidence inclusion must define:
 - effect timing
 - receipt or event behavior
 
+**Decided** (ADR-0015, "Decided: evidence digest mechanism"):
+`evidence_root` formula and evidence ordering (sorted by ascending
+`evidence_hash`, not inclusion order — ADR-0015). Maximum count/byte
+size, duplicate handling, fee behavior, effect timing, and receipt/event
+behavior remain open (§13) — this only closes the commitment-mechanism
+level, not every aspect of inclusion.
+
 ## 8. Jailing
 
 Jailing changes validator status.
@@ -146,6 +153,21 @@ Jailing rules must define:
 - reward effect
 - key rotation interaction
 - reactivation rule
+
+**Decided** (ADR-0015, "Decided: jailing activation mechanism"): all
+five defined `evidence_type` values cause jailing, automatically and
+deterministically upon evidence acceptance — no operator/governance
+step. Takes effect immediately (the height after the evidence-including
+block), not at the next epoch boundary: a jailed validator is excluded
+from signing and from `total_voting_power` right away, layered as a
+live check on top of the epoch-frozen `validators_root` rather than
+forcing an early re-snapshot — QC/vote verification needs both epoch
+membership *and* a live not-jailed check. Reactivation reuses the
+already-decided `validator_activate` operation from `inactive` (no
+separate reactivation rule); key rotation interaction is none beyond
+what `validator-set.md` §10 (Key Rotation) already specifies. Jail
+duration itself and reward effect (blocked entirely — no reward
+mechanism exists yet) remain open (§13).
 
 ## 9. Slashing Preconditions
 
@@ -178,6 +200,14 @@ Downtime policy must define:
 - penalty class
 
 Downtime slashing should not be activated without extensive testnet evidence.
+
+**Out of scope for the jailing decision** (ADR-0015, "Decided: jailing
+activation mechanism"): jailing's trigger is Byzantine-equivocation
+evidence only. This is not a narrower restatement of the sentence
+above — ADR-0015's own "Penalizing Based On Downtime Alone Without
+Rules" (Rejected Options) already rejects triggering *any*
+accountability action, jailing included, from downtime alone until
+this section's own policy items are defined.
 
 ## 11. Security Requirements
 
@@ -227,9 +257,14 @@ Test vectors are mandatory before production implementation.
 - final evidence type registry
 - final evidence schemas
 - final evidence validity window
-- final evidence root construction
-- final jailing rules
-- final downtime policy
+- final evidence inclusion limits and behavior (root formula and
+  ordering decided; count/size limits, duplicate handling, fee
+  behavior, effect timing, and receipt/event behavior remain open; see
+  §7)
+- final jail duration / release condition (activation mechanism
+  decided; see §8)
+- final downtime policy (deliberately excluded from jailing's scope;
+  see §10)
 - final slashing activation criteria
 - final slashing economics
 - final delegator impact model

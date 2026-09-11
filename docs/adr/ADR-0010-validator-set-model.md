@@ -718,7 +718,9 @@ rules and light-client compatibility analysis.
 - key rotation delay
 - unbonding period (distinct from activation/deactivation, which are
   now decided as a mechanism above — "Decided: admission mechanism")
-- jailing conditions
+- jail duration (activation mechanism, timing, reactivation, and key
+  rotation interaction decided — ADR-0015, "Decided: jailing activation
+  mechanism"; only the duration constant remains)
 - slashing activation
 - validator metadata schema
 - light-client validator set proof format
