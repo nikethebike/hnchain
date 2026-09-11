@@ -163,6 +163,42 @@ Changing from RocksDB to another backend must not change:
 - event root
 - proof verification
 
+### Decided: Initial Storage Backend
+
+`redb` — a pure-Rust, embedded, ACID key-value store — is the initial
+implementation backend for `StateReader`/`StateWriter`, superseding the
+in-memory implementation's own placeholder role (that implementation
+remains, proving the trait boundary itself, not durability).
+
+Chosen over RocksDB (this ADR's own other named alternative) specifically
+to avoid a hard external-toolchain dependency: RocksDB's Rust bindings
+require a working C++ toolchain (`cmake`, a C++ compiler) to build from
+source, a real and unevenly-available requirement across contributor
+machines and CI images, whereas `redb` is pure Rust and builds with
+nothing beyond the Rust toolchain itself. `redb`'s own design (copy-on-
+write B+trees, full ACID transactions, MVCC readers/writers) is
+independently a reasonable fit for this project's needs; the deciding
+factor was the toolchain-dependency difference, not a performance or
+feature gap between the two.
+
+This is an implementation choice, not a protocol one: per this ADR's own
+"Backend Independence" rule, nothing about canonical state keys, state
+values, state roots, or any other consensus-relevant object depends on
+`redb` specifically. A future switch to RocksDB or another backend
+remains fully open and does not require a new ADR unless it changes
+something this ADR already declares invariant across backends.
+
+**Consequence for `StateReader`/`StateWriter` themselves**: adopting a
+backend that can genuinely fail (disk I/O errors, corruption) forced
+`hn-state`'s own trait signatures to become fallible — they had been
+deliberately `Option`/`()`-typed (infallible) while only an in-memory
+implementation existed, with that type's own documentation already
+anticipating this exact change once a durable backend arrived. `get`/
+`set` now return a `Result`, and a durable-backend error surfaces as an
+opaque message (never a backend-specific type) — the same "Backend
+Independence" boundary discipline applied one layer up, at the trait
+signature itself, not just at the values it carries.
+
 ## Rejected Options
 
 ### Database Layout As Protocol
@@ -231,6 +267,19 @@ Disadvantages:
 - increases testing matrix
 - can hide performance cliffs if abstraction is poorly designed
 
+### redb As Initial Backend (Selected)
+
+Advantages:
+
+- pure Rust; no C++/cmake toolchain required to build
+- fully ACID, MVCC concurrent readers/writer, crash-safe by default
+- stable on-disk file format with an upgrade path
+
+Disadvantages:
+
+- less operational history at scale than RocksDB
+- narrower ecosystem of tuning/operational tooling
+
 ## Security Considerations
 
 State corruption:
@@ -286,7 +335,6 @@ and is governed by the state tree specification.
 
 ## Open Decisions
 
-- initial storage backend
 - final storage interface names
 - block store schema
 - state node storage schema

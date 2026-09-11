@@ -91,7 +91,7 @@ pub fn fetch_validator_record(
     validator_id: &Digest,
 ) -> StateResult<Option<ValidatorRecordV1>> {
     let key = validator_section_state_key(validator_id, ValidatorSection::Record)?;
-    match reader.get(&key) {
+    match reader.get(&key)? {
         Some(bytes) => Ok(Some(ValidatorRecordV1::decode(&bytes)?)),
         None => Ok(None),
     }
@@ -270,8 +270,8 @@ mod tests {
     struct MapReader(std::collections::BTreeMap<hn_crypto::Digest, Vec<u8>>);
 
     impl crate::state_store::StateReader for MapReader {
-        fn get(&self, state_key: &hn_crypto::Digest) -> Option<Vec<u8>> {
-            self.0.get(state_key).cloned()
+        fn get(&self, state_key: &hn_crypto::Digest) -> StateResult<Option<Vec<u8>>> {
+            Ok(self.0.get(state_key).cloned())
         }
     }
 

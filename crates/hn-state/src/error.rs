@@ -252,6 +252,15 @@ pub enum StateError {
         /// The attempted operation byte.
         operation: u8,
     },
+    /// A [`crate::StateReader`]/[`crate::StateWriter`] backend failed to
+    /// read or write (ADR-0019, "initial storage backend": decided
+    /// `redb`). Carries the backend's own `Display` output rather than a
+    /// typed sub-error — per ADR-0019's "Backend Independence" rule, this
+    /// crate's interfaces must not leak which specific backend failed,
+    /// only that a storage operation did; an in-memory backend
+    /// ([`crate::state_store`]'s own prior "deliberately infallible"
+    /// framing) can never produce this, only a durable one.
+    Storage(String),
 }
 
 impl From<HashError> for StateError {
@@ -391,6 +400,7 @@ impl core::fmt::Display for StateError {
                 formatter,
                 "validator_update operation 0x{operation:02x} is invalid from status 0x{status:02x}"
             ),
+            Self::Storage(message) => write!(formatter, "storage backend error: {message}"),
         }
     }
 }

@@ -12,6 +12,10 @@ description = "HNChain storage engine abstractions and adapters."
 hn-core = { path = "../hn-core" }
 hn-crypto = { path = "../hn-crypto" }
 hn-state = { path = "../hn-state" }
+redb = "4.2.0"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

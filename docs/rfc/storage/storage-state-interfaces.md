@@ -38,10 +38,9 @@ This RFC defines:
 
 This RFC does not define:
 
-- final RocksDB schema
-- final custom storage engine
-- final column family layout
-- final compaction tuning
+- final `redb` table/schema layout (ADR-0019, "Decided: initial storage
+  backend" — `redb`, not RocksDB or a custom engine)
+- final durability/checkpoint tuning
 - final snapshot chunk format
 - final benchmark values
 
@@ -275,9 +274,11 @@ Test vectors are mandatory before production implementation.
 
 ## 17. Open Decisions
 
+Initial storage backend is decided (ADR-0019, "Decided: initial storage
+backend" — `redb`); everything below is still open.
+
 - final interface definitions
 - final backend adapter API
-- initial storage backend
 - final block store layout
 - final state node layout
 - final proof store layout

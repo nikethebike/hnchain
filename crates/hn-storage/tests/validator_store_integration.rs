@@ -8,6 +8,14 @@
 //! `fetch_validator_record` against something other than a slice the
 //! test itself assembled.
 //!
+//! Every assertion here runs against both `hn-storage` implementations
+//! (`InMemoryStateStore` and, per ADR-0019's "Decided: initial storage
+//! backend", `RedbStateStore`) via the same shared helpers, over `impl
+//! StateReader`/`impl StateWriter` — not because the two backends are
+//! expected to behave differently, but because that is the entire point
+//! of ADR-0019's "Backend Independence" rule: protocol code (and this
+//! test) should not need to know or care which one is underneath.
+//!
 //! The expected state root below is copied from `hn-state`'s own
 //! `validator_integration.rs::validator_records_derive_expected_state_keys_and_root`,
 //! not recomputed — the point is that this path reaches the *same*
@@ -21,7 +29,7 @@ use hn_state::{
     active_key, compute_state_root, fetch_validator_record, leaf_hash, validator_section_state_key,
     value_hash,
 };
-use hn_storage::InMemoryStateStore;
+use hn_storage::{InMemoryStateStore, RedbStateStore};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -75,24 +83,27 @@ fn four_validators() -> [ValidatorRecordV1; 4] {
     ]
 }
 
-#[test]
-fn store_round_trip_matches_hand_built_state_root() -> TestResult {
-    let records = four_validators();
-
-    let mut store = InMemoryStateStore::new();
-    for record in &records {
+fn seed_store(store: &mut impl StateWriter, records: &[ValidatorRecordV1; 4]) -> TestResult {
+    for record in records {
         let key = validator_section_state_key(&record.validator_id, ValidatorSection::Record)?;
-        store.set(key, record.encode()?);
+        store.set(key, record.encode()?)?;
     }
+    Ok(())
+}
 
-    // Read every value back through the store rather than reusing the
-    // in-memory `records` array directly, to actually exercise the
-    // StateReader path the state root is computed from.
+/// Reads every record's leaf back through `store` (rather than reusing
+/// `records` directly, to actually exercise the `StateReader` path) and
+/// asserts the resulting state root matches `hn-state`'s own
+/// already-oracle-verified value.
+fn assert_state_root_matches_hand_built(
+    store: &impl StateReader,
+    records: &[ValidatorRecordV1; 4],
+) -> TestResult {
     let mut leaves = Vec::new();
-    for record in &records {
+    for record in records {
         let key = validator_section_state_key(&record.validator_id, ValidatorSection::Record)?;
         let bytes = store
-            .get(&key)
+            .get(&key)?
             .ok_or_else(|| missing("just written above"))?;
         let vh = value_hash(&bytes)?;
         leaves.push((key, leaf_hash(&key, &vh)?));
@@ -112,23 +123,17 @@ fn store_round_trip_matches_hand_built_state_root() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn active_key_and_fetch_validator_record_round_trip_through_the_store() -> TestResult {
-    let records = four_validators();
-
-    let mut store = InMemoryStateStore::new();
-    for record in &records {
-        let key = validator_section_state_key(&record.validator_id, ValidatorSection::Record)?;
-        store.set(key, record.encode()?);
-    }
-
-    for record in &records {
-        let fetched = fetch_validator_record(&store, &record.validator_id)?
+fn assert_active_key_and_fetch_validator_record_round_trip(
+    store: &impl StateReader,
+    records: &[ValidatorRecordV1; 4],
+) -> TestResult {
+    for record in records {
+        let fetched = fetch_validator_record(store, &record.validator_id)?
             .ok_or_else(|| missing("was just written to the store above"))?;
         assert_eq!(&fetched, record);
 
         let key =
-            active_key(&store, &record.validator_id)?.ok_or_else(|| missing("record exists"))?;
+            active_key(store, &record.validator_id)?.ok_or_else(|| missing("record exists"))?;
         assert_eq!(
             key.public_key_bytes(),
             record.consensus_key.public_key_bytes()
@@ -138,15 +143,60 @@ fn active_key_and_fetch_validator_record_round_trip_through_the_store() -> TestR
     Ok(())
 }
 
-#[test]
-fn fetch_and_active_key_return_none_for_an_unknown_validator() -> TestResult {
-    let store = InMemoryStateStore::new();
+fn assert_fetch_and_active_key_return_none_for_an_unknown_validator(
+    store: &impl StateReader,
+) -> TestResult {
     let unknown_id = [0xff; 32];
-
-    assert_eq!(fetch_validator_record(&store, &unknown_id)?, None);
-    assert_eq!(active_key(&store, &unknown_id)?, None);
-
+    assert_eq!(fetch_validator_record(store, &unknown_id)?, None);
+    assert_eq!(active_key(store, &unknown_id)?, None);
     Ok(())
+}
+
+#[test]
+fn in_memory_store_round_trip_matches_hand_built_state_root() -> TestResult {
+    let records = four_validators();
+    let mut store = InMemoryStateStore::new();
+    seed_store(&mut store, &records)?;
+    assert_state_root_matches_hand_built(&store, &records)
+}
+
+#[test]
+fn redb_store_round_trip_matches_hand_built_state_root() -> TestResult {
+    let records = four_validators();
+    let dir = tempfile::tempdir()?;
+    let mut store = RedbStateStore::open(dir.path().join("state.redb"))?;
+    seed_store(&mut store, &records)?;
+    assert_state_root_matches_hand_built(&store, &records)
+}
+
+#[test]
+fn in_memory_active_key_and_fetch_validator_record_round_trip_through_the_store() -> TestResult {
+    let records = four_validators();
+    let mut store = InMemoryStateStore::new();
+    seed_store(&mut store, &records)?;
+    assert_active_key_and_fetch_validator_record_round_trip(&store, &records)
+}
+
+#[test]
+fn redb_active_key_and_fetch_validator_record_round_trip_through_the_store() -> TestResult {
+    let records = four_validators();
+    let dir = tempfile::tempdir()?;
+    let mut store = RedbStateStore::open(dir.path().join("state.redb"))?;
+    seed_store(&mut store, &records)?;
+    assert_active_key_and_fetch_validator_record_round_trip(&store, &records)
+}
+
+#[test]
+fn in_memory_fetch_and_active_key_return_none_for_an_unknown_validator() -> TestResult {
+    let store = InMemoryStateStore::new();
+    assert_fetch_and_active_key_return_none_for_an_unknown_validator(&store)
+}
+
+#[test]
+fn redb_fetch_and_active_key_return_none_for_an_unknown_validator() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = RedbStateStore::open(dir.path().join("state.redb"))?;
+    assert_fetch_and_active_key_return_none_for_an_unknown_validator(&store)
 }
 
 fn hex(bytes: &[u8]) -> String {

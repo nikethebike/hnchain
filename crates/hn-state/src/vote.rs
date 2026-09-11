@@ -864,8 +864,8 @@ mod tests {
     struct MapReader(std::collections::BTreeMap<super::Digest, Vec<u8>>);
 
     impl StateReader for MapReader {
-        fn get(&self, state_key: &super::Digest) -> Option<Vec<u8>> {
-            self.0.get(state_key).cloned()
+        fn get(&self, state_key: &super::Digest) -> StateResult<Option<Vec<u8>>> {
+            Ok(self.0.get(state_key).cloned())
         }
     }
 
