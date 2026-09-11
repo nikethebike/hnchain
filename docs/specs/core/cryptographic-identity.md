@@ -91,14 +91,28 @@ SignatureEnvelope
   signature
 ```
 
+**Decided** (ADR-0002, "Decided: `SignatureEnvelope` concrete field
+list"): concrete shape is `envelope_version`, `algorithm_id`,
+`signature` only. `key_reference` and `verification_context` are both
+dropped — see §6 and ADR-0002 itself for the full reasoning
+(`verification_context` fully redundant with domain-separated hash tags
+plus fields every signing payload already carries; `key_reference`
+resolved as context-derived — `identity`/`role`/`height` already
+determine the one active key under this profile's "exactly one active
+signing key per role" invariant — rather than stored).
+
 Required rules:
 
 - `algorithm_id` must match the referenced key descriptor.
-- `verification_context` is mandatory.
 - `signature` must pass algorithm-specific canonicality checks.
 - Unknown algorithms are rejected unless explicitly activated by protocol rules.
 
 ## 6. Verification Context
+
+**Decided** (ADR-0002, "Decided: `SignatureEnvelope` concrete field
+list"): this section's own `VerificationContext` structure is not part
+of `SignatureEnvelope` — every field it names is already covered
+elsewhere. Kept below for historical/conceptual reference only.
 
 Verification context prevents replay across domains.
 

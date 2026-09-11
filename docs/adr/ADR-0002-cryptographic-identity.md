@@ -64,6 +64,61 @@ SignatureEnvelope
   verification_context
 ```
 
+**Decided: `SignatureEnvelope` concrete field list.** Both `key_reference`
+and `verification_context` — the two fields this ADR left most
+conceptual — are dropped from the concrete shape; only
+`envelope_version`, `algorithm_id`, and `signature` remain.
+
+`verification_context`'s own conceptual fields (below, "Signature
+Context": protocol name, network identifier, chain identifier, object
+type, object version, signature purpose) are already fully covered
+elsewhere: protocol name, object type, object version, and signature
+purpose are exactly what a `HASH_PROFILE_0x0001` domain tag (ADR-0005)
+already encodes — `"hnchain.vote.signing.v1"` and
+`"hnchain.transaction.signing.v1"` (ADR-0006, ADR-0012) are that
+context, compressed into one unambiguous string, not something a
+second envelope-level field needs to restate. Network ID and chain ID
+are the only genuine data values in that list, and every signing
+payload already carries them explicitly (`VoteSigningPayloadV1.chain_id`
+/`.network_id`, `TransactionSigningPayload`'s equivalents) — nothing is
+left for `verification_context` to add. This is the same redundancy
+class found repeatedly this session (`protocol_name` in
+`TransactionSigningPayload`, ADR-0006; `checksum_profile` in
+`AddressPayload`, ADR-0003; `hash_profile` in
+`ValidatorSetCommitmentV1`, ADR-0010; `quorum_threshold` in
+`QuorumCertificate`, ADR-0012) — the seventh instance, this time in
+this ADR's own text, the original source the `protocol_name`/
+`signature_purpose`-shaped over-inclusion kept re-deriving from.
+
+`key_reference` is dropped for a different reason — not redundant, but
+resolved by a design choice: asked the user explicitly (genuine fork,
+not a derived call). This ADR's own "Accepted Initial Direction"
+already establishes that v0.1 requires "exactly one active signing key
+[per role] unless the owning object specification defines a threshold
+or multisignature rule" — no such rule exists yet for anything. Under
+that invariant, the key to verify against is fully determined by
+context already present in every signing payload (identity — `sender`/
+`validator_id` — and height/epoch) without a separate reference field:
+`key = state.active_key(identity, role, height)`. This does not avoid
+a state lookup either way (the actual key material must be fetched to
+verify regardless of whether it's named explicitly or derived) — it
+only changes what the lookup is keyed by. Not foreclosed permanently:
+a future multisignature/threshold specification reintroducing multiple
+simultaneously-active keys per role would need to reintroduce something
+like `key_reference` at that point, against a concrete rule, rather
+than inventing its shape now against one that doesn't exist.
+
+`algorithm_id` is kept, deliberately not folded into the same
+redundancy argument: unlike the other two fields, it is not fully
+re-derivable from context without cost. A verifier must know which
+algorithm produced `signature` before it can even structurally
+interpret the signature bytes (length, encoding) — dropping it would
+make canonical *decoding* state-dependent (the verifier would need a
+state lookup just to parse the envelope), breaking the state-
+independent-decoding property every other `decode` function in this
+project's implementation preserves (`ConsensusVote::decode`,
+`QuorumCertificate::decode`, and others do no state access at all).
+
 The address format is intentionally not defined in this ADR. Address derivation
 is specified by ADR-0003.
 
@@ -447,7 +502,14 @@ for Ed25519 under algorithm ID `0x0001` is a breaking protocol change.
 ## Deferred Decisions
 
 - key rotation transaction semantics
-- threshold and multisignature identity model
+- `active_key(identity, role, height)` state lookup mechanism (the
+  concrete state read `SignatureEnvelope` verification depends on,
+  now that `key_reference` is decided as context-derived rather than
+  an explicit field — needs validators/accounts-domain state
+  integration, not yet built for either)
+- threshold and multisignature identity model (would need its own
+  `key_reference`-shaped field again if ever accepted — see "Decided:
+  `SignatureEnvelope` concrete field list," above)
 - hardware wallet compatibility requirements
 - post-quantum migration profile
 - cryptographic library selection
