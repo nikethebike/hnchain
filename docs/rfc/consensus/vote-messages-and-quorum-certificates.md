@@ -144,6 +144,14 @@ empty target value for `nil`.
 
 It must not contain local timing, debug logs, or network packet metadata.
 
+**Decided** (ADR-0012, "Decided: `vote_metadata` must be empty for any
+vote eligible to be certified"): a `QuorumCertificate` does not preserve
+each signer's `vote_metadata`, so certificate verification cannot
+reconstruct what a signer originally signed unless it is always empty.
+A vote with non-empty `vote_metadata` remains validly signed and
+broadcastable, but must not be counted toward any certificate's
+`signed_voting_power` — see §9.
+
 ### 4.9 Signature
 
 The signature uses the validator consensus key and cryptographic identity rules.
@@ -275,6 +283,13 @@ verification-time optimization layered on `individual_signatures`, not a
 distinct wire format — it stays open (§15) as its own independent decision.
 `bls_aggregate`/`threshold_signature` are not chosen for this profile;
 revisiting either would need its own future ADR-0002 amendment.
+
+**Decided** (ADR-0012, "Decided: `vote_metadata` must be empty for any
+vote eligible to be certified"): reconstructing signer `i`'s original
+signing payload for `individual_signatures` verification requires
+`vote_metadata = []` unconditionally — a `QuorumCertificate` does not
+carry per-signer metadata, so a vote with non-empty `vote_metadata` is
+excluded from certification entirely (§4.8).
 
 Every aggregation profile must define:
 

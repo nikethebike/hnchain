@@ -448,6 +448,38 @@ The certificate must define enough data to verify:
 - signature validity
 - threshold satisfaction
 
+**Decided: `vote_metadata` must be empty for any vote eligible to be
+certified.** Found while implementing verification, not while
+designing the wire format: checking "signature validity," above,
+requires a verifier to reconstruct exactly what signer `i` originally
+signed — a full `VoteSigningPayloadV1` — from the certificate's own
+fields. Every field of that reconstruction is already determined by
+the certificate except `vote_metadata` (`chain_id`/`network_id`/
+`epoch`/`height`/`round`/`validator_set_commitment`/`target_type`/
+`target_hash` come directly from the certificate; `vote_type` is
+`certificate_type`; `validator_id` is the signer named by the relevant
+`signer_commitment` bit) — a `QuorumCertificate` does not preserve each
+signer's `vote_metadata`, so if two signers' original votes used
+different `vote_metadata`, nothing in the certificate would tell a
+verifier which bytes either of them actually signed.
+
+Resolved by constraining which votes are eligible for certification,
+not by changing what a certificate carries: a vote with non-empty
+`vote_metadata` may still be validly signed and broadcast, but must not
+be counted toward any `QuorumCertificate`'s `signed_voting_power` — an
+aggregator collecting votes to build a certificate excludes any vote
+whose `vote_metadata` is non-empty, and a verifier reconstructs every
+signer's payload with `vote_metadata = []` unconditionally. This
+leaves `ConsensusVote`/`VoteSigningPayloadV1`'s own wire format
+untouched (`vote_metadata` stays a real, bounded field — every
+already-oracle-verified encode/decode test vector for `ConsensusVote`
+is unaffected) and keeps `QuorumCertificate.aggregate_proof` exactly
+`Vec<SignatureEnvelope>`, not a larger structure carrying per-signer
+metadata. The real cost: `vote_metadata` becomes effectively unusable
+for prevote/precommit votes in the actual consensus path, meaningful
+only for a vote type that never aggregates into a certificate, if one
+is ever added.
+
 ### Light-Client Verification
 
 Quorum certificates must be verifiable by light clients with the validator set
