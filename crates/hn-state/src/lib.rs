@@ -72,25 +72,41 @@
 //! path behind it, not just an in-memory slice the caller assembled by
 //! hand.
 //!
-//! `ConsensusVote::verify` ([`vote`]) is the first real call site:
-//! resolves the signer's key via `active_key` against a `StateReader`
-//! and checks the signature, not just structure. `QuorumCertificate` has
-//! no `verify` yet — not for lack of infrastructure, but a real,
-//! previously-unnoticed gap this crate's documentation now names
-//! explicitly (`QuorumCertificate`'s own doc comment): a certificate
-//! does not preserve each signer's original `vote_metadata`, so a
-//! verifier cannot always reconstruct exactly what a given signer
-//! signed. Both `ConsensusVote::verify` and any future
-//! `QuorumCertificate` verification check only the cryptographic
-//! signature — eligibility (`is_eligible_signer`), quorum satisfaction,
-//! and signer-set correctness against a real active set stay the
-//! caller's job, since verifying a single signature has no epoch/
-//! active-set context to check them against.
+//! `ConsensusVote::verify`/`QuorumCertificate::verify_signatures`
+//! ([`vote`]) both check real cryptographic signatures against keys
+//! resolved via `active_key`, closing a real gap found along the way:
+//! a certificate does not preserve each signer's original
+//! `vote_metadata`, so verification reconstructs every signer's payload
+//! with it forced empty (ADR-0012, "Decided: `vote_metadata` must be
+//! empty for any vote eligible to be certified"). Both check only the
+//! cryptographic signature — eligibility (`is_eligible_signer`), quorum
+//! satisfaction, and whether the supplied active set is actually
+//! correct for the referenced epoch stay the caller's job.
+//!
+//! [`stake_payload`], [`unstake_payload`], and
+//! [`validator_update_payload`] add `StakePayloadV1`/`UnstakePayloadV1`/
+//! `ValidatorUpdatePayloadV1` (ADR-0006, "Decided:
+//! `stake`/`unstake`/`validator_update` payload shapes") — the first
+//! discriminated-union payload in this codebase.
+//! `ValidatorUpdatePayloadV1.new_consensus_key` cannot use
+//! `hn_hncs::write_optional`/`read_optional` for the same reason
+//! `QuorumCertificate.aggregate_proof` cannot use `write_list`/
+//! `read_list`: decoding a `KeyDescriptor` can fail with a
+//! domain-specific error those generic helpers' `HncsResult`-typed
+//! closures cannot express, so its presence flag is hand-rolled instead.
+//! `encode_key_descriptor`/`decode_key_descriptor`
+//! ([`validator_record`]) are shared between `ValidatorRecordV1` and
+//! `ValidatorUpdatePayloadV1`, both of which carry a `KeyDescriptor` on
+//! the wire the same way.
 //!
 //! A real durable storage backend (`hn-storage`'s own "initial storage
 //! backend" choice, ADR-0019, still open — an in-memory `StateReader`/
 //! `StateWriter` implementation proves the trait boundary, not a
-//! persistence guarantee) remains out of scope for this crate.
+//! persistence guarantee) and the `stake`/`unstake`/`validator_update`
+//! *state transitions* (decoding a payload is this crate's concern the
+//! same way `apply_transfer` is separate from `TransferPayloadV1`;
+//! applying one is not yet implemented) remain out of scope for this
+//! crate.
 
 mod access_list;
 mod account;
@@ -108,14 +124,17 @@ mod list_merkle;
 mod node;
 mod nonce_value;
 mod receipt;
+mod stake_payload;
 mod state_store;
 mod transfer;
 mod transfer_payload;
 mod tree;
 mod tx_id;
+mod unstake_payload;
 mod validator;
 mod validator_digest;
 mod validator_record;
+mod validator_update_payload;
 mod validity_window;
 mod vote;
 
@@ -139,14 +158,19 @@ pub use list_merkle::{LIST_TREE_PROFILE_ID, list_empty_root, list_merkle_root, l
 pub use node::{EmptyHashTable, TREE_DEPTH, TREE_PROFILE_ID, internal_hash, leaf_hash, value_hash};
 pub use nonce_value::{NONCE_VERSION_1, NonceValueV1};
 pub use receipt::{RECEIPT_VERSION_1, ReceiptStatus, ReceiptV1};
+pub use stake_payload::{STAKE_PAYLOAD_VERSION_1, StakePayloadV1};
 pub use state_store::{StateReader, StateWriter};
 pub use transfer::{TransferParty, apply_transfer, apply_transfer_with_receipt};
 pub use transfer_payload::{TRANSFER_PAYLOAD_VERSION_1, TransferPayloadV1};
 pub use tree::{Leaf, compute_state_root};
 pub use tx_id::tx_id;
+pub use unstake_payload::{UNSTAKE_PAYLOAD_VERSION_1, UnstakePayloadV1};
 pub use validator::{DOMAIN_VALIDATORS, ValidatorSection, validator_section_state_key};
 pub use validator_digest::validator_digest;
 pub use validator_record::{RECORD_VERSION_1, ValidatorRecordV1, ValidatorStatus};
+pub use validator_update_payload::{
+    VALIDATOR_UPDATE_PAYLOAD_VERSION_1, ValidatorOperation, ValidatorUpdatePayloadV1,
+};
 pub use validity_window::ValidityWindowV1;
 pub use vote::{
     CONSENSUS_PROFILE_TENDERMINT_V1, ConsensusVote, MAX_QUORUM_SIGNATURES,

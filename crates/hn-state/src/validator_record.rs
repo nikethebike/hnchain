@@ -2,7 +2,9 @@ use hn_crypto::{
     Digest, ED25519_ALGORITHM_ID, ED25519_PUBLIC_KEY_LEN, KeyDescriptor, KeyRole,
     PUBLIC_KEY_MAX_LEN,
 };
-use hn_hncs::{Decoder, write_bytes, write_fixed_bytes, write_u8, write_u16, write_u128};
+use hn_hncs::{
+    Decoder, HncsResult, write_bytes, write_fixed_bytes, write_u8, write_u16, write_u128,
+};
 
 use crate::error::{StateError, StateResult};
 
@@ -96,19 +98,56 @@ pub struct ValidatorRecordV1 {
     pub status: ValidatorStatus,
 }
 
+/// Appends `key`'s canonical encoding (`algorithm_id: u16` + bounded
+/// `public_key` bytes) to `out`. Shared by [`ValidatorRecordV1::encode`]
+/// and `ValidatorUpdatePayloadV1::encode` (ADR-0006, "Decided:
+/// `stake`/`unstake`/`validator_update` payload shapes") — both carry a
+/// `KeyDescriptor` on the wire the same way, and duplicating this logic
+/// risks the two silently drifting apart.
+///
+/// `HncsResult`-typed, not `StateResult`: encoding a `KeyDescriptor` can
+/// only ever fail with a byte-framing error (the length field), never a
+/// domain-specific one, so this can be called directly wherever a
+/// `HncsResult`-typed closure is expected (unlike
+/// [`decode_key_descriptor`], which cannot be — see
+/// `ValidatorUpdatePayloadV1::decode`'s own documentation for why).
+pub(crate) fn encode_key_descriptor(out: &mut Vec<u8>, key: &KeyDescriptor) -> HncsResult<()> {
+    write_u16(out, key.algorithm_id());
+    write_bytes(out, &key.public_key_bytes(), PUBLIC_KEY_MAX_LEN)
+}
+
+/// Decodes a [`KeyDescriptor`] written by [`encode_key_descriptor`],
+/// always as a [`KeyRole::ValidatorConsensus`] key — the only role a
+/// `consensus_key`/`new_consensus_key` field is ever used for, matching
+/// why `key_role` itself is never stored (see
+/// [`ValidatorRecordV1`]'s own documentation).
+pub(crate) fn decode_key_descriptor(decoder: &mut Decoder<'_>) -> StateResult<KeyDescriptor> {
+    let algorithm_id = decoder.read_u16().map_err(StateError::Encoding)?;
+    if algorithm_id != ED25519_ALGORITHM_ID {
+        return Err(StateError::UnsupportedKeyAlgorithm {
+            value: algorithm_id,
+        });
+    }
+    let public_key_bytes = decoder
+        .read_bytes(PUBLIC_KEY_MAX_LEN)
+        .map_err(StateError::Encoding)?;
+    let public_key: [u8; ED25519_PUBLIC_KEY_LEN] =
+        public_key_bytes
+            .try_into()
+            .map_err(|_| StateError::UnsupportedKeyAlgorithm {
+                value: algorithm_id,
+            })?;
+    KeyDescriptor::from_public_key_bytes(KeyRole::ValidatorConsensus, public_key)
+        .map_err(StateError::InvalidConsensusKey)
+}
+
 impl ValidatorRecordV1 {
     /// Encodes this value as canonical HNCS bytes.
     pub fn encode(&self) -> StateResult<Vec<u8>> {
         let mut out = Vec::new();
         write_u16(&mut out, RECORD_VERSION_1);
         write_fixed_bytes(&mut out, &self.validator_id);
-        write_u16(&mut out, self.consensus_key.algorithm_id());
-        write_bytes(
-            &mut out,
-            &self.consensus_key.public_key_bytes(),
-            PUBLIC_KEY_MAX_LEN,
-        )
-        .map_err(StateError::Encoding)?;
+        encode_key_descriptor(&mut out, &self.consensus_key).map_err(StateError::Encoding)?;
         write_u128(&mut out, self.voting_power);
         write_u8(&mut out, self.status.as_u8());
         Ok(out)
@@ -129,26 +168,7 @@ impl ValidatorRecordV1 {
         let validator_id = decoder
             .read_fixed_bytes::<32>()
             .map_err(StateError::Encoding)?;
-
-        let algorithm_id = decoder.read_u16().map_err(StateError::Encoding)?;
-        if algorithm_id != ED25519_ALGORITHM_ID {
-            return Err(StateError::UnsupportedKeyAlgorithm {
-                value: algorithm_id,
-            });
-        }
-        let public_key_bytes = decoder
-            .read_bytes(PUBLIC_KEY_MAX_LEN)
-            .map_err(StateError::Encoding)?;
-        let public_key: [u8; ED25519_PUBLIC_KEY_LEN] =
-            public_key_bytes
-                .try_into()
-                .map_err(|_| StateError::UnsupportedKeyAlgorithm {
-                    value: algorithm_id,
-                })?;
-        let consensus_key =
-            KeyDescriptor::from_public_key_bytes(KeyRole::ValidatorConsensus, public_key)
-                .map_err(StateError::InvalidConsensusKey)?;
-
+        let consensus_key = decode_key_descriptor(&mut decoder)?;
         let voting_power = decoder.read_u128().map_err(StateError::Encoding)?;
         let status = ValidatorStatus::from_u8(decoder.read_u8().map_err(StateError::Encoding)?)?;
 

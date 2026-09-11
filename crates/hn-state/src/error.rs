@@ -197,6 +197,40 @@ pub enum StateError {
     /// end of the supplied active set — a padding bit that must be zero
     /// (ADR-0012, "Decided: signer commitment bit-level encoding").
     SignerCommitmentPaddingBitSet,
+    /// A decoded `StakePayloadV1.payload_version` does not match
+    /// [`crate::stake_payload::STAKE_PAYLOAD_VERSION_1`], the only shape
+    /// this implementation understands.
+    UnsupportedStakePayloadVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `UnstakePayloadV1.payload_version` does not match
+    /// [`crate::unstake_payload::UNSTAKE_PAYLOAD_VERSION_1`], the only
+    /// shape this implementation understands.
+    UnsupportedUnstakePayloadVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `ValidatorUpdatePayloadV1.payload_version` does not
+    /// match [`crate::validator_update_payload::VALIDATOR_UPDATE_PAYLOAD_VERSION_1`],
+    /// the only shape this implementation understands.
+    UnsupportedValidatorUpdatePayloadVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `ValidatorUpdatePayloadV1.operation` byte is not a
+    /// member of the closed `operation` registry (ADR-0006, "Decided:
+    /// `stake`/`unstake`/`validator_update` payload shapes").
+    InvalidValidatorOperation {
+        /// The rejected byte.
+        value: u8,
+    },
+    /// A decoded `ValidatorUpdatePayloadV1` has `new_consensus_key`
+    /// present or absent in a way that does not match what `operation`
+    /// requires — present only for `register`/`update_keys`, absent
+    /// otherwise (ADR-0006, "Decided: `stake`/`unstake`/
+    /// `validator_update` payload shapes").
+    ValidatorUpdateKeyPresenceMismatch,
 }
 
 impl From<HashError> for StateError {
@@ -305,6 +339,26 @@ impl core::fmt::Display for StateError {
             Self::SignerCommitmentPaddingBitSet => {
                 formatter.write_str("signer_commitment has a padding bit set past the active set")
             }
+            Self::UnsupportedStakePayloadVersion { value } => {
+                write!(formatter, "unsupported stake payload_version: {value}")
+            }
+            Self::UnsupportedUnstakePayloadVersion { value } => {
+                write!(formatter, "unsupported unstake payload_version: {value}")
+            }
+            Self::UnsupportedValidatorUpdatePayloadVersion { value } => {
+                write!(
+                    formatter,
+                    "unsupported validator_update payload_version: {value}"
+                )
+            }
+            Self::InvalidValidatorOperation { value } => {
+                write!(
+                    formatter,
+                    "invalid validator_update operation: 0x{value:02x}"
+                )
+            }
+            Self::ValidatorUpdateKeyPresenceMismatch => formatter
+                .write_str("new_consensus_key presence does not match validator_update operation"),
         }
     }
 }
