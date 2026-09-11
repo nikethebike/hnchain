@@ -444,16 +444,15 @@ explicit migration planning.
 
 ## Open Decisions
 
-- active validator set selection
+- `MAX_ACTIVE_SET_SIZE` value (derivation mechanism decided — ADR-0010,
+  "Decided: active set derivation mechanism": bounded, top-K by
+  `voting_power` descending, ties by ascending `validator_id`; the cap
+  value itself remains open)
 - voting power's maximum value bound and zero-power behavior (model,
   capping algorithm, and integer type — `u128` — all decided above;
   ADR-0010, "Decided: capped stake-weighted voting power" / "Decided:
   capping algorithm" / "Decided: voting power integer type"; cap value
   itself remains a separate open economic parameter)
-- quorum certificate representation now fully decided (ADR-0012:
-  aggregation scheme, signer commitment encoding, and — via ADR-0010 —
-  voting power width); `QuorumCertificate` unblocked as a concrete
-  struct
 - timeout and view-change *durations* (mechanism decided above —
   ADR-0009, "Timeout And View Change"; the exact base timeout and
   backoff formula are not)

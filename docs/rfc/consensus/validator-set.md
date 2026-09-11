@@ -178,10 +178,26 @@ The final derivation function must define:
 - deterministic output ordering
 - test vectors
 
-Conceptual function:
+**Decided** (ADR-0010, "Decided: active set derivation mechanism"):
+eligible statuses = `active` only; input state / timing reuses "Epoch
+Boundaries" (§9) — a height's set is whichever epoch's already-
+snapshotted set that height falls under; deterministic output ordering
+reuses `validators_root`'s ascending `validator_id` order (§7). Active
+set shape is **bounded**: top-K by `voting_power` descending, ties by
+ascending `validator_id` (reusing leader-election's own tie-break,
+ADR-0011) — asked the user explicitly, since this is not mechanically
+forced the way the other three items are. `MAX_ACTIVE_SET_SIZE` (`K`)
+itself, stake/bond requirements, activation delay, and deactivation
+delay remain open (§14).
+
+Conceptual function, decided shape:
 
 ```text
-ACTIVE_SET(state_root, epoch) -> ValidatorSet
+ACTIVE_SET(epoch) -> Vec<ValidatorRecordV1>
+  candidates = { v : v.status == active }
+  ranked = candidates sorted by (voting_power desc, validator_id asc)
+  selected = ranked.take(MAX_ACTIVE_SET_SIZE)
+  ACTIVE_SET = selected, re-ordered ascending by validator_id
 ```
 
 ## 7. Validator Set Commitment
@@ -337,8 +353,7 @@ Test vectors are mandatory before production implementation.
 - final validator ID derivation
 - voting power's maximum value bound and cap fraction value (model,
   capping algorithm, and integer type — `u128` — decided; see §8)
-- final active set selection algorithm
-- final maximum active set size
+- `MAX_ACTIVE_SET_SIZE` value (selection mechanism decided; see §6)
 - final epoch length
 - final activation delay
 - final deactivation delay

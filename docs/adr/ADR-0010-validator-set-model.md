@@ -161,6 +161,66 @@ Derivation must define:
 - maximum active set size, if any
 - voting power calculation
 
+**Decided: active set derivation mechanism.** Three of the items above
+are already settled by decisions made elsewhere, not independent
+choices here:
+
+- **Eligible statuses** — `active` only, by definition: the lifecycle
+  name itself is what "currently participates in consensus" means
+  (Decision, "Validator Status," above). `registered`/`candidate` have
+  not yet been admitted; `inactive`/`jailed`/`exited` have left or been
+  suspended. How a validator *reaches* `active` (the bond check at
+  `candidate → active`) is a separate, still-open question ("validator
+  admission ranking," Open Decisions) — this decision only says which
+  status counts, not how a validator earns it.
+- **Input state / timing** — already fixed by "Epoch Boundaries," above:
+  a height's active set is whichever epoch's already-snapshotted set
+  that height falls under (`BlockHeader.epoch`, ADR-0008, names which
+  one), snapshotted a full epoch ahead of activation. No separate
+  timing rule needed here.
+- **Deterministic output ordering** — ascending `validator_id`, reused
+  from `validators_root`'s and `signer_commitment`'s own already-decided
+  order (ADR-0010's "Validator Set Commitment," ADR-0012's "signer
+  commitment bit-level encoding") rather than inventing a third
+  canonical order for the same conceptual list.
+
+What remained a genuine fork, not derivable from precedent: **is the
+active set bounded (top-K by a ranking) or unbounded (every
+sufficiently-bonded `active` validator)?** Asked the user explicitly —
+this is not mechanically forced by anything already decided, unlike the
+three items above. Decided: **bounded, top-K by `voting_power`
+descending**, ties broken by ascending `validator_id` (reusing leader
+election's own tie-break rule, ADR-0011, rather than inventing a second
+one). Directly consistent with two things already on record rather than
+picked from nothing: the QC aggregation-scheme decision (ADR-0012)
+justified individual-signatures-with-bitmap specifically by
+"certificate size is `O(n)` in active set size, acceptable while the
+active set stays modest" — a claim that only holds if the set is
+actually capped; and this ADR's own "Tendermint-Style BFT" Alternatives
+Considered entry (ADR-0009) already names "very large validator sets are
+difficult without aggregation or committee mechanisms" as this profile's
+known disadvantage, never resolved, just accepted for a modest set.
+
+```text
+ACTIVE_SET(epoch) -> Vec<ValidatorRecordV1>
+  candidates = { v : v.status == active }
+  ranked = candidates sorted by (voting_power desc, validator_id asc)
+  selected = ranked.take(MAX_ACTIVE_SET_SIZE)
+  ACTIVE_SET = selected, re-ordered ascending by validator_id
+```
+
+`MAX_ACTIVE_SET_SIZE` itself (the cap value `K`) is deliberately not
+decided here — same scoping this ADR already used for the capping
+algorithm versus `cap_numerator`/`cap_denominator`'s value: the
+*mechanism* is decided, the *parameter* stays open ("initial active
+validator set size policy," Open Decisions). Note the final
+re-ordering step: ranking (by `voting_power`) and output order
+(by `validator_id`) are two different orderings serving two different
+purposes — selecting *who* makes the cut, versus a canonical,
+content-independent order for everything downstream (`validators_root`,
+`signer_commitment` bit indices) that does not change every time
+relative stake shifts.
+
 ### Voting Power
 
 Voting power is a consensus value.
@@ -577,7 +637,9 @@ rules and light-client compatibility analysis.
 
 ## Open Decisions
 
-- initial active validator set size policy
+- `MAX_ACTIVE_SET_SIZE` value (`K`) (derivation mechanism decided above
+  — bounded, top-K by `voting_power` descending; the cap value itself
+  is the remaining parameter)
 - voting power's *maximum value bound* and zero-power behavior (model,
   capping algorithm, integer type, overflow behavior, and rounding
   behavior all decided above — `u128`, checked arithmetic, floor only;
