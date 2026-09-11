@@ -10,6 +10,7 @@ description = "HNChain storage engine abstractions and adapters."
 
 [dependencies]
 hn-core = { path = "../hn-core" }
+hn-crypto = { path = "../hn-crypto" }
 hn-state = { path = "../hn-state" }
 
 [lints]

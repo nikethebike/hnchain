@@ -47,22 +47,37 @@
 //! documentation), [`validator`] adds the `validators` domain's own
 //! key derivation ([`validator_section_state_key`], mirroring
 //! [`account_section_state_key`]'s role for the `accounts` domain, ADR-0007
-//! domain `0x0006`) — the concrete, real gap validators had that accounts
-//! did not, and [`active_set`] adds the `ACTIVE_SET(epoch)` derivation
-//! function and the live not-jailed overlay check (ADR-0010/ADR-0015).
-//! Together these are the active-set query interface
-//! `QuorumCertificate::decode`'s own documentation flags as still
-//! missing — deliberately as storage-agnostic pure functions taking an
+//! domain `0x0006`), and [`active_set`] adds the `ACTIVE_SET(epoch)`
+//! derivation function and the live not-jailed overlay check
+//! (ADR-0010/ADR-0015), storage-agnostic pure functions taking an
 //! already-fetched candidate slice, the same boundary this crate's own
-//! charter draws everywhere else, not a new `StateReader`-style trait:
-//! `hn-storage` remains a genuine empty stub with no real backend or
-//! caller to design a storage-access abstraction against yet, and
-//! inventing one now would be speculative architecture ahead of any real
-//! need. Real signature *verification* and full quorum-satisfaction
-//! checking, which need a resolved `KeyDescriptor` per signer
-//! (`SignatureEnvelope::verify` takes one rather than looking it up) and
-//! an actual storage engine behind these key-derivation functions, remain
-//! out of scope for this crate.
+//! charter draws everywhere else.
+//!
+//! [`state_store`] adds the `StateReader`/`StateWriter` traits (ADR-0019,
+//! "Core interfaces") — the "State Access Interface" layer of ADR-0019's
+//! own boundary diagram, this crate's job per its charter, not a storage
+//! backend (`hn-storage`, which depends on this crate and implements
+//! these traits, never the reverse — no dependency cycle). Only these
+//! two of ADR-0019's nine named interfaces are covered; the rest
+//! (`StateTransaction`, `StateCommitter`, `BlockStore`, `ProofStore`,
+//! `SnapshotStore`, `PruningController`, `ArchiveStore`) have no
+//! consumer anywhere in this codebase yet and are deliberately not
+//! defined ahead of one. [`active_key`]/[`fetch_validator_record`]
+//! ([`active_set`]) are the first real consumers: a `validator_id`
+//! lookup against any `impl StateReader`, resolving ADR-0002's
+//! "Decided: `SignatureEnvelope` concrete field list" `key_reference`
+//! (context-derived, not stored) into an actual `KeyDescriptor`. This is
+//! the active-set query interface `QuorumCertificate::decode`'s own
+//! documentation flags as still missing, now with a real store-backed
+//! path behind it, not just an in-memory slice the caller assembled by
+//! hand.
+//!
+//! Real signature *verification* (needs `SignatureEnvelope::verify`
+//! wired to an actual resolved `KeyDescriptor` at a real call site) and
+//! a real durable storage backend (`hn-storage`'s own "initial storage
+//! backend" choice, ADR-0019, still open — an in-memory `StateReader`/
+//! `StateWriter` implementation proves the trait boundary, not a
+//! persistence guarantee) remain out of scope for this crate.
 
 mod access_list;
 mod account;
@@ -80,6 +95,7 @@ mod list_merkle;
 mod node;
 mod nonce_value;
 mod receipt;
+mod state_store;
 mod transfer;
 mod transfer_payload;
 mod tree;
@@ -96,7 +112,7 @@ pub use account::{
     account_extension_payload_state_key, account_extension_registry_state_key,
     account_section_state_key,
 };
-pub use active_set::{active_set, is_eligible_signer};
+pub use active_set::{active_key, active_set, fetch_validator_record, is_eligible_signer};
 pub use asset_value::{ASSET_VERSION_1, AssetValueV1, MAX_ASSET_HOLDINGS};
 pub use balance_value::{BALANCE_VERSION_1, BalanceValueV1};
 pub use block_hash::block_hash;
@@ -110,6 +126,7 @@ pub use list_merkle::{LIST_TREE_PROFILE_ID, list_empty_root, list_merkle_root, l
 pub use node::{EmptyHashTable, TREE_DEPTH, TREE_PROFILE_ID, internal_hash, leaf_hash, value_hash};
 pub use nonce_value::{NONCE_VERSION_1, NonceValueV1};
 pub use receipt::{RECEIPT_VERSION_1, ReceiptStatus, ReceiptV1};
+pub use state_store::{StateReader, StateWriter};
 pub use transfer::{TransferParty, apply_transfer, apply_transfer_with_receipt};
 pub use transfer_payload::{TRANSFER_PAYLOAD_VERSION_1, TransferPayloadV1};
 pub use tree::{Leaf, compute_state_root};

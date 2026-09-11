@@ -1,3 +1,8 @@
+use hn_crypto::{Digest, KeyDescriptor};
+
+use crate::error::StateResult;
+use crate::state_store::StateReader;
+use crate::validator::{ValidatorSection, validator_section_state_key};
 use crate::validator_record::{ValidatorRecordV1, ValidatorStatus};
 
 /// Derives an epoch's active validator set from a full set of candidate
@@ -71,6 +76,49 @@ pub fn active_set(candidates: &[ValidatorRecordV1], max_size: usize) -> Vec<Vali
 /// assuming that invariant, so it stays correct even if that changes.
 pub fn is_eligible_signer(in_epoch_active_set: bool, current_status: ValidatorStatus) -> bool {
     in_epoch_active_set && current_status != ValidatorStatus::Jailed
+}
+
+/// Fetches and decodes `validator_id`'s current [`ValidatorRecordV1`]
+/// from `reader`, or `None` if nothing is stored at its
+/// [`crate::validator_section_state_key`].
+///
+/// This is the "State Access Interface" step ADR-0019's own boundary
+/// diagram places between the execution engine and a [`StateReader`]
+/// backend, specialized to the `validators` domain's one decided section
+/// — the building block [`active_key`] (below) is a thin wrapper over.
+pub fn fetch_validator_record(
+    reader: &impl StateReader,
+    validator_id: &Digest,
+) -> StateResult<Option<ValidatorRecordV1>> {
+    let key = validator_section_state_key(validator_id, ValidatorSection::Record)?;
+    match reader.get(&key) {
+        Some(bytes) => Ok(Some(ValidatorRecordV1::decode(&bytes)?)),
+        None => Ok(None),
+    }
+}
+
+/// The `active_key(identity, role, height)` lookup ADR-0002's "Decided:
+/// `SignatureEnvelope` concrete field list" depends on
+/// (`key_reference` is context-derived from identity/role/height rather
+/// than a stored field — see that decision's own reasoning), narrowed to
+/// this profile's one relevant role (`validator_consensus`, implicit —
+/// every [`ValidatorRecordV1.consensus_key`](ValidatorRecordV1) already
+/// is one, by construction) and to "whatever height `reader` reflects":
+/// this function does no height-indexed lookup itself, since this crate
+/// does not implement historical/archival state access (ADR-0019,
+/// `ArchiveStore` — no consumer, not attempted) — which `reader` to pass
+/// in for a given height is entirely the caller's concern.
+///
+/// Returns `Ok(None)` only when no record exists for `validator_id` —
+/// a stored record whose `consensus_key` this implementation cannot
+/// decode (for example an unsupported algorithm) is an `Err`, not a
+/// silent `None`, since [`ValidatorRecordV1::decode`] already rejects
+/// that at decode time.
+pub fn active_key(
+    reader: &impl StateReader,
+    validator_id: &Digest,
+) -> StateResult<Option<KeyDescriptor>> {
+    Ok(fetch_validator_record(reader, validator_id)?.map(|record| record.consensus_key))
 }
 
 #[cfg(test)]
@@ -209,5 +257,56 @@ mod tests {
         assert!(!is_eligible_signer(true, ValidatorStatus::Jailed));
         assert!(!is_eligible_signer(false, ValidatorStatus::Active));
         assert!(!is_eligible_signer(false, ValidatorStatus::Jailed));
+    }
+
+    /// A minimal `StateReader` test double. `hn-state` cannot depend on
+    /// `hn-storage`'s real `InMemoryStateStore` (the dependency direction
+    /// runs the other way — see `state_store`'s module documentation), so
+    /// this crate's own unit tests need their own tiny stand-in.
+    struct MapReader(std::collections::BTreeMap<hn_crypto::Digest, Vec<u8>>);
+
+    impl crate::state_store::StateReader for MapReader {
+        fn get(&self, state_key: &hn_crypto::Digest) -> Option<Vec<u8>> {
+            self.0.get(state_key).cloned()
+        }
+    }
+
+    #[test]
+    fn fetch_validator_record_round_trips_through_a_reader() -> StateResult<()> {
+        use crate::validator::{ValidatorSection, validator_section_state_key};
+
+        let record = validator(0x07, 250, ValidatorStatus::Active)?;
+        let key = validator_section_state_key(&record.validator_id, ValidatorSection::Record)?;
+        let reader = MapReader(std::collections::BTreeMap::from([(key, record.encode()?)]));
+
+        let fetched = super::fetch_validator_record(&reader, &record.validator_id)?;
+        assert_eq!(fetched, Some(record));
+
+        Ok(())
+    }
+
+    #[test]
+    fn active_key_extracts_the_consensus_key() -> StateResult<()> {
+        use crate::validator::{ValidatorSection, validator_section_state_key};
+
+        let record = validator(0x08, 250, ValidatorStatus::Active)?;
+        let key = validator_section_state_key(&record.validator_id, ValidatorSection::Record)?;
+        let reader = MapReader(std::collections::BTreeMap::from([(key, record.encode()?)]));
+
+        let descriptor = super::active_key(&reader, &record.validator_id)?;
+        assert_eq!(descriptor, Some(record.consensus_key));
+
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_and_active_key_return_none_for_an_unknown_validator_id() -> StateResult<()> {
+        let reader = MapReader(std::collections::BTreeMap::new());
+        let unknown_id = [0xee; 32];
+
+        assert_eq!(super::fetch_validator_record(&reader, &unknown_id)?, None);
+        assert_eq!(super::active_key(&reader, &unknown_id)?, None);
+
+        Ok(())
     }
 }

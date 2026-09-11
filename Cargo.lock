@@ -228,6 +228,7 @@ name = "hn-storage"
 version = "0.1.0"
 dependencies = [
  "hn-core",
+ "hn-crypto",
  "hn-state",
 ]
 
