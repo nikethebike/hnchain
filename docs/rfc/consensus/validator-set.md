@@ -118,7 +118,11 @@ exited
 
 `voting_power` is an unsigned integer consensus value.
 
-The final integer width is open.
+**Decided** (ADR-0010, "Decided: voting power integer type — `u128`"):
+matches `BalanceValueV1.native_balance`'s own width — the capping
+algorithm (§8) operates directly on bonded stake with no rescaling
+step, so voting power shares stake's unit. A maximum value bound below
+`u128::MAX`, if any, remains open.
 
 Voting power must not use floating-point arithmetic.
 
@@ -221,8 +225,8 @@ source of weight is bonded stake, capped at a maximum share of total
 voting power — asked the user explicitly, given the weight of this
 decision and this section's own analysis requirement. Committee-based
 weighting is ruled out (needs randomness ADR-0011 already excludes from
-leader election entirely). Integer width and the cap's exact value
-remain open.
+leader election entirely). The cap's exact value remains open (integer
+width decided separately — `u128`, see §4.7).
 
 **Decided** (ADR-0010, "Decided: capping algorithm"): iterative re-cap
 until stable — each round, clamp every validator's power at
@@ -233,7 +237,7 @@ over round. Not a single-pass clamp: clamping the largest stakes
 shrinks the total the cap was computed against, so a single pass does
 not actually bound any validator's post-normalization share (worked
 example in ADR-0010). `cap_numerator`/`cap_denominator`'s concrete
-value and voting power's integer width remain open.
+value remains open (integer width decided separately — `u128`, §4.7).
 
 ## 9. Epoch Transitions
 
@@ -331,8 +335,8 @@ Test vectors are mandatory before production implementation.
 
 - final validator record schema
 - final validator ID derivation
-- final voting power integer width and cap fraction value (model and
-  capping algorithm mechanism decided; see §8)
+- voting power's maximum value bound and cap fraction value (model,
+  capping algorithm, and integer type — `u128` — decided; see §8)
 - final active set selection algorithm
 - final maximum active set size
 - final epoch length

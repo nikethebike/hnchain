@@ -178,11 +178,56 @@ Every accepted consensus profile must define:
 Floating-point arithmetic is rejected for voting power.
 
 Voting power source is decided above (Decision: capped stake-weighted).
-Integer type/bounds and general rounding/overflow behavior remain
-open — the quorum threshold calculation itself is already decided
-independently of all of these (ADR-0012, "Decided: quorum threshold
-formula": `signed * 3 > total * 2`, exact integer arithmetic, applies
-unchanged regardless of voting power's width or source).
+The quorum threshold calculation itself is already decided independently
+of everything below (ADR-0012, "Decided: quorum threshold formula":
+`signed * 3 > total * 2`, exact integer arithmetic, applies unchanged
+regardless of voting power's width or source).
+
+**Decided: voting power integer type — `u128`.** Verified against the
+codebase rather than assumed, per the same discipline used for every
+prior decision today: `hn_core`'s protocol *counters*
+(`BlockHeight`/`Epoch`/`Round`/`ProtocolEpoch`/`AccountNonce`) are all
+`u64` newtypes, but this project's *economic amounts*
+(`BalanceValueV1.native_balance`, `AssetValueV1.holdings`'s per-entry
+amount) are plain `u128`, with no dedicated wrapper type. `voting_power`
+belongs to the second category, not the first — it is capped bonded
+stake (Decision, above), and the capping algorithm decided just above
+this operates directly on `stake_i` with no rescaling step, so its
+natural output unit is bonded stake's own unit. `u64` would have been a
+category error, not just an unverified guess: it would silently assume
+a normalization step this ADR never decided. `voting_power` stays a
+plain `u128` field on `ValidatorRecordV1`/`ValidatorSetCommitmentV1`/
+`QuorumCertificate`, matching `native_balance`'s own precedent of no
+dedicated newtype for an amount-shaped value.
+
+**Decided: overflow behavior — checked, not wrapping.** `total_voting_power
+= sum(power_i)` and the quorum formula's `signed_voting_power * 3` /
+`total_voting_power * 2` must use checked arithmetic; overflow is
+rejected as invalid, never silently wrapped, matching the
+`checked_add`/`checked_sub` pattern `apply_transfer` (ADR-0006) already
+establishes for balance arithmetic. In practice this is headroom, not a
+live risk: `total_voting_power` is bounded by the sum of bonded stake
+across the active set, itself bounded by total token supply, and
+`native_balance` was already given `u128` "with headroom" specifically
+so this kind of downstream arithmetic would not need to worry about
+realistic overflow — checked arithmetic here is a correctness
+requirement (ADR-0000, "No Hidden Consensus Dependencies": overflow
+behavior must be explicit, not implementation-defined), not evidence
+that overflow is expected.
+
+**Decided: rounding behavior — none beyond the capping algorithm's own
+`floor`.** No other operation on `voting_power` performs division:
+`power_i = min(stake_i, C_r)` and `total_voting_power = sum(power_i)`
+are both exact integer operations, and the quorum formula was already
+decided to use multiplication specifically to avoid needing rounding at
+all (ADR-0012). The capping algorithm's `floor(cap_numerator * total_r /
+cap_denominator)` (Decision, above) is the only rounding rule this
+profile needs.
+
+Voting power's *bounds* (a maximum value below `u128::MAX`, if any) and
+zero-power behavior remain open, below — narrower questions than the
+type itself, not blocking `QuorumCertificate` or `ValidatorRecordV1`
+from being concretely encodable.
 
 **Decided: capping algorithm (mechanism, not the cap fraction's
 value).** Asked the user explicitly — this is the exact fixed-point
@@ -266,9 +311,11 @@ at epoch `N + 1`'s first height, exactly; old keys remain valid for
 verifying evidence and historical blocks from epoch `N` and earlier
 (already stated conceptually in "Key Rotation," below — this decision
 fixes the boundary precisely rather than leaving "remain valid" open).
-This mechanism is independent of the voting power model (still open,
-Open Decisions) and of the exact epoch length: both apply unchanged
-regardless of which is eventually chosen.
+This mechanism was decided independently of the voting power model and
+the exact epoch length, both open at the time — both have since been
+at least partly resolved (model: capped stake-weighted; epoch length's
+constant remains open), and this mechanism needed no revision either
+way, confirming the independence held.
 
 ### Validator Set Commitment
 
@@ -531,10 +578,11 @@ rules and light-client compatibility analysis.
 ## Open Decisions
 
 - initial active validator set size policy
-- voting power integer type/bounds and general rounding/overflow
-  behavior (model and capping algorithm mechanism decided above —
-  capped stake-weighted, iterative re-cap until stable; these are the
-  remaining representation-level parameters)
+- voting power's *maximum value bound* and zero-power behavior (model,
+  capping algorithm, integer type, overflow behavior, and rounding
+  behavior all decided above — `u128`, checked arithmetic, floor only;
+  a bound below `u128::MAX` and what zero stake/power means for active
+  set membership are the remaining narrower questions)
 - minimum validator bond
 - delegation support
 - stake caps (`cap_numerator`/`cap_denominator` value and

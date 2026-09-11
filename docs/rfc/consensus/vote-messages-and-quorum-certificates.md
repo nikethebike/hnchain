@@ -192,7 +192,6 @@ QuorumCertificateV1
   validator_set_commitment
   target_type
   target_hash
-  quorum_threshold
   total_voting_power
   signed_voting_power
   signer_commitment

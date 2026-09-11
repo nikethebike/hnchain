@@ -71,12 +71,21 @@ QuorumCertificate
   validator_set_commitment
   target_type
   target_hash
-  quorum_threshold
   total_voting_power
   signed_voting_power
   signer_commitment
   aggregate_proof
 ```
+
+`quorum_threshold` (originally listed above) is dropped: the quorum
+threshold formula is fixed for this profile (Decision, below —
+`signed_voting_power * 3 > total_voting_power * 2`), not a
+per-certificate configurable value, so a stored field would duplicate
+what `total_voting_power` already determines on its own. Same
+redundancy class as `protocol_name` (`TransactionSigningPayload`,
+ADR-0006), `checksum_profile` (`AddressPayload`, ADR-0003 Decision 5),
+and `hash_profile` (`ValidatorSetCommitmentV1`, ADR-0010) — the fifth
+instance of this pattern found this session.
 
 **Decided: individual signatures with bitmap.** Asked the user first — same
 weight as the consensus family and voting power model choices, per the
@@ -301,13 +310,12 @@ when `signed_voting_power * 3 > total_voting_power * 2` — strict
 majority above two thirds, using multiplication instead of division to
 avoid rounding-mode ambiguity across implementations (matching ADR-0000,
 "No Hidden Consensus Dependencies": no floating point, no
-implementation-defined rounding). This is independent of the voting
-power *model* (ADR-0010, still open — equal-weight, stake-weighted,
-capped, or committee-based all produce a `total_voting_power` this same
-formula applies to unchanged) and independent of `voting_power`'s
-final integer width (ADR-0010, still open) — the formula is exact
-integer arithmetic regardless of what width `total_voting_power` and
-`signed_voting_power` end up using, as long as `signed_voting_power *
+implementation-defined rounding). This was decided independently of the
+voting power *model* and of `voting_power`'s integer width, both open at
+the time (ADR-0010) — since resolved (capped stake-weighted, `u128`),
+confirming the formula needed no revision: it is exact integer
+arithmetic regardless of what width `total_voting_power` and
+`signed_voting_power` use, as long as `signed_voting_power *
 3` cannot overflow that width (a constraint on the chosen width, not on
 this formula).
 
@@ -622,14 +630,12 @@ compatibility analysis.
 
 ## Open Decisions
 
-- final quorum certificate format (`certificate_type` registry,
-  threshold formula, signature aggregation scheme, and signer
-  commitment bit-level encoding all decided above; voting power's
-  integer width — ADR-0010 — is the last thing blocking a concrete
-  struct)
 - `MAX_SIGNER_COMMITMENT_LEN`-style implementation bound (encoding
   mechanism decided above; sizing it needs ADR-0010's "maximum active
-  set size, if any," still open)
+  set size, if any," still open — `QuorumCertificate` itself is now
+  fully decided and encodable: `certificate_type` registry, threshold
+  formula, aggregation scheme, signer commitment encoding, and voting
+  power's integer type — `u128`, ADR-0010 — are all decided)
 - batch verification rules (optional layer on top of the decided
   scheme, not a format fork — see "Batch Verification," Alternatives
   Considered)
