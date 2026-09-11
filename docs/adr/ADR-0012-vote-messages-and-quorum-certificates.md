@@ -369,9 +369,54 @@ The certificate must commit to the signer set.
 
 The commitment is a bitmap over the active validator set (Decision, above —
 "individual signatures with bitmap"), not an aggregate-signature-derived
-representation. The exact bitmap encoding (bit ordering against the active
-set, fixed vs. variable width) remains open, below — this decision fixes
-the commitment's *kind*, not its byte-level layout.
+representation.
+
+**Decided: signer commitment bit-level encoding.** Directly continues the
+"bitmap" kind decision above — ordering and width are the only two things
+that decision left unresolved, and both are derivable from already-decided
+material rather than independent forks:
+
+- **Ordering.** Bit `i` corresponds to the `i`-th validator in the same
+  canonical order `validators_root` already uses — ascending `validator_id`
+  (ADR-0010, "Decided: `validators_root` and `validator_set_commitment` /
+  `consensus_root` mechanism"). A verifier that checks a `ConsensusVote`'s
+  signer against the active set already reconstructs this exact ordered
+  list to walk `validators_root`'s Merkle structure; reusing it for the
+  bitmap means no second canonical ordering exists anywhere in the protocol
+  for the same active set. Inventing a different order here (e.g. by
+  registration time or descending voting power) would buy nothing and cost
+  every verifier a second ordered index to maintain.
+- **Width.** The bitmap's byte length is `ceil(active_set_size / 8)`,
+  where `active_set_size` is the cardinality of the active validator set
+  for the epoch the vote/certificate references — data every verifier
+  already has, independent of whether `ValidatorSetCommitmentV1` itself
+  ever gains a dedicated `validator_count` field (`validator-set.md` §7's
+  conceptual struct has one, but that field's presence is still open —
+  "final validator set commitment format," ADR-0010's RFC). On the wire,
+  `signer_commitment` is still an HNCS bounded `bytes` value (like
+  `vote_metadata`), not a protocol-wide fixed-size field — the active set
+  changes size across epochs, so no single width constant could cover
+  every epoch. What is fixed is the check: a decoder must reject any
+  `signer_commitment` whose decoded byte length is not *exactly*
+  `ceil(active_set_size / 8)` for the referenced epoch, not merely accept
+  whatever length the field happens to carry.
+- **Bit packing.** Byte index `floor(i / 8)`, bit position `i mod 8` within
+  that byte, least-significant-bit first — `bit 0` of `byte 0` is
+  validator index `0`, `bit 7` of `byte 0` is validator index `7`, and so
+  on. LSB-first keeps the same "lowest index, least significant" mental
+  model HNCS already uses for little-endian multi-byte integers (ADR-0004),
+  rather than mixing bit- and byte-order conventions within one structure.
+  Any padding bits beyond `active_set_size - 1` in the final byte (when
+  `active_set_size` is not a multiple of 8) must be zero; a decoder must
+  reject a `signer_commitment` with any padding bit set, per the malformed
+  signer commitment rejection already required below.
+
+A concrete `MAX_SIGNER_COMMITMENT_LEN`-style implementation bound (the same
+class of decision as `MAX_VOTE_METADATA_LEN`/`MAX_VOTE_SIGNATURE_LEN`,
+picked with headroom ahead of the final protocol parameter) is deferred to
+implementation time, once ADR-0010's "maximum active set size, if any" gives
+a concrete number to size it against — the same relationship
+`OBJECT_ID_MAX_LEN` already has with ADR-0003's final address body length.
 
 The final representation must support deterministic verification and malformed
 signer rejection.
@@ -578,11 +623,13 @@ compatibility analysis.
 ## Open Decisions
 
 - final quorum certificate format (`certificate_type` registry,
-  threshold formula, and signature aggregation scheme decided above;
-  signer commitment's exact bit-level encoding and voting power's
-  integer width — ADR-0010 — still block a concrete struct)
-- signer commitment bit-level encoding (kind decided above — bitmap
-  over the active set; ordering and width are not)
+  threshold formula, signature aggregation scheme, and signer
+  commitment bit-level encoding all decided above; voting power's
+  integer width — ADR-0010 — is the last thing blocking a concrete
+  struct)
+- `MAX_SIGNER_COMMITMENT_LEN`-style implementation bound (encoding
+  mechanism decided above; sizing it needs ADR-0010's "maximum active
+  set size, if any," still open)
 - batch verification rules (optional layer on top of the decided
   scheme, not a format fork — see "Batch Verification," Alternatives
   Considered)

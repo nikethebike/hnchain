@@ -42,8 +42,9 @@ This RFC does not define:
 - final consensus protocol
 - final active vote type registry
 - final quorum threshold formula
-- final signer commitment bit-level encoding (aggregation profile
-  itself is decided — §9)
+- final quorum certificate schema (aggregation profile and signer
+  commitment encoding are decided — §8/§9; voting power integer
+  width, ADR-0010, is what remains)
 - final slashing penalties
 - final checkpoint interval
 
@@ -237,7 +238,19 @@ aggregate_signature_metadata
 `merkle_signer_root` would each be larger than a fixed-width bitmap for a
 modest active set with no compensating benefit, and
 `aggregate_signature_metadata` is specific to an aggregate scheme this
-profile does not use. Exact bit ordering and width still open (§15).
+profile does not use.
+
+**Decided** (ADR-0012, "Decided: signer commitment bit-level encoding"):
+bit `i` = the `i`-th validator in `validators_root`'s own ascending-
+`validator_id` order (ADR-0010) — no second canonical ordering invented for
+the same active set. Byte length is `ceil(active_set_size / 8)` for the
+referenced epoch (a decoder must reject any other length, not just accept
+whatever is given); bit packing is LSB-first (`bit 0` of `byte 0` =
+validator index `0`), matching HNCS's own little-endian orientation.
+Padding bits past `active_set_size - 1` must be zero. A
+`MAX_SIGNER_COMMITMENT_LEN`-style implementation bound is deferred until
+ADR-0010's "maximum active set size, if any" gives a concrete number to
+size it against.
 
 The accepted representation must define canonical ordering and malformed input
 rejection.
@@ -361,10 +374,13 @@ Test vectors are mandatory before production implementation.
 - final vote type registry
 - final target type registry
 - final quorum threshold formula
-- final quorum certificate schema (aggregation profile decided; see
-  §9 — signer commitment bit-level encoding and voting power integer
-  width still block a concrete schema)
-- final signer commitment bit-level encoding (kind decided; see §8)
+- final quorum certificate schema (aggregation profile and signer
+  commitment bit-level encoding decided; see §8/§9 — voting power
+  integer width, ADR-0010, is the last thing blocking a concrete
+  schema)
+- `MAX_SIGNER_COMMITMENT_LEN`-style implementation bound (encoding
+  decided; see §8 — sizing it needs ADR-0010's maximum active set
+  size, still open)
 - final batch verification rules (independent optimization layer, not
   a competing aggregation profile; see §9)
 - final vote signing hash profile
