@@ -293,11 +293,24 @@ Failure behavior follows the already-decided nonce/fee rules (§4.5,
 §4.6): a failed `transfer` still consumed its nonce and still owes a
 fee; only its own state effects revert.
 
+**Decided** (ADR-0006, "Decided: `stake`/`unstake`/`validator_update`
+payload shapes"): `stake` (`StakePayloadV1 { payload_version, amount }`,
+mutates `bonded_stake` — no `validator_id` field, always `sender`, per
+ADR-0010's "Decided: `validator_id` derivation"), `unstake` (same
+shape, symmetric), and `validator_update`
+(`ValidatorUpdatePayloadV1 { payload_version, operation, optional
+new_consensus_key }` — a closed `operation` registry covering
+`register`/`activate`/`deactivate`/`exit`/`update_keys`, folding 5 of
+`validator-set.md` §11's 8 conceptual operations into ADR-0006's one
+available `tx_type` slot; `update_metadata` excluded, no
+`metadata_hash` field exists yet). Minimum bond amount and unbonding
+period stay open economic parameters — see ADR-0006 for the full
+reasoning.
+
 Every other `tx_type` is parked, each blocked on a named subsystem that
 does not exist yet: `contract_deploy`/`contract_call` (HNVM),
-`stake`/`unstake`/`validator_update` (consensus/validator specs, likely
-tokenomics too), `governance` (a governance model), `permission_update`
-(Permission State, §4.5), `system` (scope not yet concrete).
+`governance` (a governance model), `permission_update` (Permission
+State, §4.5), `system` (scope not yet concrete).
 
 ## 6. Signatures
 
@@ -446,8 +459,11 @@ Boundary rules:
 - final fee model (mechanism decided; see §4.6 — amount, refunds,
   distribution, burn policy, and priority market remain economic
   decisions)
-- final `payload` schemas for 8 of 9 `tx_type`s (§5 — `transfer` is
-  decided; each remaining type is parked on a named blocker)
+- final `payload` schemas for the remaining 5 of 9 `tx_type`s (§5 —
+  `transfer`, `stake`, `unstake`, `validator_update` are decided; each
+  remaining type is parked on a named blocker; `stake`/`unstake`/
+  `validator_update` still need their own economic parameters —
+  minimum bond, unbonding period — before fully closed)
 - newly-created accounts' Permission/Metadata initial values (§5,
   `transfer` implicit creation) — blocked on §4.5/§4.6
 - final receipt schema (`ReceiptV1` core shape decided, ADR-0006

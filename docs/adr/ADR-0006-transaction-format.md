@@ -485,15 +485,117 @@ precondition failed. Event behavior: `transfer` emits no event (Events,
 below); its outcome is fully visible through its receipt and the state
 root.
 
+**Decided: `stake`/`unstake`/`validator_update` (`0x04`-`0x06`)
+payload shapes.** The original blocker ("consensus and validator
+specifications, which do not exist yet") no longer holds — this
+session's consensus track decided `ValidatorRecordV1`, the admission
+mechanism, jailing, voting power, and active set derivation. What
+remains blocked is exactly what the original text also named: economic
+parameters (minimum bond, unbonding period, reward/slashing amounts),
+owned by a future tokenomics pass — the same mechanism-now/amount-later
+split every other economic-adjacent decision in this project already
+uses.
+
+Getting here required two more decisions first, both asked explicitly
+(ADR-0010, "Decided: `validator_id` derivation" / "Decided:
+`bonded_stake`, distinct from `voting_power`"): a payload naming a
+validator needs a settled `validator_id` and an answer to who may act
+on it, and `stake`/`unstake` need a field to actually mutate, which
+`ValidatorRecordV1` did not yet have (only the already-capped
+`voting_power`, not raw bonded stake).
+
+```text
+StakePayloadV1
+  u16   payload_version = 1
+  u128  amount
+```
+
+No `validator_id` field: `validator_id` is the controlling account's
+own `address_body` (ADR-0010), so it is always `sender` — a
+self-managed validator names itself implicitly, the same way `transfer`
+never names its own sender. Requires a `ValidatorRecordV1` to already
+exist for `sender` (created via `validator_update { operation: register
+}`, below); does not implicitly create one the way `transfer` creates
+accounts, because a validator record additionally needs a
+`consensus_key`, which `StakePayloadV1` carries no field for. State
+transition: `bonded_stake += amount`. Whether `voting_power` is
+recomputed synchronously or only at the next epoch boundary (ADR-0010,
+"Decided: `bonded_stake`, distinct from `voting_power`") is not decided
+here. Minimum bond amount stays an open economic parameter.
+
+```text
+UnstakePayloadV1
+  u16   payload_version = 1
+  u128  amount
+```
+
+Same shape, same implicit-`sender`-as-`validator_id` reasoning. State
+transition: `bonded_stake -= amount` (checked; cannot go negative).
+Deliberately decides only this immediate bookkeeping effect, not
+whether or when unstaked funds actually become withdrawable — that
+needs the still-open "unbonding period" (ADR-0010) and is a real
+mechanism this decision does not resolve, not merely an unfilled
+constant.
+
+```text
+ValidatorUpdatePayloadV1
+  u16                    payload_version = 1
+  u8                     operation
+  optional KeyDescriptor new_consensus_key
+```
+
+`operation` registry, `u8`, closed for this payload version:
+
+```text
+0x00  reserved, invalid
+0x01  register
+0x02  activate
+0x03  deactivate
+0x04  exit
+0x05  update_keys
+```
+
+Five of `validator-set.md` §11's eight conceptual operations
+(`validator_register`, `validator_activate`, `validator_deactivate`,
+`validator_exit`, `validator_update_keys`) fold into this one `tx_type`
+as a discriminated operation, rather than each getting its own —
+ADR-0006's `tx_type` registry is already decided closed for
+`tx_version = 1`, with exactly one slot (`0x06`) available for
+everything validator-lifecycle-shaped that is not `stake`/`unstake`.
+`validator_bond`/`validator_unbond` map directly to `stake`/`unstake`
+instead, matching those names literally. `validator_update_metadata`
+is excluded, not merely unassigned a number: `ValidatorRecordV1` has no
+`metadata_hash` field at all yet (blocked, no driver, the same
+deferral account-state.md's own Metadata section already has) — there
+is nothing for it to update.
+
+`new_consensus_key` is present if and only if `operation` is `register`
+or `update_keys`, absent otherwise — decode must reject any other
+combination (the same canonical-encoding discipline
+`VoteSigningPayloadV1`'s nil-target rule already established: exactly
+one valid encoding per semantic state, not left to convention).
+`register` creates a new `ValidatorRecordV1` for `sender`
+(`validator_id = sender`, `consensus_key = new_consensus_key`,
+`bonded_stake = 0`, `voting_power = 0`, `status = Registered`).
+`activate`/`deactivate` are the explicit opt-in/opt-out transitions
+ADR-0010's "Decided: admission mechanism" already specifies the timing
+and reasoning for (epoch-delayed, opt-in not automatic); `exit` is
+their permanent counterpart, not previously given its own field-level
+treatment but following the same shape. `update_keys` replaces
+`consensus_key` — exact activation-epoch/old-key-validity-window
+mechanics stay owned by ADR-0010's "Key Rotation," not decided here,
+only that the operation exists and carries a new key.
+
+Authorization for all three: the sender's own signing key only, same
+as `transfer` — `sender == validator_id` already *is* the
+authorization check, per ADR-0010's derivation decision above; no
+additional rule needed.
+
 **Parked, each blocked on a subsystem that does not exist yet, not
 merely unaddressed:**
 
 - `contract_deploy`, `contract_call` (`0x02`, `0x03`): blocked on HNVM,
   which has no design yet.
-- `stake`, `unstake`, `validator_update` (`0x04`-`0x06`): blocked on
-  consensus and validator specifications, which do not exist yet, and
-  likely on economic parameters (staking amounts, reward/slashing
-  rules) owned by a future tokenomics spec.
 - `governance` (`0x07`): blocked on a governance model, which does not
   exist yet.
 - `permission_update` (`0x08`): blocked on account-state.md §4.5
@@ -763,9 +865,12 @@ change.
 
 - final transaction envelope fields (every field except `payload` is now
   decided above: `chain_id`/`network_id`/`tx_version`/`tx_type`/`sender`/
-  `validity_window`/`fee_limit`'s type/`access_list`; `payload` remains
-  open for 8 of 9 `tx_type`s — `transfer`'s payload is now decided,
-  §5 — each parked on a named blocker, not merely unaddressed)
+  `validity_window`/`fee_limit`'s type/`access_list`; `payload` shape is
+  now decided for 4 of 9 `tx_type`s — `transfer`, `stake`, `unstake`,
+  `validator_update`, §5 — each remaining one parked on a named
+  blocker, not merely unaddressed; `stake`/`unstake`/`validator_update`
+  still need their own economic parameters — minimum bond, unbonding
+  period — before they are fully closed)
 - newly-created accounts' Permission/Metadata initial values (`transfer`
   implicit creation, §5) — blocked on account-state.md §4.5/§4.6
 - final fee model (mechanism decided above — type, payer, cap-not-exact,

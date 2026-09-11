@@ -113,21 +113,87 @@ Required conceptual fields:
 ValidatorRecord
   record_version
   validator_id
-  account_address
   consensus_key
   network_key
   status
+  bonded_stake
   voting_power
   activation_epoch
   deactivation_epoch
   metadata_hash
 ```
 
+`account_address` (present in this struct's earliest conceptual sketch)
+is dropped — see "Decided: `validator_id` derivation," below:
+`validator_id` *is* the controlling account's own address, so a
+separate field would duplicate it. `bonded_stake` is added — see
+"Decided: `bonded_stake`, distinct from `voting_power`," below.
+
 `consensus_key` signs consensus messages.
 
 `network_key` authenticates peer-to-peer node communication when required.
 
 Operational keys must be rotatable without changing account ownership.
+
+**Decided: `validator_id` derivation.** Asked the user explicitly —
+found while trying to write concrete payload shapes for ADR-0006's
+`stake`/`unstake`/`validator_update`, which need to name a target
+validator and settle who may act on it, neither previously resolved.
+`validator_id` is the controlling account's own `address_body` (ADR-0003,
+`account` namespace) — `hn_crypto::account_address_body`'s existing
+output, no new derivation function. This resolves two things at once:
+
+- **Stability across consensus key rotation** (the reason `validator_id`
+  was kept separate from any key-derived address in the first place,
+  ADR-0012, "Decided: `validator_id` width, not its exact derivation"):
+  an account-derived `validator_id` never depends on `consensus_key` at
+  all, unlike `hn_crypto::validator_address_body` (ADR-0003, `validator`
+  namespace), which *is* derived from `consensus_key` and rotates with
+  it. The two now have clearly distinct, non-overlapping purposes:
+  `validator_id` is the stable protocol identity a record lives at;
+  `validator_address_body` names a specific key epoch, useful where
+  that distinction matters (for example network-layer peer identity)
+  but not for locating a validator's own record.
+- **Authorization for validator-management transactions.** A
+  transaction's `sender` is already `bytes32` — the sender account's
+  own `address_body` (ADR-0006, "Chain And Network Binding"). For a
+  self-managed validator, `sender == validator_id` directly, with no
+  separate ownership field needed anywhere: authorization is "the
+  transaction that names this `validator_id` was sent by the account
+  that *is* this `validator_id`." Third-party/delegated bonding (an
+  account managing a `validator_id` it is not itself) is out of scope
+  here — that is ADR-0010's own already-open "delegation support," not
+  reopened by this decision.
+
+This also resolves this section's own conceptual `account_address`
+field as redundant: once `validator_id` literally *is* the controlling
+account's address, a separate stored `account_address` field would
+duplicate it — the eighth instance this session of the
+`protocol_name`/`checksum_profile`/`hash_profile`/`signing_purpose`/
+`quorum_threshold`/`key_role`/`verification_context` redundancy class.
+Dropped from the conceptual struct above and from any future concrete
+`ValidatorRecordV1` field list.
+
+**Decided: `bonded_stake`, distinct from `voting_power`.** Also found
+while writing `stake`/`unstake`: those transactions need a field to
+modify directly, and none exists — `ValidatorRecordV1`'s only numeric
+field today is `voting_power`, which is not that field. The capping
+algorithm's own already-decided design (above, "Decided: capping
+algorithm") computes `power_i = min(stake_i, C_r)` — `stake_i` (raw
+bonded stake, per validator) and `power_i` (capped voting power, the
+algorithm's output) are different values whenever a validator's raw
+stake exceeds the current cap, and `C_r` depends on the *entire*
+candidate set's total, not any one validator in isolation. This means
+`voting_power` cannot be recomputed synchronously as part of a single
+validator's own `stake`/`unstake` transaction — only `bonded_stake`
+can change at that point; `voting_power` reflects whatever the capping
+algorithm's last full-candidate-set run computed (for example at the
+next epoch boundary, alongside `ACTIVE_SET` selection — exact timing
+not decided here). `ValidatorRecordV1` needs both fields: `bonded_stake`
+(raw, `u128`, matching `native_balance`'s own precedent — directly
+mutated by `stake`/`unstake`) and `voting_power` (capped, `u128`,
+already decided — mutated only by the capping algorithm's own
+recomputation, never directly by a transaction).
 
 ### Validator Status
 

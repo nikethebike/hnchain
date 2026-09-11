@@ -52,15 +52,24 @@ Conceptual structure:
 ValidatorRecordV1
   record_version
   validator_id
-  account_address
   consensus_key
   network_key
   status
+  bonded_stake
   voting_power
   activation_epoch
   deactivation_epoch
   metadata_hash
 ```
+
+**Decided** (ADR-0010, "Decided: `validator_id` derivation" /
+"Decided: `bonded_stake`, distinct from `voting_power`"): `account_address`
+is dropped — `validator_id` is the controlling account's own
+`address_body`, so a separate field would duplicate it. `bonded_stake`
+is added (raw bonded stake, `u128`) — distinct from `voting_power`
+(capped, already decided): `stake`/`unstake` mutate `bonded_stake`
+directly; `voting_power` only changes when the capping algorithm
+recomputes it over the full candidate set. See §4.2.
 
 All fields that affect consensus must be HNCS-encoded and committed through the
 state tree.
@@ -80,10 +89,27 @@ Unknown versions are rejected unless protocol upgrade rules define acceptance.
 It must not be an IP address, DNS name, display name, or implementation-specific
 database key.
 
+**Decided** (ADR-0010, "Decided: `validator_id` derivation"):
+`validator_id` is the controlling account's own `address_body` (ADR-0003,
+`account` namespace) — reuses `hn_crypto::account_address_body`'s
+existing output, no new derivation function. Stays stable across
+consensus key rotation, since it never depends on `consensus_key` at
+all, unlike `hn_crypto::validator_address_body` (ADR-0003, `validator`
+namespace), which *is* key-derived and rotates with it. This also
+settles authorization for validator-management transactions: for a
+self-managed validator, `sender == validator_id` directly, no separate
+ownership field needed.
+
 ### 4.3 Account Address
 
 `account_address` links the validator record to the account that owns or
 controls validator permissions.
+
+**Decided** (ADR-0010, "Decided: `validator_id` derivation"): this
+field is dropped, not merely resolved — `validator_id` (§4.2) *is* the
+controlling account's address now, so a separate `account_address`
+field would duplicate it (kept here only as a historical/conceptual
+note; not part of the decided `ValidatorRecordV1` field list, §3).
 
 ### 4.4 Consensus Key
 
@@ -123,6 +149,14 @@ matches `BalanceValueV1.native_balance`'s own width — the capping
 algorithm (§8) operates directly on bonded stake with no rescaling
 step, so voting power shares stake's unit. A maximum value bound below
 `u128::MAX`, if any, remains open.
+
+**Decided** (ADR-0010, "Decided: `bonded_stake`, distinct from
+`voting_power`"): "bonded stake" here is now a named field,
+`bonded_stake` (§3), not just this section's own conceptual input —
+`stake`/`unstake` (ADR-0006) mutate it directly; `voting_power` changes
+only when the capping algorithm recomputes it over the full candidate
+set (for example at an epoch boundary), never synchronously with a
+single validator's own stake change.
 
 Voting power must not use floating-point arithmetic.
 
@@ -362,8 +396,10 @@ Test vectors are mandatory before production implementation.
 
 ## 14. Open Decisions
 
-- final validator record schema
-- final validator ID derivation
+- final validator record schema (`validator_id` derivation and
+  `bonded_stake`/`voting_power` split decided; `network_key`,
+  `activation_epoch`/`deactivation_epoch`, `metadata_hash` remain
+  unresolved — see §3)
 - voting power's maximum value bound and cap fraction value (model,
   capping algorithm, and integer type — `u128` — decided; see §8)
 - `MAX_ACTIVE_SET_SIZE` value (selection mechanism decided; see §6)

@@ -185,19 +185,19 @@ grows large: no other counter-like consensus field in this project
 uses a narrower width without a specific reason to, and a healthy
 network keeps `round` small regardless of its declared type width.
 
-**Decided: `validator_id` width, not its exact derivation.** `bytes32`,
-matching every other protocol identifier's width in this project
-(`address_body`, `tx_id`, and so on) — but *not* asserted to equal
-`hn_crypto::validator_address_body` (which derives from `consensus_key`)
-or `account_address`. `validator_id` must stay stable across consensus
-key rotation (validator-set.md §4.2, §10, "Key Rotation"), while
-`validator_address_body` is derived from the consensus key itself and
-would change on rotation — so the two are not obviously the same value,
-and deciding which one `validator_id` actually is (or whether it is a
-third, separately-assigned value) belongs to ADR-0010's own still-open
-`ValidatorRecordV1` closure, not here. Fixing only the width lets
-`ConsensusVote`/`QuorumCertificate` be fully encodable now without
-guessing at that derivation.
+**Decided: `validator_id` width, not its exact derivation (derivation
+since resolved in ADR-0010).** `bytes32`, matching every other protocol
+identifier's width in this project (`address_body`, `tx_id`, and so
+on) — deliberately *not* asserted here to equal
+`hn_crypto::validator_address_body` (which derives from `consensus_key`
+and would change on key rotation), since `validator_id` must stay
+stable across rotation (validator-set.md §4.2, §10, "Key Rotation").
+Fixing only the width let `ConsensusVote`/`QuorumCertificate` be fully
+encodable at the time without guessing at that derivation. ADR-0010's
+own `ValidatorRecordV1` closure has since settled it ("Decided:
+`validator_id` derivation"): the controlling account's own
+`address_body`, not `validator_address_body` — confirming the two
+really were different values, as this paragraph originally suspected.
 
 **Decided: `consensus_profile` type.** `u16`, matching the width
 convention of every other profile-identifier field in this project
