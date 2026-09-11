@@ -39,12 +39,20 @@
 //! `VoteSigningPayloadV1`/`ConsensusVote` and `QuorumCertificate`
 //! (ADR-0012) — every structural question the latter depended on
 //! (aggregation scheme, signer commitment encoding, voting power integer
-//! type) is now decided (ADR-0010, ADR-0012); active-set-dependent
-//! verification (signer eligibility, signature checks, quorum
-//! satisfaction) is still out of scope for this crate.
+//! type) is now decided (ADR-0010, ADR-0012). [`validator_record`] adds
+//! `ValidatorRecordV1` (ADR-0010, deliberately narrower than the full
+//! conceptual struct — see its own documentation), and [`active_set`]
+//! adds the `ACTIVE_SET(epoch)` derivation function and the live
+//! not-jailed overlay check (ADR-0010/ADR-0015) — together, the
+//! active-set query interface `QuorumCertificate::decode`'s own
+//! documentation flags as still missing. Real signature verification and
+//! full quorum-satisfaction checking, which need a concrete
+//! `SignatureEnvelope` and a storage-backed way to fetch `candidates` at
+//! a given height, remain out of scope for this crate.
 
 mod access_list;
 mod account;
+mod active_set;
 mod asset_value;
 mod balance_value;
 mod block_hash;
@@ -63,6 +71,7 @@ mod transfer_payload;
 mod tree;
 mod tx_id;
 mod validator_digest;
+mod validator_record;
 mod validity_window;
 mod vote;
 
@@ -72,6 +81,7 @@ pub use account::{
     account_extension_payload_state_key, account_extension_registry_state_key,
     account_section_state_key,
 };
+pub use active_set::{active_set, is_eligible_signer};
 pub use asset_value::{ASSET_VERSION_1, AssetValueV1, MAX_ASSET_HOLDINGS};
 pub use balance_value::{BALANCE_VERSION_1, BalanceValueV1};
 pub use block_hash::block_hash;
@@ -90,6 +100,7 @@ pub use transfer_payload::{TRANSFER_PAYLOAD_VERSION_1, TransferPayloadV1};
 pub use tree::{Leaf, compute_state_root};
 pub use tx_id::tx_id;
 pub use validator_digest::validator_digest;
+pub use validator_record::{RECORD_VERSION_1, ValidatorRecordV1, ValidatorStatus};
 pub use validity_window::ValidityWindowV1;
 pub use vote::{
     CONSENSUS_PROFILE_TENDERMINT_V1, ConsensusVote, MAX_QUORUM_SIGNATURES,

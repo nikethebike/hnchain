@@ -1,4 +1,4 @@
-use hn_crypto::HashError;
+use hn_crypto::{HashError, IdentityError};
 use hn_hncs::HncsError;
 
 /// Result type used by state key derivation and state tree operations.
@@ -149,6 +149,31 @@ pub enum StateError {
     /// total_voting_power`, which can never be a valid certificate
     /// regardless of the active validator set.
     SignedVotingPowerExceedsTotal,
+    /// A decoded `ValidatorRecordV1.record_version` does not match
+    /// [`crate::validator_record::RECORD_VERSION_1`], the only shape
+    /// this implementation understands.
+    UnsupportedRecordVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `ValidatorRecordV1.consensus_key`'s `algorithm_id` is
+    /// not Ed25519 (`hn_crypto::ED25519_ALGORITHM_ID`), the only active
+    /// `validator_consensus` signing suite at genesis (ADR-0002,
+    /// "Accepted Initial Direction").
+    UnsupportedKeyAlgorithm {
+        /// The rejected algorithm identifier.
+        value: u16,
+    },
+    /// A decoded `ValidatorRecordV1.consensus_key`'s public key bytes
+    /// were rejected by [`hn_crypto::KeyDescriptor`] — wrong length for
+    /// the declared algorithm, or not a canonical Ed25519 point.
+    InvalidConsensusKey(IdentityError),
+    /// A decoded `ValidatorRecordV1.status` byte is not a member of the
+    /// closed `status` registry (ADR-0010, "Validator Status").
+    InvalidValidatorStatus {
+        /// The rejected byte.
+        value: u8,
+    },
 }
 
 impl From<HashError> for StateError {
@@ -229,6 +254,18 @@ impl core::fmt::Display for StateError {
             }
             Self::SignedVotingPowerExceedsTotal => {
                 formatter.write_str("signed_voting_power exceeds total_voting_power")
+            }
+            Self::UnsupportedRecordVersion { value } => {
+                write!(formatter, "unsupported record_version: {value}")
+            }
+            Self::UnsupportedKeyAlgorithm { value } => {
+                write!(formatter, "unsupported consensus_key algorithm_id: {value}")
+            }
+            Self::InvalidConsensusKey(error) => {
+                write!(formatter, "invalid consensus_key: {error}")
+            }
+            Self::InvalidValidatorStatus { value } => {
+                write!(formatter, "invalid validator status: 0x{value:02x}")
             }
         }
     }
