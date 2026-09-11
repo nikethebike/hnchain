@@ -178,13 +178,70 @@ Every accepted consensus profile must define:
 Floating-point arithmetic is rejected for voting power.
 
 Voting power source is decided above (Decision: capped stake-weighted).
-Integer type/bounds, rounding/overflow behavior, and the exact total
-power calculation (including the capping algorithm's fixed-point
-behavior) remain open — the quorum threshold calculation itself is
-already decided independently of all of these (ADR-0012, "Decided:
-quorum threshold formula": `signed * 3 > total * 2`, exact integer
-arithmetic, applies unchanged regardless of voting power's width or
-source).
+Integer type/bounds and general rounding/overflow behavior remain
+open — the quorum threshold calculation itself is already decided
+independently of all of these (ADR-0012, "Decided: quorum threshold
+formula": `signed * 3 > total * 2`, exact integer arithmetic, applies
+unchanged regardless of voting power's width or source).
+
+**Decided: capping algorithm (mechanism, not the cap fraction's
+value).** Asked the user explicitly — this is the exact fixed-point
+subtlety flagged as unresolved above, and a naive implementation
+contains a real bug: a single-pass `power_i = min(stake_i,
+cap_fraction * total_raw_stake)` does not actually bound any
+validator's post-normalization *share*. Example: `cap_fraction = 20%`,
+raw stakes `[80, 10, 10]` (`total_raw_stake = 100`) gives
+`C = 20`, powers `[20, 10, 10]`, `total_voting_power = 40` — validator
+1 ends up holding `20 / 40 = 50%` of actual voting power, far above
+the intended 20% cap, because clamping the largest stake shrank the
+total the cap was computed against.
+
+Three candidates were weighed: **iterative re-cap until stable**
+(selected), an exact analytic fixed point (correct but delicate
+integer-division/rounding-direction reasoning at the capped/uncapped
+boundary — more room for a subtle off-by-one despite being "exact"),
+and the single-pass clamp above (rejected — demonstrably wrong, not a
+real candidate).
+
+Algorithm, given raw bonded stake `stake_i` per active validator and a
+rational `cap_fraction = cap_numerator / cap_denominator` (both still
+open — Open Decisions, below):
+
+```text
+total_0 = sum(stake_i)
+for round r = 0, 1, 2, ...:
+    C_r = floor(cap_numerator * total_r / cap_denominator)
+    power_i = min(stake_i, C_r)           for every validator i
+    total_(r+1) = sum(power_i)
+    if total_(r+1) == total_r:
+        voting_power(i) = power_i for every i
+        total_voting_power = total_(r+1)
+        stop
+    total_r = total_(r+1)
+```
+
+`floor` division only — no floating point, consistent with this
+ADR's own "Floating-Point Voting Power" rejection.
+
+**Termination, deterministically, in at most `n` rounds** (`n` =
+active validator count): `C_r` is non-increasing in `r`, because it is
+computed from `total_r`, which is itself non-increasing (each
+validator's power can only shrink or stay equal from one round to the
+next). Therefore the set of validators with `stake_i > C_r` — the
+"currently capped" set — can only grow from one round to the next,
+never shrink. A monotonically growing subset of `n` validators has at
+most `n + 1` distinct states, so the capped set (and with it `C_r` and
+`total_r`) must stabilize within `n` rounds. The algorithm is also
+order-independent (every round recomputes every validator's power from
+`stake_i` and the current `C_r` directly — no sorting, no
+tie-breaking rule needed, unlike leader election's `proposer_priority`
+ties).
+
+`cap_numerator`/`cap_denominator`'s concrete values, voting power's
+integer width, and general rounding/overflow behavior for values
+*other than* `C_r` itself remain open (Open Decisions, below) — same
+scoping already used throughout this ADR: the mechanism is decided,
+its parameters are not.
 
 ### Epoch Boundaries
 
@@ -389,7 +446,9 @@ Disadvantages:
 own disadvantages name — cap parameters, Sybil-resistance, delegation
 rules — is exactly what stays open (Open Decisions, below); choosing
 this model does not resolve them, only which direction they get
-resolved within.
+resolved within. The capping algorithm's mechanism (iterative re-cap
+until stable, not the naive single-pass clamp) is now decided in
+"Voting Power," above — the exact `cap_fraction` value remains open.
 
 ### Committee-Based Active Set
 
@@ -472,12 +531,14 @@ rules and light-client compatibility analysis.
 ## Open Decisions
 
 - initial active validator set size policy
-- voting power integer type/bounds, rounding/overflow behavior, and
-  the capping algorithm's exact fixed-point mechanics (model decided
-  above — capped stake-weighted; these are its remaining parameters)
+- voting power integer type/bounds and general rounding/overflow
+  behavior (model and capping algorithm mechanism decided above —
+  capped stake-weighted, iterative re-cap until stable; these are the
+  remaining representation-level parameters)
 - minimum validator bond
 - delegation support
-- stake caps (cap value and Sybil-resistance rules)
+- stake caps (`cap_numerator`/`cap_denominator` value and
+  Sybil-resistance rules — capping algorithm mechanism decided above)
 - validator admission ranking
 - epoch length (transition mechanism decided above; the constant itself
   is not)

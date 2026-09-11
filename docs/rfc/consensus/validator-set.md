@@ -221,9 +221,19 @@ source of weight is bonded stake, capped at a maximum share of total
 voting power — asked the user explicitly, given the weight of this
 decision and this section's own analysis requirement. Committee-based
 weighting is ruled out (needs randomness ADR-0011 already excludes from
-leader election entirely). Integer width, maximum value, the cap's
-exact value, and the capping algorithm's fixed-point mechanics remain
-open.
+leader election entirely). Integer width and the cap's exact value
+remain open.
+
+**Decided** (ADR-0010, "Decided: capping algorithm"): iterative re-cap
+until stable — each round, clamp every validator's power at
+`floor(cap_numerator * total / cap_denominator)`, recompute the total,
+repeat until the total stops changing; terminates within `n` rounds
+(`n` = active validator count) since the capped set only grows round
+over round. Not a single-pass clamp: clamping the largest stakes
+shrinks the total the cap was computed against, so a single pass does
+not actually bound any validator's post-normalization share (worked
+example in ADR-0010). `cap_numerator`/`cap_denominator`'s concrete
+value and voting power's integer width remain open.
 
 ## 9. Epoch Transitions
 
@@ -321,8 +331,8 @@ Test vectors are mandatory before production implementation.
 
 - final validator record schema
 - final validator ID derivation
-- final voting power integer width and cap value (model decided; see
-  §8)
+- final voting power integer width and cap fraction value (model and
+  capping algorithm mechanism decided; see §8)
 - final active set selection algorithm
 - final maximum active set size
 - final epoch length
