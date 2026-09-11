@@ -188,6 +188,15 @@ pub enum StateError {
     /// A [`hn_crypto::SignatureEnvelope::verify`] call failed — wrong
     /// signature, algorithm mismatch, or an unsupported algorithm.
     SignatureVerificationFailed(IdentityError),
+    /// A `QuorumCertificate.signer_commitment`'s byte length does not
+    /// match `ceil(ordered_active_set.len() / 8)` for the active set
+    /// supplied to verification (ADR-0012, "Decided: signer commitment
+    /// bit-level encoding").
+    SignerCommitmentLengthMismatch,
+    /// A `QuorumCertificate.signer_commitment` has a set bit past the
+    /// end of the supplied active set — a padding bit that must be zero
+    /// (ADR-0012, "Decided: signer commitment bit-level encoding").
+    SignerCommitmentPaddingBitSet,
 }
 
 impl From<HashError> for StateError {
@@ -289,6 +298,12 @@ impl core::fmt::Display for StateError {
             }
             Self::SignatureVerificationFailed(error) => {
                 write!(formatter, "signature verification failed: {error}")
+            }
+            Self::SignerCommitmentLengthMismatch => {
+                formatter.write_str("signer_commitment length does not match the active set size")
+            }
+            Self::SignerCommitmentPaddingBitSet => {
+                formatter.write_str("signer_commitment has a padding bit set past the active set")
             }
         }
     }

@@ -344,30 +344,23 @@ pub const MAX_QUORUM_SIGNATURES: usize = 8192;
 /// `aggregate_proof`'s entry count matches `signer_commitment`'s set-bit
 /// count.
 ///
-/// Unlike [`ConsensusVote::verify`], this type does not yet have its own
-/// `verify` — not merely for lack of an active-set query interface
-/// (that now exists: [`crate::active_set`], [`crate::active_key`]), but
-/// because of a real, previously-unnoticed gap: verifying signer `i`'s
-/// [`hn_crypto::SignatureEnvelope`] requires reconstructing exactly what
-/// that signer originally signed — a full [`VoteSigningPayloadV1`],
-/// including its `vote_metadata`. This certificate's own fields
-/// determine every other field of that reconstructed payload
-/// (`chain_id`/`network_id`/`epoch`/`height`/`round`/
-/// `validator_set_commitment`/`target_type`/`target_hash`, plus
-/// `vote_type = certificate_type` and `validator_id` = the signer named
-/// by bit `i`) but not `vote_metadata`, which this certificate does not
-/// preserve per signer. If two signers' original votes used different
-/// `vote_metadata`, there is currently no way for a verifier to know
-/// which bytes each of them actually signed. Whether votes contributing
-/// to a certificate must use empty (or otherwise canonical)
-/// `vote_metadata` — closing this gap without changing the already-
-/// decided wire format — is a real open question, not assumed here.
-/// Signer eligibility, signer uniqueness against real `validator_id`s,
-/// whether `signer_commitment`'s padding bits (beyond the active set's
-/// real size) are zero, whether `total_voting_power` is actually correct
-/// for that set, and whether the certificate meets quorum remain out of
-/// scope for the same reason `ConsensusVote::verify` doesn't check them
-/// either — see its own documentation.
+/// [`QuorumCertificate::verify_signatures`] checks every signer's
+/// cryptographic signature, resolved via [`crate::active_key`] the same
+/// way [`ConsensusVote::verify`] does, plus what `decode` could not on
+/// its own (`signer_commitment`'s length and padding bits against the
+/// real active set size — both need the active set, which `decode`
+/// never has). Getting there required resolving a real gap first: a
+/// signer's original signing payload cannot be reconstructed exactly
+/// without knowing its `vote_metadata`, which this certificate never
+/// preserves per signer (ADR-0012, "Decided: `vote_metadata` must be
+/// empty for any vote eligible to be certified" — asked the user
+/// explicitly, same weight as the aggregation-scheme/capping-algorithm
+/// decisions, given the correctness stakes of assuming this instead).
+/// Signer eligibility (was `ordered_active_set` actually correct for
+/// this epoch?), signed-voting-power correctness, and quorum
+/// satisfaction remain out of scope — see
+/// [`QuorumCertificate::verify_signatures`]'s own documentation for
+/// exactly why.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QuorumCertificate {
     /// Which of Tendermint's two voting stages this certificate proves
@@ -536,6 +529,91 @@ impl QuorumCertificate {
             aggregate_proof,
         })
     }
+
+    /// Verifies every `aggregate_proof` entry's cryptographic signature
+    /// against `ordered_active_set` — the epoch's active set in the same
+    /// ascending-`validator_id` order `signer_commitment`'s bit indices
+    /// already assume (ADR-0012, "Decided: signer commitment bit-level
+    /// encoding"; `crate::active_set`'s own output order).
+    ///
+    /// First checks what [`QuorumCertificate::decode`] could not:
+    /// `signer_commitment`'s byte length matches
+    /// `ceil(ordered_active_set.len() / 8)` exactly, and no padding bit
+    /// past `ordered_active_set.len() - 1` is set — both require knowing
+    /// the real active set size, which `decode` does not have.
+    ///
+    /// For each set bit at position `i`, reconstructs the signing
+    /// payload signer `ordered_active_set[i]` must have signed —
+    /// `vote_type = certificate_type` and every other field taken
+    /// directly from this certificate, **with `vote_metadata` forced to
+    /// empty** (ADR-0012, "Decided: `vote_metadata` must be empty for
+    /// any vote eligible to be certified" — a `QuorumCertificate` does
+    /// not preserve each signer's own `vote_metadata`, so this is the
+    /// only value verification can reconstruct correctly) — resolves
+    /// that signer's key via [`crate::active_key`], and checks the
+    /// corresponding `aggregate_proof` entry against it.
+    ///
+    /// Does not check signer eligibility (was `ordered_active_set`
+    /// actually the correct epoch's real active set?), signed-voting-
+    /// power correctness, or quorum satisfaction — those need broader
+    /// context than a signature check, the same boundary
+    /// [`ConsensusVote::verify`] already draws.
+    pub fn verify_signatures(
+        &self,
+        reader: &impl StateReader,
+        ordered_active_set: &[Digest],
+    ) -> StateResult<()> {
+        let expected_len = ordered_active_set.len().div_ceil(8);
+        if self.signer_commitment.len() != expected_len {
+            return Err(StateError::SignerCommitmentLengthMismatch);
+        }
+        for index in ordered_active_set.len()..expected_len * 8 {
+            if bit_at(&self.signer_commitment, index) {
+                return Err(StateError::SignerCommitmentPaddingBitSet);
+            }
+        }
+
+        let mut signer_index = 0;
+        for (bit_position, validator_id) in ordered_active_set.iter().enumerate() {
+            if !bit_at(&self.signer_commitment, bit_position) {
+                continue;
+            }
+
+            let payload = VoteSigningPayloadV1 {
+                vote_type: self.certificate_type,
+                chain_id: self.chain_id,
+                network_id: self.network_id,
+                epoch: self.epoch,
+                height: self.height,
+                round: self.round,
+                validator_set_commitment: self.validator_set_commitment,
+                validator_id: *validator_id,
+                target_type: self.target_type,
+                target_hash: self.target_hash,
+                vote_metadata: Vec::new(),
+            };
+            let digest = payload.signing_digest()?;
+
+            let key = active_key(reader, validator_id)?.ok_or(StateError::UnknownValidator {
+                validator_id: *validator_id,
+            })?;
+
+            self.aggregate_proof[signer_index]
+                .verify(&key, &digest)
+                .map_err(StateError::SignatureVerificationFailed)?;
+
+            signer_index += 1;
+        }
+
+        Ok(())
+    }
+}
+
+/// `bit_position`'s value in `bitmap`, LSB-first per ADR-0012 ("Decided:
+/// signer commitment bit-level encoding").
+fn bit_at(bitmap: &[u8], bit_position: usize) -> bool {
+    let byte = bitmap[bit_position / 8];
+    (byte >> (bit_position % 8)) & 1 == 1
 }
 
 #[cfg(test)]
@@ -873,6 +951,138 @@ mod tests {
             vote.verify(&reader),
             Err(StateError::UnknownValidator {
                 validator_id: [0xaa; 32]
+            })
+        );
+        Ok(())
+    }
+
+    /// Three validators, ascending `validator_id`, matching
+    /// `signer_commitment`'s own bit-index convention.
+    fn three_validators() -> (
+        [u8; 32],
+        Ed25519KeyPair,
+        [u8; 32],
+        Ed25519KeyPair,
+        [u8; 32],
+        Ed25519KeyPair,
+    ) {
+        (
+            [0x01; 32],
+            Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [0x01; 32]),
+            [0x02; 32],
+            Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [0x02; 32]),
+            [0x03; 32],
+            Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [0x03; 32]),
+        )
+    }
+
+    fn qc_verify_fixture() -> StateResult<(QuorumCertificate, Vec<[u8; 32]>, MapReader)> {
+        let (v0, kp0, v1, kp1, v2, kp2) = three_validators();
+        let ordered_active_set = vec![v0, v1, v2];
+
+        let mut qc = QuorumCertificate {
+            certificate_type: VoteType::Precommit,
+            chain_id: 1,
+            network_id: 1,
+            epoch: Epoch::new(5),
+            height: BlockHeight::new(1000),
+            round: Round::new(0),
+            validator_set_commitment: [0x11; 32],
+            target_type: VoteTargetType::Block,
+            target_hash: [0x33; 32],
+            total_voting_power: 300,
+            signed_voting_power: 200,
+            signer_commitment: vec![0b0000_0101], // bits 0, 2 set: V0 and V2 signed
+            aggregate_proof: Vec::new(),
+        };
+
+        for (validator_id, keypair) in [(v0, &kp0), (v2, &kp2)] {
+            let payload = VoteSigningPayloadV1 {
+                vote_type: qc.certificate_type,
+                chain_id: qc.chain_id,
+                network_id: qc.network_id,
+                epoch: qc.epoch,
+                height: qc.height,
+                round: qc.round,
+                validator_set_commitment: qc.validator_set_commitment,
+                validator_id,
+                target_type: qc.target_type,
+                target_hash: qc.target_hash,
+                vote_metadata: Vec::new(),
+            };
+            let digest = payload.signing_digest()?;
+            qc.aggregate_proof.push(SignatureEnvelope {
+                algorithm_id: 1,
+                signature: keypair.sign(&digest).to_vec(),
+            });
+        }
+
+        let mut records = std::collections::BTreeMap::new();
+        for (validator_id, keypair) in [(v0, &kp0), (v1, &kp1), (v2, &kp2)] {
+            let record = ValidatorRecordV1 {
+                validator_id,
+                consensus_key: keypair.key_descriptor(),
+                voting_power: 100,
+                status: ValidatorStatus::Active,
+            };
+            let key = validator_section_state_key(&validator_id, ValidatorSection::Record)?;
+            records.insert(key, record.encode()?);
+        }
+
+        Ok((qc, ordered_active_set, MapReader(records)))
+    }
+
+    #[test]
+    fn qc_verify_signatures_accepts_real_signatures_from_actual_signers_only() -> StateResult<()> {
+        let (qc, ordered_active_set, reader) = qc_verify_fixture()?;
+        qc.verify_signatures(&reader, &ordered_active_set)
+    }
+
+    #[test]
+    fn qc_verify_signatures_rejects_a_tampered_signature() -> StateResult<()> {
+        let (mut qc, ordered_active_set, reader) = qc_verify_fixture()?;
+        qc.aggregate_proof[0].signature[0] ^= 0xff;
+        assert!(matches!(
+            qc.verify_signatures(&reader, &ordered_active_set),
+            Err(StateError::SignatureVerificationFailed(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn qc_verify_signatures_rejects_signer_commitment_length_mismatch() -> StateResult<()> {
+        let (qc, _ordered_active_set, reader) = qc_verify_fixture()?;
+        // signer_commitment is 1 byte (ceil(3/8)); an empty active set
+        // expects ceil(0/8) = 0 bytes instead -- a real mismatch.
+        assert_eq!(
+            qc.verify_signatures(&reader, &[]),
+            Err(StateError::SignerCommitmentLengthMismatch)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn qc_verify_signatures_rejects_a_padding_bit_set_beyond_the_active_set() -> StateResult<()> {
+        let (mut qc, _ordered_active_set, reader) = qc_verify_fixture()?;
+        // Only 3 validators (bits 0-2 meaningful); set bit 5, a padding
+        // bit within the same 1-byte signer_commitment.
+        qc.signer_commitment[0] |= 0b0010_0000;
+        let active_set = vec![[0x01; 32], [0x02; 32], [0x03; 32]];
+        assert_eq!(
+            qc.verify_signatures(&reader, &active_set),
+            Err(StateError::SignerCommitmentPaddingBitSet)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn qc_verify_signatures_rejects_an_unknown_validator() -> StateResult<()> {
+        let (qc, ordered_active_set, _reader) = qc_verify_fixture()?;
+        let empty_reader = MapReader(std::collections::BTreeMap::new());
+        assert_eq!(
+            qc.verify_signatures(&empty_reader, &ordered_active_set),
+            Err(StateError::UnknownValidator {
+                validator_id: [0x01; 32]
             })
         );
         Ok(())
