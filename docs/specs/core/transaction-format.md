@@ -153,8 +153,8 @@ not decided either way, pending account-state.md §4.5 Permission State.
 
 The final fee structure may include base fees, execution fees, storage fees,
 priority fees, refunds, and burn rules — all of this is amount/market/policy,
-which is out of scope for this specification and gated on a future
-economics and HNVM metering specification.
+which is out of scope for this specification and gated on ADR-0023
+(Tokenomics And Economic Model) and a future HNVM metering specification.
 
 This specification does not finalize the fee market.
 
@@ -458,12 +458,12 @@ Boundary rules:
 - final HNCS schema
 - final fee model (mechanism decided; see §4.6 — amount, refunds,
   distribution, burn policy, and priority market remain economic
-  decisions)
+  decisions owned by ADR-0023, Tokenomics And Economic Model)
 - final `payload` schemas for the remaining 5 of 9 `tx_type`s (§5 —
   `transfer`, `stake`, `unstake`, `validator_update` are decided; each
   remaining type is parked on a named blocker; `stake`/`unstake`/
   `validator_update` still need their own economic parameters —
-  minimum bond, unbonding period — before fully closed)
+  minimum bond, unbonding period (ADR-0023) — before fully closed)
 - newly-created accounts' Permission/Metadata initial values (§5,
   `transfer` implicit creation) — blocked on §4.5/§4.6
 - final receipt schema (`ReceiptV1` core shape decided, ADR-0006

@@ -257,11 +257,11 @@ The transaction format must not assume a final fee market before the economics
 and HNVM metering specifications are accepted.
 
 **Decided: fee mechanism only** — never an amount, split, or market
-model; those remain owned by a future tokenomics specification and HNVM
-metering specification, per this section's own constraint above and the
-project's standing rule that no economic parameter (fee amount, burn
-percentage, distribution split — even an explicit zero) may be encoded
-before such a specification is accepted.
+model; those remain owned by ADR-0023 (Tokenomics And Economic Model)
+and a future HNVM metering specification, per this section's own
+constraint above and the project's standing rule that no economic
+parameter (fee amount, burn percentage, distribution split — even an
+explicit zero) may be encoded before such a specification is accepted.
 
 - **`fee_limit` type.** `u128`, matching `native_balance`/`amount`'s width
   convention (account-state.md §4.3/§4.7) for the same overflow-headroom
@@ -492,9 +492,9 @@ session's consensus track decided `ValidatorRecordV1`, the admission
 mechanism, jailing, voting power, and active set derivation. What
 remains blocked is exactly what the original text also named: economic
 parameters (minimum bond, unbonding period, reward/slashing amounts),
-owned by a future tokenomics pass — the same mechanism-now/amount-later
-split every other economic-adjacent decision in this project already
-uses.
+owned by ADR-0023 (Tokenomics And Economic Model) — the same
+mechanism-now/amount-later split every other economic-adjacent decision
+in this project already uses.
 
 Getting here required two more decisions first, both asked explicitly
 (ADR-0010, "Decided: `validator_id` derivation" / "Decided:
@@ -870,14 +870,14 @@ change.
   `validator_update`, §5 — each remaining one parked on a named
   blocker, not merely unaddressed; `stake`/`unstake`/`validator_update`
   still need their own economic parameters — minimum bond, unbonding
-  period — before they are fully closed)
+  period (ADR-0023) — before they are fully closed)
 - newly-created accounts' Permission/Metadata initial values (`transfer`
   implicit creation, §5) — blocked on account-state.md §4.5/§4.6
 - final fee model (mechanism decided above — type, payer, cap-not-exact,
   failed-execution obligation; amount, refund arithmetic, validator
   distribution, burn policy, storage costs, and priority-fee market
-  behavior remain economic decisions owned by a future tokenomics and
-  HNVM metering specification)
+  behavior remain economic decisions owned by ADR-0023 (Tokenomics And
+  Economic Model) and a future HNVM metering specification)
 - receipt model (`ReceiptV1` core shape decided above — `tx_id` +
   `status`; `fee_charged`/`resource_usage`/`emitted_event_references`
   deferred to a future `receipt_version`, gated on the fee model and an

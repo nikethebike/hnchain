@@ -281,12 +281,11 @@ Before slashing can be activated, HNChain must specify:
 
 **Deliberately untouched by this decision pass** — jailing, above,
 does not imply or bring slashing closer to activation; every item in
-this list stays blocked on a staking/delegation/tokenomics track that
-does not exist anywhere in this project yet, the same class of named
-blocker used throughout the consensus track for anything genuinely
-gated on economics rather than mechanism (voting power's exact
-`cap_numerator`/`cap_denominator`, minimum validator bond, and this
-list, are one blocked group, not several).
+this list is owned by ADR-0023 (Tokenomics And Economic Model), the
+same document that now owns voting power's exact
+`cap_numerator`/`cap_denominator` and minimum validator bond (ADR-0010)
+— one owning ADR, not a staking/delegation/tokenomics track scattered
+across several.
 
 ## Rejected Options
 
@@ -427,16 +426,21 @@ algorithm migrations.
 
 ## Open Decisions
 
+Economic-value items below (evidence fees, jail duration constant,
+slashing activation/amounts, delegator impact, unbonding interaction,
+correlated failure policy) are owned by ADR-0023 (Tokenomics And
+Economic Model), not this ADR.
+
 - evidence validity window
-- evidence fees
+- evidence fees (ADR-0023)
 - jail duration / release condition (trigger, timing, reactivation, and
   key rotation interaction all decided above — "Decided: jailing
-  activation mechanism"; only the duration constant remains)
-- slashing activation criteria
-- slashing amounts
-- delegator impact
-- unbonding interaction
-- correlated failure policy
+  activation mechanism"; only the duration constant remains — ADR-0023)
+- slashing activation criteria (ADR-0023)
+- slashing amounts (ADR-0023)
+- delegator impact (ADR-0023)
+- unbonding interaction (ADR-0023)
+- correlated failure policy (ADR-0023)
 - incident response path
 - evidence proof size limits
 - evidence test vector suite

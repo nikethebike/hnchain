@@ -196,7 +196,7 @@ Lifecycle transitions require deterministic authorization and validation rules.
 
 **Decided** (ADR-0010, "Decided: admission mechanism"): `registered →
 candidate` is automatic (a derived condition — bonded stake meets the
-still-open minimum bond — not its own transaction, since §11's
+still-open minimum bond (ADR-0023) — not its own transaction, since §11's
 operation registry names no `validator_candidate` operation);
 `candidate → active` is explicit, via `validator_activate`, so an
 operator opts in rather than being drafted into consensus duty by a
@@ -396,17 +396,23 @@ Test vectors are mandatory before production implementation.
 
 ## 14. Open Decisions
 
+Economic-value items below are owned by ADR-0023 (Tokenomics And
+Economic Model), not this document — mechanisms are decided here.
+
 - final validator record schema (`validator_id` derivation and
   `bonded_stake`/`voting_power` split decided; `network_key`,
   `activation_epoch`/`deactivation_epoch`, `metadata_hash` remain
   unresolved — see §3)
 - voting power's maximum value bound and cap fraction value (model,
-  capping algorithm, and integer type — `u128` — decided; see §8)
-- `MAX_ACTIVE_SET_SIZE` value (selection mechanism decided; see §6)
-- final epoch length
-- final key rotation delay
+  capping algorithm, and integer type — `u128` — decided; see §8 —
+  ADR-0023)
+- `MAX_ACTIVE_SET_SIZE` value (selection mechanism decided; see §6 —
+  ADR-0023)
+- minimum validator bond (ADR-0023)
+- final epoch length (ADR-0023)
+- final key rotation delay (ADR-0023)
 - final unbonding period (activation/deactivation delay decided as a
-  mechanism — one epoch; see §5 — unbonding is distinct)
+  mechanism — one epoch; see §5 — unbonding is distinct — ADR-0023)
 - final validator operation transaction schemas
 - final validator set commitment format
 - final light-client proof format

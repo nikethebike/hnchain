@@ -240,8 +240,8 @@ Fields:
   in ADR-0007). `u128`, not `u64`, is a storage-width decision only:
   headroom against intermediate-computation overflow (fee/reward
   multiplication and similar), not a supply, allocation, or fee decision —
-  those remain owned by a future tokenomics specification and are not
-  decided by this schema; this section does not assume or encode any
+  those remain owned by ADR-0023 (Tokenomics And Economic Model) and are
+  not decided by this schema; this section does not assume or encode any
   particular initial balance.
 
 ### 4.4 Nonce State

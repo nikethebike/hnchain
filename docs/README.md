@@ -38,6 +38,7 @@ docs/
     ADR-0020-implementation-language.md
     ADR-0021-rust-workspace-policy.md
     ADR-0022-protocol-versioning.md
+    ADR-0023-tokenomics-and-economic-model.md
 
   specs/
     core/

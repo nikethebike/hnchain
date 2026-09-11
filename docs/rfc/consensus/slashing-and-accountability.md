@@ -257,18 +257,21 @@ Test vectors are mandatory before production implementation.
 - final evidence type registry
 - final evidence schemas
 - final evidence validity window
+Economic-value items below are owned by ADR-0023 (Tokenomics And
+Economic Model), not this document.
+
 - final evidence inclusion limits and behavior (root formula and
   ordering decided; count/size limits, duplicate handling, fee
   behavior, effect timing, and receipt/event behavior remain open; see
   §7)
 - final jail duration / release condition (activation mechanism
-  decided; see §8)
+  decided; see §8 — ADR-0023)
 - final downtime policy (deliberately excluded from jailing's scope;
   see §10)
-- final slashing activation criteria
-- final slashing economics
-- final delegator impact model
-- final unbonding interaction
-- final correlated failure policy
-- final evidence fee policy
+- final slashing activation criteria (ADR-0023)
+- final slashing economics (ADR-0023)
+- final delegator impact model (ADR-0023)
+- final unbonding interaction (ADR-0023)
+- final correlated failure policy (ADR-0023)
+- final evidence fee policy (ADR-0023)
 - final test vector suite
