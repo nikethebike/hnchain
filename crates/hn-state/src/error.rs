@@ -174,6 +174,11 @@ pub enum StateError {
         /// The rejected byte.
         value: u8,
     },
+    /// A decoded `ConsensusVote.signature` / `QuorumCertificate.
+    /// aggregate_proof` entry was rejected as a
+    /// [`hn_crypto::SignatureEnvelope`] — unsupported `envelope_version`,
+    /// most commonly.
+    InvalidSignatureEnvelope(IdentityError),
 }
 
 impl From<HashError> for StateError {
@@ -266,6 +271,9 @@ impl core::fmt::Display for StateError {
             }
             Self::InvalidValidatorStatus { value } => {
                 write!(formatter, "invalid validator status: 0x{value:02x}")
+            }
+            Self::InvalidSignatureEnvelope(error) => {
+                write!(formatter, "invalid signature envelope: {error}")
             }
         }
     }

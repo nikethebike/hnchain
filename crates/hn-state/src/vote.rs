@@ -1,7 +1,8 @@
 use hn_core::{BlockHeight, Epoch, Round};
-use hn_crypto::{Digest, hash_profile_0x0001};
+use hn_crypto::{Digest, SignatureEnvelope, hash_profile_0x0001};
 use hn_hncs::{
-    Decoder, write_bytes, write_fixed_bytes, write_list, write_u8, write_u16, write_u64, write_u128,
+    Decoder, HncsError, validate_count, write_bytes, write_fixed_bytes, write_u8, write_u16,
+    write_u32, write_u64, write_u128,
 };
 
 use crate::error::{StateError, StateResult};
@@ -222,32 +223,28 @@ impl VoteSigningPayloadV1 {
 }
 
 /// A consensus vote (ADR-0012, "Vote Context Binding"): a signed
-/// [`VoteSigningPayloadV1`]. `signature` is bounded raw bytes, not yet
-/// a concrete `SignatureEnvelope` (ADR-0002) -- that container's own
-/// canonical byte-level encoding has not been implemented in this
-/// codebase yet, matching how `TransferPayloadV1`'s eventual
-/// `TransactionEnvelope.signatures` field is similarly not yet a
-/// concrete type anywhere in this project.
+/// [`VoteSigningPayloadV1`]. `signature` is a concrete
+/// [`hn_crypto::SignatureEnvelope`] (ADR-0002, "Decided:
+/// `SignatureEnvelope` concrete field list") — verification still needs
+/// an externally-resolved `KeyDescriptor` ([`SignatureEnvelope::verify`]
+/// takes one rather than looking it up), so this crate does not verify
+/// signatures itself, only encodes/decodes the envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConsensusVote {
     /// The signed content.
     pub payload: VoteSigningPayloadV1,
     /// The signature over `payload.signing_digest()`.
-    pub signature: Vec<u8>,
+    pub signature: SignatureEnvelope,
 }
-
-/// Maximum length, in bytes, of `ConsensusVote.signature`. Generous
-/// headroom over Ed25519's 64-byte signatures (ADR-0002) for algorithm
-/// agility, matching `hn_crypto::PUBLIC_KEY_MAX_LEN`'s reasoning.
-pub const MAX_VOTE_SIGNATURE_LEN: usize = 256;
 
 impl ConsensusVote {
     /// Encodes this value as canonical HNCS bytes: `payload` followed
-    /// by the bounded `signature`.
+    /// by the signature envelope.
     pub fn encode(&self) -> StateResult<Vec<u8>> {
         let mut out = Vec::new();
         self.payload.encode_into(&mut out)?;
-        write_bytes(&mut out, &self.signature, MAX_VOTE_SIGNATURE_LEN)
+        self.signature
+            .encode_into(&mut out)
             .map_err(StateError::Encoding)?;
         Ok(out)
     }
@@ -257,10 +254,8 @@ impl ConsensusVote {
     pub fn decode(bytes: &[u8]) -> StateResult<Self> {
         let mut decoder = Decoder::new(bytes);
         let payload = VoteSigningPayloadV1::decode_from(&mut decoder)?;
-        let signature = decoder
-            .read_bytes(MAX_VOTE_SIGNATURE_LEN)
-            .map_err(StateError::Encoding)?
-            .to_vec();
+        let signature = SignatureEnvelope::decode_from(&mut decoder)
+            .map_err(StateError::InvalidSignatureEnvelope)?;
         decoder.finish().map_err(StateError::Encoding)?;
 
         Ok(Self { payload, signature })
@@ -305,10 +300,16 @@ pub const MAX_QUORUM_SIGNATURES: usize = 8192;
 /// a stored field would duplicate what `total_voting_power` alone already
 /// determines.
 ///
-/// `aggregate_proof[i]` is the individual Ed25519 signature of the `i`-th
-/// signer named by `signer_commitment`'s set bits, in ascending bit-index
-/// order (ADR-0012, "Decided: signer commitment bit-level encoding") —
-/// there is no cryptographic aggregation under the decided scheme.
+/// `aggregate_proof[i]` is the individual [`hn_crypto::SignatureEnvelope`]
+/// of the `i`-th signer named by `signer_commitment`'s set bits, in
+/// ascending bit-index order (ADR-0012, "Decided: signer commitment
+/// bit-level encoding") — there is no cryptographic aggregation under the
+/// decided scheme. Encoded as a hand-rolled `u32 count || elements`
+/// sequence, not `hn_hncs::write_list`/`read_list`: each element's own
+/// decode can fail with a domain-specific
+/// [`hn_crypto::IdentityError`] (an unsupported `envelope_version`), which
+/// those generic helpers' `HncsResult`-typed element closures cannot
+/// express.
 ///
 /// [`QuorumCertificate::decode`] checks only what is intrinsic to the
 /// structure itself (matching [`VoteSigningPayloadV1::decode`]'s
@@ -319,11 +320,12 @@ pub const MAX_QUORUM_SIGNATURES: usize = 8192;
 /// epoch — signer eligibility, signer uniqueness against real
 /// `validator_id`s, whether `signer_commitment`'s padding bits (beyond the
 /// active set's real size) are zero, whether `total_voting_power` is
-/// actually correct for that set, whether each signature verifies, and
-/// whether the certificate meets quorum — are deliberately out of scope
-/// here; they need an active-set query interface this codebase does not
-/// have yet (same boundary `ConsensusVote::decode` already draws around
-/// signature verification).
+/// actually correct for that set, whether each signature verifies
+/// (needs a resolved `KeyDescriptor` per signer, [`SignatureEnvelope::verify`]),
+/// and whether the certificate meets quorum — are deliberately out of
+/// scope here; they need an active-set query interface
+/// ([`crate::active_set`]) wired to real storage-backed state, which this
+/// codebase does not have yet.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QuorumCertificate {
     /// Which of Tendermint's two voting stages this certificate proves
@@ -359,9 +361,9 @@ pub struct QuorumCertificate {
     /// identifying which validators signed (ADR-0012, "Decided: signer
     /// commitment bit-level encoding").
     pub signer_commitment: Vec<u8>,
-    /// One individual Ed25519 signature per set bit in
+    /// One individual signature envelope per set bit in
     /// `signer_commitment`, in the same ascending order.
-    pub aggregate_proof: Vec<Vec<u8>>,
+    pub aggregate_proof: Vec<SignatureEnvelope>,
 }
 
 impl QuorumCertificate {
@@ -383,13 +385,26 @@ impl QuorumCertificate {
         write_u128(&mut out, self.signed_voting_power);
         write_bytes(&mut out, &self.signer_commitment, MAX_SIGNER_COMMITMENT_LEN)
             .map_err(StateError::Encoding)?;
-        write_list(
-            &mut out,
-            &self.aggregate_proof,
-            MAX_QUORUM_SIGNATURES,
-            |out, signature| write_bytes(out, signature, MAX_VOTE_SIGNATURE_LEN),
-        )
-        .map_err(StateError::Encoding)?;
+
+        // Hand-rolled `u32 count || elements`, not `write_list`: see the
+        // type-level documentation for why (each element's decode can
+        // fail with a domain-specific `IdentityError`, which
+        // `write_list`/`read_list`'s `HncsResult`-typed closures cannot
+        // express).
+        validate_count(self.aggregate_proof.len(), MAX_QUORUM_SIGNATURES)
+            .map_err(StateError::Encoding)?;
+        let entry_count = u32::try_from(self.aggregate_proof.len()).map_err(|_| {
+            StateError::Encoding(HncsError::LengthFieldOverflow {
+                length: self.aggregate_proof.len(),
+            })
+        })?;
+        write_u32(&mut out, entry_count);
+        for envelope in &self.aggregate_proof {
+            envelope
+                .encode_into(&mut out)
+                .map_err(StateError::Encoding)?;
+        }
+
         Ok(out)
     }
 
@@ -440,13 +455,18 @@ impl QuorumCertificate {
             .read_bytes(MAX_SIGNER_COMMITMENT_LEN)
             .map_err(StateError::Encoding)?
             .to_vec();
-        let aggregate_proof = decoder
-            .read_list(MAX_QUORUM_SIGNATURES, |decoder| {
-                decoder
-                    .read_bytes(MAX_VOTE_SIGNATURE_LEN)
-                    .map(<[u8]>::to_vec)
-            })
-            .map_err(StateError::Encoding)?;
+
+        // Hand-rolled counterpart to encode()'s hand-rolled write — see
+        // the type-level documentation for why this isn't `read_list`.
+        let entry_count = decoder.read_u32().map_err(StateError::Encoding)? as usize;
+        validate_count(entry_count, MAX_QUORUM_SIGNATURES).map_err(StateError::Encoding)?;
+        let mut aggregate_proof = Vec::with_capacity(entry_count);
+        for _ in 0..entry_count {
+            aggregate_proof.push(
+                SignatureEnvelope::decode_from(&mut decoder)
+                    .map_err(StateError::InvalidSignatureEnvelope)?,
+            );
+        }
 
         decoder.finish().map_err(StateError::Encoding)?;
 
@@ -479,12 +499,20 @@ impl QuorumCertificate {
 #[cfg(test)]
 mod tests {
     use hn_core::{BlockHeight, Epoch, Round};
+    use hn_crypto::SignatureEnvelope;
 
     use super::{
         ConsensusVote, QuorumCertificate, StateError, VoteSigningPayloadV1, VoteTargetType,
         VoteType,
     };
     use crate::error::StateResult;
+
+    fn envelope(byte: u8) -> SignatureEnvelope {
+        SignatureEnvelope {
+            algorithm_id: 1,
+            signature: vec![byte; 64],
+        }
+    }
 
     const VSC: [u8; 32] = [0x11; 32];
     const VID: [u8; 32] = [0x22; 32];
@@ -575,11 +603,11 @@ mod tests {
     fn encodes_consensus_vote_matching_independent_oracle() -> StateResult<()> {
         let vote = ConsensusVote {
             payload: prevote_block(),
-            signature: vec![0x99; 64],
+            signature: envelope(0x99),
         };
         assert_eq!(
             hex(&vote.encode()?),
-            "01000100010101000500000000000000e803000000000000000000000000000011111111111111111111111111111111111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222013333333333333333333333333333333333333333333333333333333333333333000000004000000099999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+            "01000100010101000500000000000000e80300000000000000000000000000001111111111111111111111111111111111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222201333333333333333333333333333333333333333333333333333333333333333300000000010001004000000099999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
         );
         Ok(())
     }
@@ -588,7 +616,7 @@ mod tests {
     fn consensus_vote_round_trips_through_decode() -> StateResult<()> {
         let vote = ConsensusVote {
             payload: precommit_nil(),
-            signature: vec![0xab; 64],
+            signature: envelope(0xab),
         };
         let decoded = ConsensusVote::decode(&vote.encode()?)?;
         assert_eq!(decoded, vote);
@@ -613,7 +641,7 @@ mod tests {
             total_voting_power: 100,
             signed_voting_power: 70,
             signer_commitment: vec![0x15], // bits 0, 2, 4 set
-            aggregate_proof: vec![vec![0xaa; 64], vec![0xbb; 64], vec![0xcc; 64]],
+            aggregate_proof: vec![envelope(0xaa), envelope(0xbb), envelope(0xcc)],
         }
     }
 
@@ -639,7 +667,7 @@ mod tests {
     fn encodes_qc_block_matching_independent_oracle() -> StateResult<()> {
         assert_eq!(
             hex(&qc_block_3signers().encode()?),
-            "01000100020101000500000000000000e80300000000000000000000000000001111111111111111111111111111111111111111111111111111111111111111013333333333333333333333333333333333333333333333333333333333333333640000000000000000000000000000004600000000000000000000000000000001000000150300000040000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa40000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb40000000cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            "01000100020101000500000000000000e8030000000000000000000000000000111111111111111111111111111111111111111111111111111111111111111101333333333333333333333333333333333333333333333333333333333333333364000000000000000000000000000000460000000000000000000000000000000100000015030000000100010040000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0100010040000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0100010040000000cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         );
         Ok(())
     }

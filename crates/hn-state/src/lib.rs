@@ -39,16 +39,20 @@
 //! `VoteSigningPayloadV1`/`ConsensusVote` and `QuorumCertificate`
 //! (ADR-0012) — every structural question the latter depended on
 //! (aggregation scheme, signer commitment encoding, voting power integer
-//! type) is now decided (ADR-0010, ADR-0012). [`validator_record`] adds
-//! `ValidatorRecordV1` (ADR-0010, deliberately narrower than the full
-//! conceptual struct — see its own documentation), and [`active_set`]
-//! adds the `ACTIVE_SET(epoch)` derivation function and the live
-//! not-jailed overlay check (ADR-0010/ADR-0015) — together, the
-//! active-set query interface `QuorumCertificate::decode`'s own
-//! documentation flags as still missing. Real signature verification and
-//! full quorum-satisfaction checking, which need a concrete
-//! `SignatureEnvelope` and a storage-backed way to fetch `candidates` at
-//! a given height, remain out of scope for this crate.
+//! type) is now decided (ADR-0010, ADR-0012), and both
+//! `ConsensusVote.signature`/`QuorumCertificate.aggregate_proof` carry a
+//! concrete `hn_crypto::SignatureEnvelope` (ADR-0002), not raw bounded
+//! bytes. [`validator_record`] adds `ValidatorRecordV1` (ADR-0010,
+//! deliberately narrower than the full conceptual struct — see its own
+//! documentation), and [`active_set`] adds the `ACTIVE_SET(epoch)`
+//! derivation function and the live not-jailed overlay check
+//! (ADR-0010/ADR-0015) — together, the active-set query interface
+//! `QuorumCertificate::decode`'s own documentation flags as still
+//! missing. Real signature *verification* and full quorum-satisfaction
+//! checking, which need a resolved `KeyDescriptor` per signer
+//! (`SignatureEnvelope::verify` takes one rather than looking it up) and
+//! a storage-backed way to fetch `candidates` at a given height, remain
+//! out of scope for this crate.
 
 mod access_list;
 mod account;
@@ -104,8 +108,8 @@ pub use validator_record::{RECORD_VERSION_1, ValidatorRecordV1, ValidatorStatus}
 pub use validity_window::ValidityWindowV1;
 pub use vote::{
     CONSENSUS_PROFILE_TENDERMINT_V1, ConsensusVote, MAX_QUORUM_SIGNATURES,
-    MAX_SIGNER_COMMITMENT_LEN, MAX_VOTE_METADATA_LEN, MAX_VOTE_SIGNATURE_LEN, QC_VERSION_1,
-    QuorumCertificate, VOTE_VERSION_1, VoteSigningPayloadV1, VoteTargetType, VoteType,
+    MAX_SIGNER_COMMITMENT_LEN, MAX_VOTE_METADATA_LEN, QC_VERSION_1, QuorumCertificate,
+    VOTE_VERSION_1, VoteSigningPayloadV1, VoteTargetType, VoteType,
 };
 
 #[cfg(test)]

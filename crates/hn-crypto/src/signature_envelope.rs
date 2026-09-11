@@ -1,4 +1,4 @@
-use hn_hncs::{Decoder, write_bytes, write_u16};
+use hn_hncs::{Decoder, HncsResult, write_bytes, write_u16};
 
 use crate::identity::{
     ED25519_ALGORITHM_ID, ED25519_SIGNATURE_LEN, IdentityError, IdentityResult, KeyDescriptor,
@@ -54,17 +54,41 @@ impl SignatureEnvelope {
     /// Encodes this value as canonical HNCS bytes.
     pub fn encode(&self) -> IdentityResult<Vec<u8>> {
         let mut out = Vec::new();
-        write_u16(&mut out, Self::ENVELOPE_VERSION_1);
-        write_u16(&mut out, self.algorithm_id);
-        write_bytes(&mut out, &self.signature, SIGNATURE_MAX_LEN)?;
+        self.encode_into(&mut out)?;
         Ok(out)
+    }
+
+    /// Appends this value's canonical HNCS bytes to `out`. Shared by
+    /// [`SignatureEnvelope::encode`] and by callers embedding a
+    /// `SignatureEnvelope` inside a larger structure (for example a list
+    /// of them, `hn_hncs::write_list`'s own element closure is
+    /// `HncsResult`-typed, which this signature matches directly).
+    pub fn encode_into(&self, out: &mut Vec<u8>) -> HncsResult<()> {
+        write_u16(out, Self::ENVELOPE_VERSION_1);
+        write_u16(out, self.algorithm_id);
+        write_bytes(out, &self.signature, SIGNATURE_MAX_LEN)
     }
 
     /// Decodes and validates canonical HNCS bytes produced by
     /// [`SignatureEnvelope::encode`].
     pub fn decode(bytes: &[u8]) -> IdentityResult<Self> {
         let mut decoder = Decoder::new(bytes);
+        let envelope = Self::decode_from(&mut decoder)?;
+        decoder.finish()?;
+        Ok(envelope)
+    }
 
+    /// Decodes this value's fields from `decoder` without requiring the
+    /// decoder to be exhausted afterward. Shared by
+    /// [`SignatureEnvelope::decode`] and by callers embedding a
+    /// `SignatureEnvelope` inside a larger structure — unlike
+    /// `encode_into`, this cannot be `HncsResult`-typed (an unsupported
+    /// `envelope_version` is a domain-specific rejection, not a byte-
+    /// framing error), so embedding this inside `hn_hncs::read_list`
+    /// is not possible directly; callers needing a list of envelopes
+    /// hand-roll the count-prefixed loop instead (see
+    /// `hn-state::vote::QuorumCertificate`).
+    pub fn decode_from(decoder: &mut Decoder<'_>) -> IdentityResult<Self> {
         let envelope_version = decoder.read_u16()?;
         if envelope_version != Self::ENVELOPE_VERSION_1 {
             return Err(IdentityError::UnsupportedEnvelopeVersion {
@@ -74,8 +98,6 @@ impl SignatureEnvelope {
 
         let algorithm_id = decoder.read_u16()?;
         let signature = decoder.read_bytes(SIGNATURE_MAX_LEN)?.to_vec();
-
-        decoder.finish()?;
 
         Ok(Self {
             algorithm_id,
