@@ -815,10 +815,10 @@ the value itself. Several are now resolved there.
   (distinct from activation/deactivation, which are decided as a
   mechanism above — "Decided: admission mechanism"). The fund-release
   implementation is also done:
-  [`hn_state::apply_unstake`](../../crates/hn-state/src/validator_transition.rs)
+  [`hn_state::apply_unstake`](../../hn-state/src/validator_transition.rs)
   records a `PendingUnbondingV1` maturing `UNBONDING_PERIOD_BLOCKS`
   later;
-  [`hn_state::apply_unbonding_release`](../../crates/hn-state/src/validator_transition.rs)
+  [`hn_state::apply_unbonding_release`](../../hn-state/src/validator_transition.rs)
   credits it back once matured — not yet invoked by anything, since no
   block-processing pipeline exists yet to call it automatically
   (`hn-consensus`/`hn-node` are still stubs).

@@ -46,21 +46,30 @@ The initial workspace should use the following conceptual structure:
 
 ```text
 Cargo.toml
-crates/
-  hn-core/
-  hn-crypto/
-  hn-hncs/
-  hn-state/
-  hn-storage/
-  hn-consensus/
-  hn-network/
-  hn-node/
-  hn-rpc/
-  hn-cli/
+hn-core/
+hn-crypto/
+hn-hncs/
+hn-state/
+hn-storage/
+hn-consensus/
+hn-network/
+hn-node/
+hn-rpc/
+hn-cli/
 tests/
   conformance/
   integration/
 ```
+
+**Decided: no `crates/` wrapper directory** — each crate is its own
+top-level directory, not nested under a grouping folder. Reorganized
+this way (commit history, not this ADR's original text) once the
+workspace actually existed with several crates in it, matching the
+flat layout larger production Rust monorepos (for example Solana's
+validator client, `anza-xyz/agave`) already use once a workspace grows
+past a handful of crates: a `crates/` wrapper adds one path segment
+everywhere (source, docs, CI) without adding information a top-level
+directory listing doesn't already convey on its own.
 
 Final crate manifests and public APIs require implementation PR review.
 

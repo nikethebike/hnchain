@@ -395,7 +395,7 @@ of their own — HNCS itself only ever decodes the width its schema declares.
 
 ADR-0004, "Decided: Canonical Error Taxonomy." Every HNCS decoder rejects
 malformed input as exactly one of these kinds — a closed set for HNCS v0.1,
-ratifying what `crates/hn-hncs/src/error.rs` already implements and tests:
+ratifying what `hn-hncs/src/error.rs` already implements and tests:
 
 ```text
 invalid_bool               non-canonical boolean byte

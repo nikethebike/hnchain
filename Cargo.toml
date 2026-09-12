@@ -1,16 +1,16 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/hn-core",
-    "crates/hn-crypto",
-    "crates/hn-hncs",
-    "crates/hn-state",
-    "crates/hn-storage",
-    "crates/hn-consensus",
-    "crates/hn-network",
-    "crates/hn-node",
-    "crates/hn-rpc",
-    "crates/hn-cli",
+    "hn-core",
+    "hn-crypto",
+    "hn-hncs",
+    "hn-state",
+    "hn-storage",
+    "hn-consensus",
+    "hn-network",
+    "hn-node",
+    "hn-rpc",
+    "hn-cli",
 ]
 
 [workspace.package]

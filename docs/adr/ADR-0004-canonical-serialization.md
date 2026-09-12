@@ -242,7 +242,7 @@ Decoders must enforce limits before allocation where possible.
 
 **Decided.** Every HNCS decoder rejects malformed input as one of exactly
 these kinds, ratifying what the reference implementation
-(`crates/hn-hncs/src/error.rs`) already defines and tests:
+(`hn-hncs/src/error.rs`) already defines and tests:
 
 ```text
 invalid_bool               non-canonical boolean byte

@@ -377,7 +377,7 @@ Implementations must bound:
 ## 16. Test Vectors
 
 `tests/conformance/core/state-tree-v0.1.json`, with its runner in
-`crates/hn-state/tests/state_tree_conformance.rs`, is this specification's
+`hn-state/tests/state_tree_conformance.rs`, is this specification's
 conformance suite for the `hn-smt-256-v1` tree math: empty-root recursion,
 core and extension state key derivation (including an invalid oversized
 `object_id`/`subkey` case), leaf and internal node hashing, state root

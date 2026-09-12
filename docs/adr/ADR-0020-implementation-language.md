@@ -63,20 +63,20 @@ fuzzing, formal reasoning where needed, and audits.
 
 The first node implementation should use Rust.
 
-Initial conceptual workspace:
+Initial conceptual workspace (no `crates/` wrapper — see ADR-0021,
+"Decided: no `crates/` wrapper directory"):
 
 ```text
-crates/
-  hn-core
-  hn-crypto
-  hn-hncs
-  hn-state
-  hn-storage
-  hn-consensus
-  hn-network
-  hn-node
-  hn-rpc
-  hn-cli
+hn-core
+hn-crypto
+hn-hncs
+hn-state
+hn-storage
+hn-consensus
+hn-network
+hn-node
+hn-rpc
+hn-cli
 ```
 
 Final crate names require a workspace architecture RFC before creation.

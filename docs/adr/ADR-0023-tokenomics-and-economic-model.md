@@ -144,7 +144,7 @@ fixed. Not yet wired into code: the capping algorithm itself
 (`C_r = floor(cap_numerator * total_r / cap_denominator)`, recomputed
 over the whole candidate set) has no implementation yet, only the
 already-implemented top-K selection in
-[`hn_state::active_set`](../../crates/hn-state/src/active_set.rs) does.
+[`hn_state::active_set`](../../hn-state/src/active_set.rs) does.
 
 ### Decided: Delegation Supported
 
@@ -179,10 +179,10 @@ directly, the same reasoning `ValidityWindowV1` (ADR-0006) already
 applied to a similar problem.
 
 The release mechanism is implemented, not left as a future task: `unstake`
-([`hn_state::apply_unstake`](../../crates/hn-state/src/validator_transition.rs))
+([`hn_state::apply_unstake`](../../hn-state/src/validator_transition.rs))
 records a `PendingUnbondingV1 { amount, matures_at_height }` on the
 `ValidatorRecordV1` rather than crediting the account immediately;
-[`hn_state::apply_unbonding_release`](../../crates/hn-state/src/validator_transition.rs)
+[`hn_state::apply_unbonding_release`](../../hn-state/src/validator_transition.rs)
 credits it back to the account's native balance once `matures_at_height`
 is reached, clearing the pending record. At most one pending withdrawal
 per validator is supported (a second `unstake` while one is pending is

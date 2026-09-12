@@ -50,7 +50,6 @@ fn hncs_compound_vectors_are_conformant() -> Result<(), Box<dyn Error>> {
 fn load_vectors() -> Result<Value, Box<dyn Error>> {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("..");
-    path.push("..");
     path.push("tests");
     path.push("conformance");
     path.push("core");
