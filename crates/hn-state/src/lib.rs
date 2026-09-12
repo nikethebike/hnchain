@@ -115,6 +115,25 @@
 //! backend" choice, ADR-0019, still open — an in-memory `StateReader`/
 //! `StateWriter` implementation proves the trait boundary, not a
 //! persistence guarantee) remains out of scope for this crate.
+//!
+//! [`governance_payload`], [`governance`], [`proposal_id`],
+//! [`proposal_record`], [`proposal_vote_record`], and
+//! [`governance_transition`] add `GovernancePayloadV1` and its state
+//! transitions (ADR-0025, "Governance Model"): `propose`/`vote`
+//! payload codec, the `governance` domain's key derivation (corrected
+//! there from a pure singleton to a singleton-plus-collection shape,
+//! ADR-0007), `proposal_id` derivation (mirrors `tx_id`), and
+//! `apply_propose`/`apply_vote`/`finalize_proposal`. Signaling-only
+//! (ADR-0025, "Decided: Signaling Only") — a `Passed` proposal has no
+//! automatic effect anywhere in this crate or elsewhere. Quorum
+//! percentage and voting-window length are still-undecided ADR-0023
+//! economic parameters, so `finalize_proposal`/`apply_propose` take
+//! them as caller-supplied parameters rather than constants, the same
+//! `max_size`-style pattern `active_set` already used for
+//! `MAX_ACTIVE_SET_SIZE` before that value was decided.
+//! `finalize_proposal` has no caller yet, mirroring
+//! `apply_unbonding_release`'s own "no block-processing pipeline
+//! exists in this codebase yet" situation.
 
 mod access_list;
 mod account;
@@ -126,11 +145,17 @@ mod consensus_root;
 mod envelope_value;
 mod error;
 mod evidence_digest;
+mod governance;
+mod governance_payload;
+mod governance_transition;
 mod key;
 mod lifecycle_value;
 mod list_merkle;
 mod node;
 mod nonce_value;
+mod proposal_id;
+mod proposal_record;
+mod proposal_vote_record;
 mod receipt;
 mod stake_payload;
 mod state_store;
@@ -161,11 +186,25 @@ pub use consensus_root::{consensus_root, validator_set_commitment};
 pub use envelope_value::{AccountType, ENVELOPE_VERSION_1, EnvelopeValueV1, SectionVersionsV1};
 pub use error::{StateError, StateResult};
 pub use evidence_digest::evidence_digest;
+pub use governance::{
+    DOMAIN_GOVERNANCE, GovernanceSection, proposal_record_state_key, proposal_vote_record_state_key,
+};
+pub use governance_payload::{
+    GOVERNANCE_PAYLOAD_VERSION_1, GOVERNANCE_PROPOSAL_TITLE_MAX_LEN, GovernanceOperation,
+    GovernancePayloadV1, VoteChoice,
+};
+pub use governance_transition::{
+    ProposeOutcome, apply_propose, apply_propose_with_receipt, apply_vote, apply_vote_with_receipt,
+    finalize_proposal,
+};
 pub use key::{OBJECT_ID_MAX_LEN, SUBKEY_MAX_LEN, state_key_core, state_key_extension};
 pub use lifecycle_value::{LIFECYCLE_VERSION_1, LifecycleState, LifecycleValueV1};
 pub use list_merkle::{LIST_TREE_PROFILE_ID, list_empty_root, list_merkle_root, list_node_hash};
 pub use node::{EmptyHashTable, TREE_DEPTH, TREE_PROFILE_ID, internal_hash, leaf_hash, value_hash};
 pub use nonce_value::{NONCE_VERSION_1, NonceValueV1};
+pub use proposal_id::proposal_id;
+pub use proposal_record::{PROPOSAL_RECORD_VERSION_1, ProposalRecordV1, ProposalStatus};
+pub use proposal_vote_record::{PROPOSAL_VOTE_RECORD_VERSION_1, ProposalVoteRecordV1};
 pub use receipt::{RECEIPT_VERSION_1, ReceiptStatus, ReceiptV1};
 pub use stake_payload::{STAKE_PAYLOAD_VERSION_1, StakePayloadV1};
 pub use state_store::{StateReader, StateWriter};

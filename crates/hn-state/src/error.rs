@@ -274,6 +274,92 @@ pub enum StateError {
     /// Target Block Time") would overflow `u64` — practically
     /// unreachable given realistic heights, but not silently wrapped.
     UnbondingMaturityHeightOverflow,
+    /// A decoded `GovernancePayloadV1.payload_version` does not match
+    /// [`crate::governance_payload::GOVERNANCE_PAYLOAD_VERSION_1`], the
+    /// only shape this implementation understands.
+    UnsupportedGovernancePayloadVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `GovernancePayloadV1.operation` byte is not a member
+    /// of the closed `operation` registry (ADR-0025, "Decided:
+    /// Transaction Payload Shape").
+    InvalidGovernanceOperation {
+        /// The rejected byte.
+        value: u8,
+    },
+    /// A decoded `Vote` payload's `choice` byte is not a member of the
+    /// closed `VoteChoice` registry (ADR-0025, "Decided: Transaction
+    /// Payload Shape").
+    InvalidVoteChoice {
+        /// The rejected byte.
+        value: u8,
+    },
+    /// [`crate::proposal_id`] was called with a `GovernancePayloadV1`
+    /// whose operation is not `Propose` — `proposal_id` is only
+    /// meaningful for a proposal's own creation content (ADR-0025,
+    /// "Decided: `proposal_id` Derivation").
+    ProposalIdRequiresProposeOperation,
+    /// A `validator_update { operation: propose }` (ADR-0025) was
+    /// submitted by a sender whose own `ValidatorRecordV1.status` is
+    /// not `Active` — only active validators may propose ("Decided:
+    /// Who May Propose").
+    ProposerMustBeActive,
+    /// A `Vote` (ADR-0025) was submitted by a sender with no
+    /// `ValidatorRecordV1` at all, or one contributing zero weight to
+    /// both governance chambers (`status != Active` and
+    /// `bonded_stake == 0`) — nothing to cast a vote with, under the
+    /// current (delegation-less) weight sources ("Decided: Chambers,
+    /// Membership, And Weight").
+    NoGovernanceVotingWeight,
+    /// A `Vote` (ADR-0025) referenced a `proposal_id` this reader has
+    /// no `ProposalRecordV1` for.
+    UnknownProposal,
+    /// A `Vote` (ADR-0025) was submitted by a sender who already has a
+    /// `ProposalVoteRecordV1` for that `proposal_id` — "Decided:
+    /// One Vote Per Sender Per Proposal" is not a silent overwrite.
+    ProposalAlreadyVoted,
+    /// A `Vote` (ADR-0025) was submitted against a `ProposalRecordV1`
+    /// whose `status` is no longer `Voting`, or whose voting window
+    /// (`voting_ends_at_height`) has already closed at the height the
+    /// vote is being applied.
+    VotingWindowClosed,
+    /// `crate::apply_propose` was called with a `GovernancePayloadV1`
+    /// whose operation is not `Propose`.
+    ExpectedProposeOperation,
+    /// `crate::apply_vote` was called with a `GovernancePayloadV1`
+    /// whose operation is not `Vote`.
+    ExpectedVoteOperation,
+    /// Computing a proposal's `voting_ends_at_height`
+    /// (`created_at_height + GOVERNANCE_VOTING_WINDOW`, ADR-0025/
+    /// ADR-0023) would overflow `u64` — practically unreachable given
+    /// realistic heights, but not silently wrapped.
+    VotingWindowHeightOverflow,
+    /// Accumulating a governance chamber tally or quorum computation
+    /// would overflow `u128` — practically unreachable given realistic
+    /// validator counts/stake amounts, but not silently wrapped.
+    GovernanceTallyOverflow,
+    /// A decoded `ProposalRecordV1.proposal_version` does not match
+    /// [`crate::proposal_record::PROPOSAL_RECORD_VERSION_1`], the only
+    /// shape this implementation understands.
+    UnsupportedProposalRecordVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `ProposalRecordV1.status` byte is not a member of the
+    /// closed `status` registry (ADR-0025, "Decided: Proposal Outcome
+    /// States").
+    InvalidProposalStatus {
+        /// The rejected byte.
+        value: u8,
+    },
+    /// A decoded `ProposalVoteRecordV1.vote_version` does not match
+    /// [`crate::proposal_vote_record::PROPOSAL_VOTE_RECORD_VERSION_1`],
+    /// the only shape this implementation understands.
+    UnsupportedProposalVoteRecordVersion {
+        /// The rejected version.
+        value: u16,
+    },
 }
 
 impl From<HashError> for StateError {
@@ -419,6 +505,50 @@ impl core::fmt::Display for StateError {
             }
             Self::UnbondingMaturityHeightOverflow => {
                 formatter.write_str("unbonding maturity height would overflow u64")
+            }
+            Self::UnsupportedGovernancePayloadVersion { value } => {
+                write!(formatter, "unsupported governance payload_version: {value}")
+            }
+            Self::InvalidGovernanceOperation { value } => {
+                write!(formatter, "invalid governance operation: 0x{value:02x}")
+            }
+            Self::InvalidVoteChoice { value } => {
+                write!(formatter, "invalid vote choice: 0x{value:02x}")
+            }
+            Self::ProposalIdRequiresProposeOperation => {
+                formatter.write_str("proposal_id can only be computed for a Propose payload")
+            }
+            Self::ProposerMustBeActive => {
+                formatter.write_str("only an Active validator may propose")
+            }
+            Self::NoGovernanceVotingWeight => {
+                formatter.write_str("sender has no weight in either governance chamber")
+            }
+            Self::UnknownProposal => formatter.write_str("unknown proposal_id"),
+            Self::ProposalAlreadyVoted => {
+                formatter.write_str("sender already voted on this proposal")
+            }
+            Self::VotingWindowClosed => formatter.write_str("proposal's voting window is closed"),
+            Self::UnsupportedProposalRecordVersion { value } => {
+                write!(formatter, "unsupported proposal_version: {value}")
+            }
+            Self::InvalidProposalStatus { value } => {
+                write!(formatter, "invalid proposal status: 0x{value:02x}")
+            }
+            Self::UnsupportedProposalVoteRecordVersion { value } => {
+                write!(formatter, "unsupported vote_version: {value}")
+            }
+            Self::ExpectedProposeOperation => {
+                formatter.write_str("apply_propose requires a Propose payload")
+            }
+            Self::ExpectedVoteOperation => {
+                formatter.write_str("apply_vote requires a Vote payload")
+            }
+            Self::VotingWindowHeightOverflow => {
+                formatter.write_str("voting_ends_at_height would overflow u64")
+            }
+            Self::GovernanceTallyOverflow => {
+                formatter.write_str("governance chamber tally would overflow u128")
             }
         }
     }
