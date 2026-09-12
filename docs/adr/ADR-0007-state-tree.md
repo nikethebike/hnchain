@@ -22,6 +22,7 @@ Referenced By:
 - ADR-0008: Block Format
 - ADR-0019: Storage And State Interfaces
 - ADR-0022: Protocol Versioning
+- ADR-0023: Tokenomics And Economic Model
 
 ## Context
 
@@ -248,12 +249,32 @@ cardinality (ADR-0003, Protocol Address, "Decided: state domain per
 module"):
 
 ```text
-governance      -> governance (0x0007)   singleton
+governance      -> governance (0x0007)   singleton config + per-proposal
 treasury        -> system (0x0009)       singleton
 staking         -> validators (0x0006)   per-validator/delegator records
 slashing        -> validators (0x0006)   per-validator penalty history
 bridge registry -> bridge (0x000A)       singleton
 ```
+
+**Correction (ADR-0023's governance voting model batch pass):**
+`governance` was originally mapped here as purely a singleton, decided
+before any governance model existed to test that cardinality claim
+against. Now that a real model is decided (ADR-0023, "Decided:
+Governance Voting Model" — validator + staker chambers voting on
+proposals), a pure singleton is the wrong shape: each proposal needs
+its own record (status, per-chamber tallies), a per-entity partitioned
+collection, the same shape `validators` already handles for
+`staking`/`slashing` above — not "one record for the whole network."
+`governance` (`0x0007`) now holds both shapes at once, distinguished by
+`object_id` within the domain, the same pattern `bridge` (`0x000A`)
+already established for its own registry-singleton-plus-collection
+split, below: a singleton governance configuration record (quorum
+thresholds and similar, if any — ADR-0023 leaves this itself open) and
+a partitioned collection of individual proposal records, each keyed by
+its own `proposal_id`. The proposal record's own schema, `proposal_id`
+derivation, and the configuration singleton's own fields are not
+decided by this correction — only that they belong in one domain,
+shaped like `bridge`'s, not the original pure-singleton claim.
 
 `system` (`0x0009`) is scoped narrowly by this: a bucket for
 protocol-owned **singleton** objects — one record for the whole network,

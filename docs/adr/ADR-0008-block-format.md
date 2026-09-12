@@ -625,10 +625,13 @@ New body sections may be backward-compatible only if:
   Boundaries": height-aligned, one full epoch of lead time; the
   consensus-protocol `epoch` field's exact length is not, same as
   before — distinct from `protocol_epoch`, already decided)
-- protocol parameter commitment format — blocked on a governance model
-  existing: unlike `fee_limit`/`ReceiptV1`, there is currently no
-  partial structure to decide (no adjustable parameter has been named
-  anywhere yet), not just an incomplete one
+- protocol parameter commitment format — still blocked: ADR-0025
+  (Governance Model) decides on-chain signaling votes only, with no
+  automatic protocol effect ("Decided: Signaling Only"), not a
+  parameter-commitment or amendment mechanism; unlike
+  `fee_limit`/`ReceiptV1`, there is currently no partial structure to
+  decide (no adjustable parameter has been named anywhere yet), not
+  just an incomplete one
 - genesis block compatibility rules — blocked on
   `docs/specs/core/genesis.md` reaching Accepted (currently Draft)
 

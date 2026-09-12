@@ -596,8 +596,11 @@ merely unaddressed:**
 
 - `contract_deploy`, `contract_call` (`0x02`, `0x03`): blocked on HNVM,
   which has no design yet.
-- `governance` (`0x07`): blocked on a governance model, which does not
-  exist yet.
+- `governance` (`0x07`): **resolved, ADR-0025 (Governance Model)** —
+  `GovernancePayloadV1`, a discriminated `propose`/`vote` payload
+  mirroring `ValidatorUpdatePayloadV1`'s own pattern. Quorum
+  percentage and voting window length remain open economic parameters
+  (ADR-0023); the payload shape itself is decided.
 - `permission_update` (`0x08`): blocked on account-state.md §4.5
   Permission State, itself explicitly deferred this session.
 - `system` (`0x09`): scope not yet concrete — no protocol module
@@ -866,11 +869,12 @@ change.
 - final transaction envelope fields (every field except `payload` is now
   decided above: `chain_id`/`network_id`/`tx_version`/`tx_type`/`sender`/
   `validity_window`/`fee_limit`'s type/`access_list`; `payload` shape is
-  now decided for 4 of 9 `tx_type`s — `transfer`, `stake`, `unstake`,
-  `validator_update`, §5 — each remaining one parked on a named
-  blocker, not merely unaddressed; `stake`/`unstake`/`validator_update`
-  still need their own economic parameters — minimum bond, unbonding
-  period (ADR-0023) — before they are fully closed)
+  now decided for 5 of 9 `tx_type`s — `transfer`, `stake`, `unstake`,
+  `validator_update`, `governance` (ADR-0025), §5 — each remaining one
+  parked on a named blocker, not merely unaddressed; `stake`/`unstake`
+  still need minimum bond decided (ADR-0023; unbonding period itself is
+  already decided, 21 days) before fully closed; `governance` still
+  needs its quorum percentage and voting window length (ADR-0023))
 - newly-created accounts' Permission/Metadata initial values (`transfer`
   implicit creation, §5) — blocked on account-state.md §4.5/§4.6
 - final fee model (mechanism decided above — type, payer, cap-not-exact,

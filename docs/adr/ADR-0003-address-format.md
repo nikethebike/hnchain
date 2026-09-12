@@ -524,9 +524,13 @@ under the post-genesis extension process (Deferred Decisions).
 
 Whether additional protocol modules can be reserved after genesis without a
 hard fork, and through what governance process, is deferred — see Deferred
-Decisions. It depends on a future governance ADR that does not exist yet,
-so this ADR fixes only the genesis-time list and does not attempt to
-specify an extension process ahead of that governance ADR.
+Decisions. It depends on a future governance ADR that does not exist yet —
+ADR-0025 (Governance Model) decides on-chain signaling votes only
+("Decided: Signaling Only"; a passed proposal has no automatic protocol
+effect), not a process for actually amending this registry, so this
+dependency still stands — so this ADR fixes only the genesis-time list
+and does not attempt to specify an extension process ahead of that
+governance ADR.
 
 ### Bridge Address
 

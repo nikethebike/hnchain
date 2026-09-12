@@ -40,6 +40,7 @@ docs/
     ADR-0022-protocol-versioning.md
     ADR-0023-tokenomics-and-economic-model.md
     ADR-0024-hncoin-monetary-policy.md
+    ADR-0025-governance-model.md
 
   specs/
     core/

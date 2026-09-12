@@ -529,7 +529,8 @@ Test vectors are mandatory before production implementation.
 - evidence schema, consensus metadata schema, justification schema,
   timestamp validation semantics, epoch transition rules — all blocked
   on `docs/rfc/consensus/*` reaching Accepted (currently Proposed)
-- protocol parameter schema — blocked on a governance model existing;
-  no adjustable parameter has been named anywhere yet to give this a
-  partial shape
+- protocol parameter schema — still blocked: ADR-0025 (Governance
+  Model) decides on-chain signaling votes only, no automatic protocol
+  effect; no adjustable parameter has been named anywhere yet to give
+  this a partial shape
 

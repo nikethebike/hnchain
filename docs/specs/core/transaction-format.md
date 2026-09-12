@@ -459,11 +459,13 @@ Boundary rules:
 - final fee model (mechanism decided; see §4.6 — amount, refunds,
   distribution, burn policy, and priority market remain economic
   decisions owned by ADR-0023, Tokenomics And Economic Model)
-- final `payload` schemas for the remaining 5 of 9 `tx_type`s (§5 —
-  `transfer`, `stake`, `unstake`, `validator_update` are decided; each
-  remaining type is parked on a named blocker; `stake`/`unstake`/
-  `validator_update` still need their own economic parameters —
-  minimum bond, unbonding period (ADR-0023) — before fully closed)
+- final `payload` schemas for the remaining 4 of 9 `tx_type`s (§5 —
+  `transfer`, `stake`, `unstake`, `validator_update`, `governance`
+  (ADR-0025) are decided; each remaining type is parked on a named
+  blocker; `stake`/`unstake` still need minimum bond decided
+  (ADR-0023; unbonding period itself is already decided) before fully
+  closed; `governance` still needs its quorum percentage and voting
+  window length (ADR-0023))
 - newly-created accounts' Permission/Metadata initial values (§5,
   `transfer` implicit creation) — blocked on §4.5/§4.6
 - final receipt schema (`ReceiptV1` core shape decided, ADR-0006

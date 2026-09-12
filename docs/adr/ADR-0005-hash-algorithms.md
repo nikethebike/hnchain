@@ -24,6 +24,7 @@ Referenced By:
 - ADR-0010: Validator Set Model
 - ADR-0012: Vote Messages And Quorum Certificates
 - ADR-0015: Slashing And Accountability
+- ADR-0025: Governance Model
 
 ## Context
 
@@ -140,6 +141,7 @@ Initial conceptual domain tags:
 - `hnchain.evidence.v1`
 - `hnchain.p2p.message.v1`
 - `hnchain.registry.algorithm.v1`
+- `hnchain.governance.proposal.v1`
 
 `hnchain.vote.signing.v1` (ADR-0012), `hnchain.consensus.root.v1` and
 `hnchain.validator.record.v1` (ADR-0010), and `hnchain.evidence.v1`
@@ -150,6 +152,10 @@ consensus_root`, ADR-0008), each validator record's leaf digest for
 `evidence_root`, respectively — the last two both committed via
 `hn-list-merkle-v1`, the same reuse already applied to `transactions_root`/
 `receipts_root`.
+
+`hnchain.governance.proposal.v1` (ADR-0025) is `proposal_id`'s own
+domain tag — a digest over a `Propose` payload's canonical content,
+mirroring `hnchain.transaction.id.v1`'s own role for `tx_id`.
 
 `hnchain.list.node.v1` and `hnchain.list.empty.v1` are added by
 ADR-0008 ("Ordered List Commitment"): the internal-node and

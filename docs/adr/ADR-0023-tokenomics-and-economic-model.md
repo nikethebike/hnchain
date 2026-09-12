@@ -23,6 +23,9 @@ Referenced By:
 - ADR-0024: HNCOIN Monetary Policy (resolves the "Monetary policy" and
   "Genesis allocation" areas below — a focused sub-ADR under this one's
   umbrella, the same relationship ADR-0011/ADR-0015 have to ADR-0009)
+- ADR-0025: Governance Model (resolves the "proposal process" part of
+  "Governance economic weight" below, the same focused-sub-ADR
+  relationship)
 
 ## Context
 
@@ -110,8 +113,11 @@ home here:
 - **Governance economic weight** — **decided: validator + staker
   chambers.** Validators and stakers vote as two separate bodies whose
   agreement is both required — not `1 HNC = 1 vote`, and not a single
-  undifferentiated token-weighted pool. Quorum thresholds, proposal
-  process, and scope of what governance may decide stay open.
+  undifferentiated token-weighted pool. Proposal process decided
+  separately (ADR-0025, Governance Model — signaling-only, `Active`-
+  validator proposers, quorum-then-majority per chamber). Quorum
+  percentage, voting window length, and scope of what governance may
+  decide stay open.
 
 Each resolved item's full normative content is under "Decided," below,
 grouped by area. Status stays `Proposed` — several items above remain
@@ -316,11 +322,19 @@ named candidate models ("validator and staker chambers") rather than
 inventing a new one. Chosen over delegated voting (needs its own
 delegation infrastructure, distinct from staking delegation) and a
 technical council (too centralized for a starting model) for this
-first decision. Left open: quorum thresholds per chamber, proposal
-process, what governance is actually empowered to decide (a distinct,
-larger question this ADR does not resolve), and whether staking
-delegation (decided above) also carries delegated governance voting
-weight or requires its own separate delegation step.
+first decision.
+
+**Proposal process resolved separately, ADR-0025 (Governance
+Model)**: signaling-only proposals (no automatic on-chain effect),
+`Active` validators may propose, per-chamber quorum-then-majority pass
+rule, height-based voting window. Left open there and here: the
+quorum percentage and voting window length themselves (tunable
+economic parameters, this ADR's own scope), what governance is
+actually empowered to decide (a distinct, larger question ADR-0025
+explicitly defers, not resolved by deciding signaling-only), and
+whether staking delegation (decided above) also carries delegated
+governance voting weight — blocked on delegation's own tracking
+mechanism not existing yet, the same gap ADR-0025 itself names.
 
 ### Decided: HNCOIN Decimals And Atomic Unit
 
@@ -563,13 +577,17 @@ Treasury and development funding — **resolved: no protocol treasury**
 area.
 
 Governance economic weight — voting model **decided: validator +
-staker chambers** (above); left open:
+staker chambers** (above); proposal process **decided, ADR-0025**
+(signaling-only, `Active`-validator proposers, quorum-then-majority per
+chamber, height-based voting window — mechanisms only); left open:
 
-- quorum thresholds per chamber
-- proposal process
+- quorum percentage per chamber (ADR-0025's own mechanism, this ADR's
+  value)
+- `GOVERNANCE_VOTING_WINDOW` length (same split)
 - scope of what governance may decide
 - whether staking delegation also carries delegated governance voting
-  weight, or needs its own separate delegation step
+  weight, or needs its own separate delegation step (blocked on
+  delegation's own tracking mechanism, ADR-0025)
 
 Other:
 
@@ -585,3 +603,4 @@ Other:
 - `docs/whitepaper/HNChain-Whitepaper-v0.1-draft.md` (Chapter XIII,
   "Economic Model")
 - `docs/adr/ADR-0024-hncoin-monetary-policy.md`
+- `docs/adr/ADR-0025-governance-model.md`
