@@ -261,6 +261,19 @@ pub enum StateError {
     /// ([`crate::state_store`]'s own prior "deliberately infallible"
     /// framing) can never produce this, only a durable one.
     Storage(String),
+    /// An `unstake` (ADR-0006, "Payload") was applied to a
+    /// `ValidatorRecordV1` that already has a
+    /// [`crate::ValidatorRecordV1::pending_unbonding`] withdrawal in
+    /// progress — at most one pending withdrawal per validator is
+    /// supported; a second `unstake` must wait for the first to mature
+    /// (`crate::apply_unbonding_release`) before starting another.
+    PendingUnbondingAlreadyExists,
+    /// Computing an `unstake`'s unbonding maturity height (`current
+    /// height + UNBONDING_PERIOD_BLOCKS`, ADR-0023's "Decided:
+    /// Unbonding Period" converted to blocks via ADR-0009's "Decided:
+    /// Target Block Time") would overflow `u64` — practically
+    /// unreachable given realistic heights, but not silently wrapped.
+    UnbondingMaturityHeightOverflow,
 }
 
 impl From<HashError> for StateError {
@@ -401,6 +414,12 @@ impl core::fmt::Display for StateError {
                 "validator_update operation 0x{operation:02x} is invalid from status 0x{status:02x}"
             ),
             Self::Storage(message) => write!(formatter, "storage backend error: {message}"),
+            Self::PendingUnbondingAlreadyExists => {
+                formatter.write_str("a pending unbonding withdrawal already exists")
+            }
+            Self::UnbondingMaturityHeightOverflow => {
+                formatter.write_str("unbonding maturity height would overflow u64")
+            }
         }
     }
 }

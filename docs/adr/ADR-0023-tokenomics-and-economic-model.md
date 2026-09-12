@@ -155,17 +155,39 @@ design task this decision does not resolve).
 
 ```text
 UNBONDING_PERIOD = 21 days
+UNBONDING_PERIOD_BLOCKS = 907_200
 ```
 
 A wall-clock duration, not an epoch count — consistent with ADR-0010's
 own framing ("real-world unbonding periods measured in weeks, not one
 epoch"). Applies from the moment `unstake` reduces `bonded_stake`
-(ADR-0006) until the withdrawn amount becomes actually spendable. The
-concrete release mechanism itself — how a pending withdrawal is tracked
-in state and matured — is not implemented by this decision;
-[`hn_state::apply_unstake`](../../crates/hn-state/src/validator_transition.rs)
-still only applies the immediate `bonded_stake` bookkeeping effect, as
-already documented there.
+(ADR-0006) until the withdrawn amount becomes actually spendable.
+Expressed in blocks for the actual mechanism (`21 * 24 * 60 * 60 / 2`)
+using ADR-0009's own "Decided: Target Block Time" (`2` seconds) —
+decided alongside this item specifically because implementing the
+release mechanism needed it: `BlockHeader.timestamp`'s own consensus
+semantics remain undecided (ADR-0008, "Timestamp"), so a
+consensus-critical maturity check cannot yet use wall-clock time
+directly, the same reasoning `ValidityWindowV1` (ADR-0006) already
+applied to a similar problem.
+
+The release mechanism is implemented, not left as a future task: `unstake`
+([`hn_state::apply_unstake`](../../crates/hn-state/src/validator_transition.rs))
+records a `PendingUnbondingV1 { amount, matures_at_height }` on the
+`ValidatorRecordV1` rather than crediting the account immediately;
+[`hn_state::apply_unbonding_release`](../../crates/hn-state/src/validator_transition.rs)
+credits it back to the account's native balance once `matures_at_height`
+is reached, clearing the pending record. At most one pending withdrawal
+per validator is supported (a second `unstake` while one is pending is
+rejected, `StateError::PendingUnbondingAlreadyExists`) — the simplest
+correct behavior for a first implementation, not a queue; a bounded
+queue of several simultaneous withdrawals remains a natural, additive
+future generalization if ever needed. Nothing in this codebase calls
+`apply_unbonding_release` yet — it is a state-transition primitive
+waiting for a block-processing pipeline (`hn-consensus`/`hn-node` are
+still stubs) to invoke it as a periodic sweep, the same "mechanism
+implemented, integration point does not exist yet" situation
+`hn_state::active_set`'s own capping algorithm is in.
 
 ### Decided: Minimum Validator Bond — Still Open, Reasoning Recorded
 
@@ -491,8 +513,9 @@ and validator reward share all decided above):
   zero-power behavior
 - minimum validator bond (reasoning for leaving it open recorded
   above, under "Decided: Minimum Validator Bond")
-- epoch length (`EPOCH_LENGTH`) — blocked specifically on `block_time`
-  (ADR-0009, not yet decided), not just unaddressed
+- epoch length (`EPOCH_LENGTH`) — no longer blocked on `block_time`
+  (ADR-0009's own "Decided: Target Block Time," 2 seconds, resolved
+  that prerequisite); the duration itself is still open
 - stake concentration limits (delegation itself is decided — supported
   — only a concentration cap, if any, remains open)
 - key rotation delay

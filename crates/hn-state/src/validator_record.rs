@@ -1,9 +1,11 @@
+use hn_core::BlockHeight;
 use hn_crypto::{
     Digest, ED25519_ALGORITHM_ID, ED25519_PUBLIC_KEY_LEN, KeyDescriptor, KeyRole,
     PUBLIC_KEY_MAX_LEN,
 };
 use hn_hncs::{
-    Decoder, HncsResult, write_bytes, write_fixed_bytes, write_u8, write_u16, write_u128,
+    Decoder, HncsResult, write_bytes, write_fixed_bytes, write_optional, write_u8, write_u16,
+    write_u64, write_u128,
 };
 
 use crate::error::{StateError, StateResult};
@@ -106,6 +108,54 @@ pub struct ValidatorRecordV1 {
     pub voting_power: u128,
     /// Lifecycle status (ADR-0010, "Validator Status").
     pub status: ValidatorStatus,
+    /// A stake withdrawal in progress, if any (ADR-0010, "unbonding
+    /// period"; amount decided ADR-0023, "Decided: Unbonding Period" —
+    /// 21 days). `unstake` (`crate::apply_unstake`) sets this rather
+    /// than crediting the account's balance immediately; `None` means
+    /// no withdrawal is pending. At most one pending withdrawal per
+    /// validator — a second `unstake` while one is already pending is
+    /// rejected ([`StateError::PendingUnbondingAlreadyExists`]) rather
+    /// than queued, the simplest correct behavior for a first
+    /// implementation; a bounded queue of several simultaneous pending
+    /// withdrawals is a natural, additive future generalization if
+    /// needed; this schema does not have to change to support it.
+    pub pending_unbonding: Option<PendingUnbondingV1>,
+}
+
+/// A stake withdrawal that has been requested (`unstake`) but has not
+/// yet matured — see [`ValidatorRecordV1::pending_unbonding`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PendingUnbondingV1 {
+    /// The amount being withdrawn, already debited from
+    /// [`ValidatorRecordV1::bonded_stake`] at the moment `unstake` was
+    /// applied.
+    pub amount: u128,
+    /// The height at which `amount` becomes credited to the account's
+    /// spendable balance (`crate::apply_unbonding_release`).
+    pub matures_at_height: BlockHeight,
+}
+
+/// Appends `pending`'s canonical encoding (`amount: u128` + `matures_at_height:
+/// u64`) to `out`. `HncsResult`-typed like [`encode_key_descriptor`]: unlike
+/// that function, decoding a [`PendingUnbondingV1`] has no possible domain
+/// error either (every `u128`/`u64` bit pattern is a valid amount/height),
+/// so both directions can be used directly inside `write_optional`/
+/// `read_optional` (ADR-0004) — no hand-rolled presence flag needed, unlike
+/// `ValidatorUpdatePayloadV1.new_consensus_key`'s own `KeyDescriptor` case.
+fn encode_pending_unbonding(out: &mut Vec<u8>, pending: &PendingUnbondingV1) -> HncsResult<()> {
+    write_u128(out, pending.amount);
+    write_u64(out, pending.matures_at_height.get());
+    Ok(())
+}
+
+/// Decodes a [`PendingUnbondingV1`] written by [`encode_pending_unbonding`].
+fn decode_pending_unbonding(decoder: &mut Decoder<'_>) -> HncsResult<PendingUnbondingV1> {
+    let amount = decoder.read_u128()?;
+    let matures_at_height = BlockHeight::new(decoder.read_u64()?);
+    Ok(PendingUnbondingV1 {
+        amount,
+        matures_at_height,
+    })
 }
 
 /// Appends `key`'s canonical encoding (`algorithm_id: u16` + bounded
@@ -161,6 +211,12 @@ impl ValidatorRecordV1 {
         write_u128(&mut out, self.bonded_stake);
         write_u128(&mut out, self.voting_power);
         write_u8(&mut out, self.status.as_u8());
+        write_optional(
+            &mut out,
+            self.pending_unbonding.as_ref(),
+            encode_pending_unbonding,
+        )
+        .map_err(StateError::Encoding)?;
         Ok(out)
     }
 
@@ -183,6 +239,9 @@ impl ValidatorRecordV1 {
         let bonded_stake = decoder.read_u128().map_err(StateError::Encoding)?;
         let voting_power = decoder.read_u128().map_err(StateError::Encoding)?;
         let status = ValidatorStatus::from_u8(decoder.read_u8().map_err(StateError::Encoding)?)?;
+        let pending_unbonding = decoder
+            .read_optional(decode_pending_unbonding)
+            .map_err(StateError::Encoding)?;
 
         decoder.finish().map_err(StateError::Encoding)?;
 
@@ -192,6 +251,7 @@ impl ValidatorRecordV1 {
             bonded_stake,
             voting_power,
             status,
+            pending_unbonding,
         })
     }
 }
@@ -224,6 +284,7 @@ mod tests {
             bonded_stake: 2_000_000,
             voting_power: 1_000_000,
             status: ValidatorStatus::Active,
+            pending_unbonding: None,
         })
     }
 
@@ -231,7 +292,21 @@ mod tests {
     fn encodes_matching_independent_oracle() -> StateResult<()> {
         assert_eq!(
             hex(&sample()?.encode()?),
-            "01004444444444444444444444444444444444444444444444444444444444444444010020000000d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c977873780841e0000000000000000000000000040420f0000000000000000000000000003"
+            "01004444444444444444444444444444444444444444444444444444444444444444010020000000d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c977873780841e0000000000000000000000000040420f000000000000000000000000000300"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn encodes_with_pending_unbonding_matching_independent_oracle() -> StateResult<()> {
+        let mut record = sample()?;
+        record.pending_unbonding = Some(super::PendingUnbondingV1 {
+            amount: 12_345,
+            matures_at_height: hn_core::BlockHeight::new(500),
+        });
+        assert_eq!(
+            hex(&record.encode()?),
+            "01004444444444444444444444444444444444444444444444444444444444444444010020000000d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c977873780841e0000000000000000000000000040420f00000000000000000000000000030139300000000000000000000000000000f401000000000000"
         );
         Ok(())
     }
@@ -273,9 +348,11 @@ mod tests {
     #[test]
     fn rejects_invalid_validator_status() -> StateResult<()> {
         let mut encoded = sample()?.encode()?;
-        let last = encoded.len() - 1;
-        assert_eq!(encoded[last], ValidatorStatus::Active.as_u8());
-        encoded[last] = 0x07;
+        // status is the byte right before the trailing pending_unbonding
+        // presence byte (sample()'s pending_unbonding is None, one byte).
+        let status_index = encoded.len() - 2;
+        assert_eq!(encoded[status_index], ValidatorStatus::Active.as_u8());
+        encoded[status_index] = 0x07;
         assert_eq!(
             ValidatorRecordV1::decode(&encoded),
             Err(StateError::InvalidValidatorStatus { value: 0x07 })

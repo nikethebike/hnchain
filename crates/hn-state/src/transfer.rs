@@ -113,7 +113,7 @@ fn apply_balance_transfer(
     ])
 }
 
-fn balance_leaf(address: &Digest, native_balance: u128) -> StateResult<Leaf> {
+pub(crate) fn balance_leaf(address: &Digest, native_balance: u128) -> StateResult<Leaf> {
     let key = account_section_state_key(address, AccountSection::Balance)?;
     let value_bytes = BalanceValueV1 { native_balance }.encode();
     let vh = value_hash(&value_bytes)?;

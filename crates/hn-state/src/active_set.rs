@@ -153,6 +153,7 @@ mod tests {
             bonded_stake: voting_power,
             voting_power,
             status,
+            pending_unbonding: None,
         })
     }
 

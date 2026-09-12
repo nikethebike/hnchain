@@ -176,10 +176,13 @@ pub use tx_id::tx_id;
 pub use unstake_payload::{UNSTAKE_PAYLOAD_VERSION_1, UnstakePayloadV1};
 pub use validator::{DOMAIN_VALIDATORS, ValidatorSection, validator_section_state_key};
 pub use validator_digest::validator_digest;
-pub use validator_record::{RECORD_VERSION_1, ValidatorRecordV1, ValidatorStatus};
+pub use validator_record::{
+    PendingUnbondingV1, RECORD_VERSION_1, ValidatorRecordV1, ValidatorStatus,
+};
 pub use validator_transition::{
-    apply_stake, apply_stake_with_receipt, apply_unstake, apply_unstake_with_receipt,
-    apply_validator_update, apply_validator_update_with_receipt,
+    UNBONDING_PERIOD_BLOCKS, apply_stake, apply_stake_with_receipt, apply_unbonding_release,
+    apply_unstake, apply_unstake_with_receipt, apply_validator_update,
+    apply_validator_update_with_receipt,
 };
 pub use validator_update_payload::{
     VALIDATOR_UPDATE_PAYLOAD_VERSION_1, ValidatorOperation, ValidatorUpdatePayloadV1,

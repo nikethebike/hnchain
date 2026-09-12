@@ -71,6 +71,7 @@ fn validator(
         bonded_stake: voting_power,
         voting_power,
         status,
+        pending_unbonding: None,
     }
 }
 
@@ -117,7 +118,7 @@ fn assert_state_root_matches_hand_built(
     // hand-assembled).
     assert_eq!(
         hex(&root),
-        "13fd1da2fa6eddf6ff6641f448572c3b421cc5b7cc2d1ef7f4ab58691423d35a"
+        "e34dbb13bb02443922db00c412b571a7c2bd088f6a407e90b91f028260d0ca7f"
     );
 
     Ok(())

@@ -881,6 +881,7 @@ mod tests {
             bonded_stake: voting_power,
             voting_power,
             status,
+            pending_unbonding: None,
         };
         let key = validator_section_state_key(&validator_id, ValidatorSection::Record)?;
         Ok(MapReader(std::collections::BTreeMap::from([(
@@ -1026,6 +1027,7 @@ mod tests {
                 bonded_stake: 100,
                 voting_power: 100,
                 status: ValidatorStatus::Active,
+                pending_unbonding: None,
             };
             let key = validator_section_state_key(&validator_id, ValidatorSection::Record)?;
             records.insert(key, record.encode()?);

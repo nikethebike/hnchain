@@ -252,6 +252,35 @@ not structural choices, and not decidable without also deciding real
 network-timing assumptions this ADR's "Explicit Safety Model" requires
 stating explicitly first.
 
+### Decided: Target Block Time
+
+```text
+TARGET_BLOCK_TIME = 2 seconds
+```
+
+A distinct parameter from the round timeout durations above, not a
+restatement of them: `TARGET_BLOCK_TIME` is the expected *average*
+time between blocks in the happy path, needed wherever a wall-clock
+duration decided elsewhere must be expressed in blocks (its first
+consumer: ADR-0023's "Decided: Unbonding Period" — 21 days — converted
+to `UNBONDING_PERIOD_BLOCKS` for `hn_state::apply_unstake`, since
+`BlockHeader.timestamp`'s own consensus semantics are still undecided,
+"Timestamp," ADR-0008, and cannot yet be relied on for a
+consensus-critical maturity check). 2 seconds matches typical
+Tendermint-family BFT chains at a comparable validator-set size (up to
+`MAX_ACTIVE_SET_SIZE = 100`, ADR-0023) — a reasonable balance between
+finality speed and network overhead.
+
+This is a target, not an enforced minimum: this profile has no hard
+minimum-block-interval rule (Timeout And View Change, above — round
+timeouts only bound the *worst* case, via backoff on the unhappy path,
+not the typical case), so real block production can run faster or
+slower than 2 seconds depending on actual network conditions. Any
+height-based conversion of a wall-clock duration using
+`TARGET_BLOCK_TIME` is therefore an approximation of real elapsed
+time, not a guarantee — accepted explicitly for
+`UNBONDING_PERIOD_BLOCKS`'s own case, not an oversight.
+
 ### Evidence And Accountability
 
 Consensus must define evidence formats before activating penalties such as
@@ -444,10 +473,10 @@ explicit migration planning.
 
 ## Open Decisions
 
-- `MAX_ACTIVE_SET_SIZE` value (derivation mechanism decided — ADR-0010,
-  "Decided: active set derivation mechanism": bounded, top-K by
-  `voting_power` descending, ties by ascending `validator_id`; the cap
-  value itself remains open)
+- `MAX_ACTIVE_SET_SIZE` value — **resolved, ADR-0023: `K = 100`**
+  (derivation mechanism decided — ADR-0010, "Decided: active set
+  derivation mechanism": bounded, top-K by `voting_power` descending,
+  ties by ascending `validator_id`)
 - voting power's maximum value bound and zero-power behavior (model,
   capping algorithm, and integer type — `u128` — all decided above;
   ADR-0010, "Decided: capped stake-weighted voting power" / "Decided:
@@ -455,9 +484,12 @@ explicit migration planning.
   itself remains a separate open economic parameter)
 - timeout and view-change *durations* (mechanism decided above —
   ADR-0009, "Timeout And View Change"; the exact base timeout and
-  backoff formula are not)
+  backoff formula are not — distinct from `TARGET_BLOCK_TIME`,
+  "Decided: Target Block Time," above, which is decided)
 - epoch length (transition mechanism decided, ADR-0010, "Epoch
-  Boundaries"; the constant itself is not)
+  Boundaries"; the constant itself is not — no longer blocked on
+  `TARGET_BLOCK_TIME`, which is now decided above, but the actual
+  duration is still the user's own separate call)
 - validator set update timing
 - slashing activation model
 - checkpoint interval

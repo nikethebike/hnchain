@@ -1,3 +1,4 @@
+use hn_core::BlockHeight;
 use hn_crypto::Digest;
 
 use crate::{
@@ -5,12 +6,29 @@ use crate::{
     node::{leaf_hash, value_hash},
     receipt::{ReceiptStatus, ReceiptV1},
     stake_payload::StakePayloadV1,
+    transfer::balance_leaf,
     tree::Leaf,
     unstake_payload::UnstakePayloadV1,
     validator::{ValidatorSection, validator_section_state_key},
-    validator_record::{ValidatorRecordV1, ValidatorStatus},
+    validator_record::{PendingUnbondingV1, ValidatorRecordV1, ValidatorStatus},
     validator_update_payload::{ValidatorOperation, ValidatorUpdatePayloadV1},
 };
+
+/// The unbonding period (ADR-0023, "Decided: Unbonding Period" — 21
+/// days) expressed in blocks, derived from ADR-0009's "Decided: Target
+/// Block Time" (2 seconds): `21 * 24 * 60 * 60 / 2 = 907_200`. Height-
+/// based rather than timestamp-based — `BlockHeader.timestamp`'s own
+/// consensus semantics are still undecided (ADR-0008, "Timestamp":
+/// "must be consensus-defined"), so a consensus-critical maturity check
+/// cannot rely on it yet; height is already the established choice for
+/// an analogous "how long is this valid" question
+/// ([`crate::ValidityWindowV1`], ADR-0006). This is an approximation of
+/// 21 real-world days, not a guarantee: Tendermint-style block
+/// production (ADR-0009) has no hard minimum-block-interval rule, so
+/// actual elapsed time for 907,200 blocks can differ from 21 days if
+/// real block production runs faster or slower than the 2-second
+/// target — a known, accepted imprecision, not an oversight.
+pub const UNBONDING_PERIOD_BLOCKS: u64 = 907_200;
 
 /// Computes the one updated write-set leaf a `stake` produces (ADR-0006,
 /// "Decided: `stake`/`unstake`/`validator_update` payload shapes"):
@@ -71,23 +89,42 @@ pub fn apply_stake_with_receipt(
 }
 
 /// Computes the one updated write-set leaf an `unstake` produces:
-/// `record`'s `bonded_stake` decreased by `payload.amount`.
+/// `record`'s `bonded_stake` decreased by `payload.amount`, and a
+/// [`PendingUnbondingV1`] recorded maturing `UNBONDING_PERIOD_BLOCKS`
+/// after `current_height` (ADR-0010's unbonding period; amount and
+/// block-time conversion decided ADR-0023/ADR-0009) —
+/// [`apply_unbonding_release`] is what later credits it back to the
+/// account's spendable balance, not this function.
 ///
-/// Checks the validation precondition that `bonded_stake` is at least
-/// `payload.amount` ([`StateError::InsufficientBondedStake`]).
-/// Deliberately does not implement the unbonding-period release
-/// mechanism (ADR-0010, still open) — only the immediate `bonded_stake`
-/// bookkeeping effect, matching ADR-0006's own decision.
+/// Checks two validation preconditions: `record.pending_unbonding` must
+/// be `None` ([`StateError::PendingUnbondingAlreadyExists`] — at most
+/// one withdrawal in flight per validator, see
+/// [`ValidatorRecordV1::pending_unbonding`]'s own documentation for why
+/// a queue is deliberately not attempted yet), and `bonded_stake` must
+/// be at least `payload.amount`
+/// ([`StateError::InsufficientBondedStake`]).
 pub fn apply_unstake(
     record: &ValidatorRecordV1,
     payload: &UnstakePayloadV1,
+    current_height: BlockHeight,
 ) -> StateResult<[Leaf; 1]> {
+    if record.pending_unbonding.is_some() {
+        return Err(StateError::PendingUnbondingAlreadyExists);
+    }
     let bonded_stake = record
         .bonded_stake
         .checked_sub(payload.amount)
         .ok_or(StateError::InsufficientBondedStake)?;
+    let matures_at_height = current_height
+        .get()
+        .checked_add(UNBONDING_PERIOD_BLOCKS)
+        .ok_or(StateError::UnbondingMaturityHeightOverflow)?;
     let updated = ValidatorRecordV1 {
         bonded_stake,
+        pending_unbonding: Some(PendingUnbondingV1 {
+            amount: payload.amount,
+            matures_at_height: BlockHeight::new(matures_at_height),
+        }),
         ..record.clone()
     };
     Ok([validator_record_leaf(&updated)?])
@@ -95,13 +132,21 @@ pub fn apply_unstake(
 
 /// Applies an `unstake` and produces its [`ReceiptV1`] in one step. See
 /// [`apply_stake_with_receipt`]'s own documentation for the shared
-/// success/failure-receipt shape.
+/// success/failure-receipt shape. Both of [`apply_unstake`]'s own
+/// validation-precondition failures
+/// ([`StateError::PendingUnbondingAlreadyExists`],
+/// [`StateError::InsufficientBondedStake`]) are legitimate transaction
+/// outcomes; [`StateError::UnbondingMaturityHeightOverflow`] is treated
+/// the same way `BalanceOverflow`/`BondedStakeOverflow` already are
+/// elsewhere in this module — practically unreachable, but a Failed
+/// receipt rather than a propagated internal error if it ever occurs.
 pub fn apply_unstake_with_receipt(
     record: &ValidatorRecordV1,
     payload: &UnstakePayloadV1,
+    current_height: BlockHeight,
     tx_id: Digest,
 ) -> StateResult<(Option<[Leaf; 1]>, ReceiptV1)> {
-    match apply_unstake(record, payload) {
+    match apply_unstake(record, payload, current_height) {
         Ok(leaves) => Ok((
             Some(leaves),
             ReceiptV1 {
@@ -109,7 +154,11 @@ pub fn apply_unstake_with_receipt(
                 status: ReceiptStatus::Success,
             },
         )),
-        Err(StateError::InsufficientBondedStake) => Ok((
+        Err(
+            StateError::PendingUnbondingAlreadyExists
+            | StateError::InsufficientBondedStake
+            | StateError::UnbondingMaturityHeightOverflow,
+        ) => Ok((
             None,
             ReceiptV1 {
                 tx_id,
@@ -118,6 +167,59 @@ pub fn apply_unstake_with_receipt(
         )),
         Err(other) => Err(other),
     }
+}
+
+/// Credits a matured [`ValidatorRecordV1::pending_unbonding`] withdrawal
+/// back to the account's spendable native balance and clears it —
+/// `apply_unstake`'s own counterpart, run once maturity is reached
+/// rather than at `unstake` time itself.
+///
+/// Returns `Ok(None)`, not an error, whenever there is nothing to do:
+/// no pending withdrawal at all, or one that has not yet reached
+/// `matures_at_height`. This is deliberate, not a placeholder — the
+/// intended caller is a periodic sweep over every validator with a
+/// pending withdrawal (a per-block "process matured unbondings" step),
+/// which is expected to find nothing due most of the time it runs; that
+/// caller does not exist yet (`hn-consensus`/`hn-node` are still stubs,
+/// ADR-0019's own "no block-processing pipeline in this codebase yet"
+/// situation), so nothing currently invokes this function — it is the
+/// state-transition primitive such a caller will use once one exists.
+///
+/// `record.validator_id` is `native_balance`'s own account address
+/// (ADR-0010, "Decided: `validator_id` derivation" — the controlling
+/// account's own `address_body`), so no separate address parameter is
+/// needed. Checks that crediting `current_native_balance` does not
+/// overflow `u128` ([`StateError::BalanceOverflow`], reusing
+/// `apply_transfer`'s own variant — the same failure mode, same
+/// meaning).
+///
+/// Unlike [`apply_stake`]/[`apply_unstake`], this has no `_with_receipt`
+/// counterpart: a receipt is tied to a specific `tx_id` a user's
+/// transaction produced, and this function is not triggered by one.
+pub fn apply_unbonding_release(
+    record: &ValidatorRecordV1,
+    current_native_balance: u128,
+    current_height: BlockHeight,
+) -> StateResult<Option<[Leaf; 2]>> {
+    let Some(pending) = record.pending_unbonding else {
+        return Ok(None);
+    };
+    if current_height.get() < pending.matures_at_height.get() {
+        return Ok(None);
+    }
+
+    let new_balance = current_native_balance
+        .checked_add(pending.amount)
+        .ok_or(StateError::BalanceOverflow)?;
+    let updated_record = ValidatorRecordV1 {
+        pending_unbonding: None,
+        ..record.clone()
+    };
+
+    Ok(Some([
+        validator_record_leaf(&updated_record)?,
+        balance_leaf(&record.validator_id, new_balance)?,
+    ]))
 }
 
 /// Computes the one updated write-set leaf a `validator_update` produces
@@ -177,6 +279,7 @@ pub fn apply_validator_update(
                 bonded_stake: 0,
                 voting_power: 0,
                 status: ValidatorStatus::Registered,
+                pending_unbonding: None,
             }
         }
         ValidatorOperation::Activate => {
@@ -307,8 +410,8 @@ mod tests {
     use hn_crypto::{Ed25519KeyPair, KeyRole};
 
     use super::{
-        apply_stake, apply_stake_with_receipt, apply_unstake, apply_unstake_with_receipt,
-        apply_validator_update, apply_validator_update_with_receipt,
+        apply_stake, apply_stake_with_receipt, apply_unbonding_release, apply_unstake,
+        apply_unstake_with_receipt, apply_validator_update, apply_validator_update_with_receipt,
     };
     use crate::{
         ReceiptStatus, StakePayloadV1, StateError, UnstakePayloadV1, ValidatorOperation,
@@ -331,6 +434,7 @@ mod tests {
             bonded_stake,
             voting_power,
             status,
+            pending_unbonding: None,
         }
     }
 
@@ -383,14 +487,21 @@ mod tests {
     }
 
     #[test]
-    fn unstake_decreases_bonded_stake() -> StateResult<()> {
+    fn unstake_decreases_bonded_stake_and_records_pending_unbonding() -> StateResult<()> {
         let before = record(1_000, 700, ValidatorStatus::Active);
         let payload = UnstakePayloadV1 { amount: 300 };
+        let current_height = hn_core::BlockHeight::new(1_000);
 
-        let [leaf] = apply_unstake(&before, &payload)?;
+        let [leaf] = apply_unstake(&before, &payload, current_height)?;
 
         let after = ValidatorRecordV1 {
             bonded_stake: 700,
+            pending_unbonding: Some(super::PendingUnbondingV1 {
+                amount: 300,
+                matures_at_height: hn_core::BlockHeight::new(
+                    1_000 + super::UNBONDING_PERIOD_BLOCKS,
+                ),
+            }),
             ..before.clone()
         };
         assert_eq!(leaf.1, super::validator_record_leaf(&after)?.1);
@@ -402,18 +513,95 @@ mod tests {
         let before = record(10, 0, ValidatorStatus::Active);
         let payload = UnstakePayloadV1 { amount: 11 };
         assert_eq!(
-            apply_unstake(&before, &payload),
+            apply_unstake(&before, &payload, hn_core::BlockHeight::new(0)),
             Err(StateError::InsufficientBondedStake)
         );
+    }
+
+    #[test]
+    fn unstake_rejects_a_second_unstake_while_one_is_pending() -> StateResult<()> {
+        let mut before = record(1_000, 700, ValidatorStatus::Active);
+        before.pending_unbonding = Some(super::PendingUnbondingV1 {
+            amount: 100,
+            matures_at_height: hn_core::BlockHeight::new(5_000),
+        });
+        let payload = UnstakePayloadV1 { amount: 50 };
+        assert_eq!(
+            apply_unstake(&before, &payload, hn_core::BlockHeight::new(0)),
+            Err(StateError::PendingUnbondingAlreadyExists)
+        );
+        Ok(())
     }
 
     #[test]
     fn unstake_with_receipt_yields_failed_on_insufficient_stake() -> StateResult<()> {
         let before = record(10, 0, ValidatorStatus::Active);
         let payload = UnstakePayloadV1 { amount: 11 };
-        let (leaves, receipt) = apply_unstake_with_receipt(&before, &payload, TX_ID)?;
+        let (leaves, receipt) =
+            apply_unstake_with_receipt(&before, &payload, hn_core::BlockHeight::new(0), TX_ID)?;
         assert!(leaves.is_none());
         assert_eq!(receipt.status, ReceiptStatus::Failed);
+        Ok(())
+    }
+
+    #[test]
+    fn unbonding_release_is_a_no_op_when_nothing_is_pending() -> StateResult<()> {
+        let before = record(1_000, 700, ValidatorStatus::Active);
+        assert_eq!(
+            apply_unbonding_release(&before, 0, hn_core::BlockHeight::new(0))?,
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unbonding_release_is_a_no_op_before_maturity() -> StateResult<()> {
+        let mut before = record(700, 700, ValidatorStatus::Active);
+        before.pending_unbonding = Some(super::PendingUnbondingV1 {
+            amount: 300,
+            matures_at_height: hn_core::BlockHeight::new(1_000),
+        });
+        assert_eq!(
+            apply_unbonding_release(&before, 0, hn_core::BlockHeight::new(999))?,
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unbonding_release_credits_balance_and_clears_pending_at_maturity() -> StateResult<()> {
+        let mut before = record(700, 700, ValidatorStatus::Active);
+        before.pending_unbonding = Some(super::PendingUnbondingV1 {
+            amount: 300,
+            matures_at_height: hn_core::BlockHeight::new(1_000),
+        });
+
+        let released = apply_unbonding_release(&before, 50, hn_core::BlockHeight::new(1_000))?;
+
+        let expected_record = ValidatorRecordV1 {
+            pending_unbonding: None,
+            ..before.clone()
+        };
+        let expected_record_leaf = super::validator_record_leaf(&expected_record)?;
+        let expected_balance_leaf = crate::transfer::balance_leaf(&before.validator_id, 350)?;
+        assert_eq!(
+            released,
+            Some([expected_record_leaf, expected_balance_leaf])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unbonding_release_rejects_balance_overflow() -> StateResult<()> {
+        let mut before = record(0, 0, ValidatorStatus::Active);
+        before.pending_unbonding = Some(super::PendingUnbondingV1 {
+            amount: 1,
+            matures_at_height: hn_core::BlockHeight::new(0),
+        });
+        assert_eq!(
+            apply_unbonding_release(&before, u128::MAX, hn_core::BlockHeight::new(0)),
+            Err(StateError::BalanceOverflow)
+        );
         Ok(())
     }
 
@@ -437,6 +625,7 @@ mod tests {
             bonded_stake: 0,
             voting_power: 0,
             status: ValidatorStatus::Registered,
+            pending_unbonding: None,
         };
         assert_eq!(leaf.1, super::validator_record_leaf(&expected)?.1);
         Ok(())

@@ -790,16 +790,22 @@ the value itself. Several are now resolved there.
 - stake caps — **resolved, ADR-0023: `cap_numerator/cap_denominator =
   1/10`** (no single validator may exceed 10% of a round's voting
   power; capping algorithm mechanism decided above)
-- epoch length — still open, specifically blocked on `block_time`
-  (an ADR-0009 consensus-timeout-class tunable, itself not yet decided
-  — transition mechanism is decided above, only the constant, and its
-  own prerequisite, remain)
+- epoch length — still open (transition mechanism decided above, only
+  the constant remains); no longer blocked on `block_time`, which
+  ADR-0009's own "Decided: Target Block Time" (2 seconds) has since
+  resolved
 - key rotation delay (ADR-0023, still open)
-- unbonding period — **resolved, ADR-0023: 21 days** (distinct from
-  activation/deactivation, which are decided as a mechanism above —
-  "Decided: admission mechanism"; the actual fund-release
-  implementation for `apply_unstake` is separate follow-up work, not
-  yet implemented)
+- unbonding period — **resolved, ADR-0023: 21 days, `907_200` blocks**
+  (distinct from activation/deactivation, which are decided as a
+  mechanism above — "Decided: admission mechanism"). The fund-release
+  implementation is also done:
+  [`hn_state::apply_unstake`](../../crates/hn-state/src/validator_transition.rs)
+  records a `PendingUnbondingV1` maturing `UNBONDING_PERIOD_BLOCKS`
+  later;
+  [`hn_state::apply_unbonding_release`](../../crates/hn-state/src/validator_transition.rs)
+  credits it back once matured — not yet invoked by anything, since no
+  block-processing pipeline exists yet to call it automatically
+  (`hn-consensus`/`hn-node` are still stubs).
 - jail duration / release condition — **resolved, ADR-0015: no
   duration at all.** `validator_activate` is valid directly from
   `Jailed` (not only `Candidate`/`Inactive`) — see ADR-0015's own
