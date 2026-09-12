@@ -485,13 +485,29 @@ Validator set changes should occur at deterministic boundaries.
 Epoch-based activation is the preferred direction because it makes light-client
 verification, checkpointing, and consensus safety easier to reason about.
 
-The exact epoch length is open.
+**Decided: `EPOCH_LENGTH` (ADR-0023, economic-parameter batch pass)**:
 
-**Decided: epoch transition mechanism**, not its length. Epoch
-boundaries are height-aligned: epoch `N` covers a fixed, contiguous
-range of block heights (the exact `EPOCH_LENGTH` stays open — a
+```text
+EPOCH_LENGTH = 43_200 blocks
+```
+
+24 hours at ADR-0009's own "Decided: Target Block Time" (2 seconds) —
+no longer blocked on that prerequisite (previously "the exact epoch
+length is open" cited exactly this dependency). Chosen over shorter
+candidates (1 hour, 6 hours) considered alongside it: a full day keeps
+checkpoint/light-client tracking overhead low and gives operators an
+easily-communicated admission delay ("a new validator activates the
+next day"), while still comfortably shorter than the 21-day unbonding
+period (ADR-0023) — the two remain clearly distinct timescales, not
+coincidentally close.
+
+**Decided: epoch transition mechanism**, not only its length now.
+Epoch boundaries are height-aligned: epoch `N` covers a fixed,
+contiguous range of block heights, `EPOCH_LENGTH` blocks each (a
 tunable constant, the same class of decision as ADR-0006's
-`MAX_TRANSACTION_SIZE`, not a structural one). The active validator set
+`MAX_TRANSACTION_SIZE`, not a structural one — the mechanism below was
+decided independently of the constant, and needed no revision once the
+constant was). The active validator set
 for epoch `N + 1` is derived from canonical state as it stands at the
 *start* of epoch `N` — one full epoch of lead time before it takes
 effect — giving validators and light clients an entire epoch to
@@ -503,9 +519,10 @@ verifying evidence and historical blocks from epoch `N` and earlier
 fixes the boundary precisely rather than leaving "remain valid" open).
 This mechanism was decided independently of the voting power model and
 the exact epoch length, both open at the time — both have since been
-at least partly resolved (model: capped stake-weighted; epoch length's
-constant remains open), and this mechanism needed no revision either
-way, confirming the independence held.
+fully resolved (model: capped stake-weighted, `cap_numerator/
+cap_denominator = 1/10`; `EPOCH_LENGTH = 43_200` blocks, above), and
+this mechanism needed no revision either way, confirming the
+independence held.
 
 ### Validator Set Commitment
 
@@ -790,10 +807,9 @@ the value itself. Several are now resolved there.
 - stake caps — **resolved, ADR-0023: `cap_numerator/cap_denominator =
   1/10`** (no single validator may exceed 10% of a round's voting
   power; capping algorithm mechanism decided above)
-- epoch length — still open (transition mechanism decided above, only
-  the constant remains); no longer blocked on `block_time`, which
-  ADR-0009's own "Decided: Target Block Time" (2 seconds) has since
-  resolved
+- epoch length — **resolved, ADR-0023: `EPOCH_LENGTH = 43_200` blocks
+  (24 hours at ADR-0009's `TARGET_BLOCK_TIME`)** — see "Epoch
+  Boundaries," above
 - key rotation delay (ADR-0023, still open)
 - unbonding period — **resolved, ADR-0023: 21 days, `907_200` blocks**
   (distinct from activation/deactivation, which are decided as a

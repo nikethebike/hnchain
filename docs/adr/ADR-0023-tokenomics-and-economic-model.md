@@ -93,10 +93,11 @@ home here:
   storage fees/rent stay open.
 - **Staking economics** — **partially decided**: `MAX_ACTIVE_SET_SIZE
   = 100`; `cap_numerator/cap_denominator = 1/10`; unbonding period = 21
-  days; delegation supported from genesis; validator reward = 70% of
-  transaction fees (the same figure as the fee split above — one
-  parameter, not two). Minimum validator bond, epoch length, stake
-  concentration limits, and key rotation delay stay open.
+  days; `EPOCH_LENGTH = 43,200` blocks (24 hours); delegation supported
+  from genesis; validator reward = 70% of transaction fees (the same
+  figure as the fee split above — one parameter, not two). Minimum
+  validator bond, stake concentration limits, and key rotation delay
+  stay open.
 - **Slashing economics** — **partially decided**: monetary slashing
   stays not activated (jailing, ADR-0015, remains the only active
   accountability mechanism); evidence submission has no fee. Slashing
@@ -188,6 +189,34 @@ waiting for a block-processing pipeline (`hn-consensus`/`hn-node` are
 still stubs) to invoke it as a periodic sweep, the same "mechanism
 implemented, integration point does not exist yet" situation
 `hn_state::active_set`'s own capping algorithm is in.
+
+### Decided: Epoch Length
+
+```text
+EPOCH_LENGTH = 43_200 blocks
+```
+
+24 hours, using ADR-0009's own `TARGET_BLOCK_TIME` (2 seconds) — the
+same conversion `UNBONDING_PERIOD_BLOCKS` already used, and the same
+reason `EPOCH_LENGTH` itself needed `TARGET_BLOCK_TIME` decided first
+(ADR-0010's "Epoch Boundaries" already fixed epoch boundaries as
+height-aligned; only the constant was missing). Chosen over shorter
+candidates (1 hour, 6 hours): a full day keeps checkpoint/light-client
+tracking overhead low and gives operators an easily-communicated
+admission delay, while staying clearly shorter than the 21-day
+unbonding period above — the two govern different concerns (how often
+the active set updates vs. how long withdrawn stake is held) and
+should not be easy to confuse by being close in magnitude. Full detail
+recorded in ADR-0010's own "Epoch Boundaries" section, which owns the
+mechanism this value plugs into; not duplicated here beyond this
+pointer, per this ADR's own "One Owning Document" rule.
+
+No code currently consumes this value: nothing in `hn-state` yet
+converts a height into an epoch number (`ConsensusVote`/
+`QuorumCertificate` carry `epoch` as an explicit field today, not
+derived from height) — the same "decided, not yet a consumer" state
+`MAX_ACTIVE_SET_SIZE`/`cap_numerator` were already in before this
+pass, not a gap specific to this value.
 
 ### Decided: Minimum Validator Bond — Still Open, Reasoning Recorded
 
@@ -506,16 +535,13 @@ Fees (mechanism decided, ADR-0006; model decided above — fixed-rate,
   specification, not owned solely by this ADR)
 
 Staking and validator economics (mechanism decided, ADR-0010;
-`MAX_ACTIVE_SET_SIZE`, cap ratio, unbonding period, delegation support,
-and validator reward share all decided above):
+`MAX_ACTIVE_SET_SIZE`, cap ratio, unbonding period, `EPOCH_LENGTH`,
+delegation support, and validator reward share all decided above):
 
 - voting power maximum value bound (if any, below `u128::MAX`) and
   zero-power behavior
 - minimum validator bond (reasoning for leaving it open recorded
   above, under "Decided: Minimum Validator Bond")
-- epoch length (`EPOCH_LENGTH`) — no longer blocked on `block_time`
-  (ADR-0009's own "Decided: Target Block Time," 2 seconds, resolved
-  that prerequisite); the duration itself is still open
 - stake concentration limits (delegation itself is decided — supported
   — only a concentration cap, if any, remains open)
 - key rotation delay

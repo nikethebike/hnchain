@@ -409,7 +409,8 @@ Economic Model), not this document — mechanisms are decided here.
 - `MAX_ACTIVE_SET_SIZE` value (selection mechanism decided; see §6 —
   ADR-0023)
 - minimum validator bond (ADR-0023)
-- final epoch length (ADR-0023)
+- final epoch length — **resolved, ADR-0023: `EPOCH_LENGTH = 43_200`
+  blocks** (24 hours at ADR-0009's `TARGET_BLOCK_TIME`)
 - final key rotation delay (ADR-0023)
 - final unbonding period (activation/deactivation delay decided as a
   mechanism — one epoch; see §5 — unbonding is distinct — ADR-0023)

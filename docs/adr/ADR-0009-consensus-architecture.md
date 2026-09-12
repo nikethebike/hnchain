@@ -486,10 +486,9 @@ explicit migration planning.
   ADR-0009, "Timeout And View Change"; the exact base timeout and
   backoff formula are not — distinct from `TARGET_BLOCK_TIME`,
   "Decided: Target Block Time," above, which is decided)
-- epoch length (transition mechanism decided, ADR-0010, "Epoch
-  Boundaries"; the constant itself is not — no longer blocked on
-  `TARGET_BLOCK_TIME`, which is now decided above, but the actual
-  duration is still the user's own separate call)
+- `EPOCH_LENGTH` value — **resolved, ADR-0023: `43_200` blocks (24
+  hours at `TARGET_BLOCK_TIME`)** (transition mechanism decided,
+  ADR-0010, "Epoch Boundaries")
 - validator set update timing
 - slashing activation model
 - checkpoint interval
