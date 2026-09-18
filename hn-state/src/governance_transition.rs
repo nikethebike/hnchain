@@ -36,11 +36,12 @@ pub type ProposeOutcome = (Digest, [Leaf; 1]);
 /// or a total bonded-stake sum, the same boundary [`crate::active_set`]
 /// already draws for its own candidate slice.
 ///
-/// `voting_window_blocks` is `GOVERNANCE_VOTING_WINDOW` (ADR-0023, still
-/// an open economic parameter) — a parameter here, not a constant, so
-/// this function does not have to change once that value is decided,
-/// the same reasoning [`crate::active_set`]'s own `max_size` parameter
-/// already used for `MAX_ACTIVE_SET_SIZE` before it was decided.
+/// `voting_window_blocks` is `GOVERNANCE_VOTING_WINDOW` (ADR-0023,
+/// "Decided: Governance Quorum And Voting Window" — resolved:
+/// `302_400` blocks, 7 days) — a parameter here, not a constant,
+/// mirroring [`crate::active_set`]'s own `max_size` parameter: no real
+/// caller (block-processing pipeline) exists yet to be the canonical
+/// source that supplies this value.
 pub fn apply_propose(
     sender: Digest,
     proposer_record: &ValidatorRecordV1,
@@ -289,10 +290,12 @@ pub fn apply_vote_with_receipt(
 /// block-processing pipeline exists anywhere in this codebase,
 /// `hn-consensus`/`hn-node` are still stubs).
 ///
-/// `quorum_numerator`/`quorum_denominator` are `GOVERNANCE_QUORUM`
-/// (ADR-0023, still an open economic parameter) — a parameter here for
-/// the same reason `voting_window_blocks` is one in [`apply_propose`].
-/// Quorum is checked via cross-multiplication
+/// `quorum_numerator`/`quorum_denominator` are `GOVERNANCE_QUORUM_
+/// NUMERATOR`/`GOVERNANCE_QUORUM_DENOMINATOR` (ADR-0023, "Decided:
+/// Governance Quorum And Voting Window" — resolved: `1/5`, 20%, the
+/// same figure for both chambers) — a parameter here for the same
+/// reason `voting_window_blocks` is one in [`apply_propose`]. Quorum is
+/// checked via cross-multiplication
 /// (`participated * quorum_denominator >= total_weight *
 /// quorum_numerator`), never floating-point division (ADR-0000).
 pub fn finalize_proposal(

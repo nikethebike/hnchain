@@ -13,9 +13,18 @@ use crate::validator_record::{ValidatorRecordV1, ValidatorStatus};
 /// *interfaces*, not a concrete storage engine (see the crate-level
 /// documentation), so it takes an already-fetched slice rather than
 /// querying anything itself. `max_size` is `MAX_ACTIVE_SET_SIZE`
-/// (ADR-0010), still an open economic parameter — deliberately a
-/// parameter here, not a constant, so this function does not have to
-/// change once that value is decided.
+/// (ADR-0023, "Decided: Active Set Size And Voting Power Cap" —
+/// resolved: `100`) — deliberately a parameter here, not a constant:
+/// no real caller (block-processing pipeline) exists yet to be the
+/// canonical source that supplies it.
+///
+/// A candidate with `voting_power == 0` receives no special exclusion
+/// (ADR-0023, "Decided: Voting Power Maximum Bound And Zero-Power
+/// Behavior") — it is ranked by the ordinary sort below like any other
+/// candidate (naturally last among nonzero peers), contributes zero to
+/// any quorum-weight sum, and gets zero probability under ADR-0011's
+/// weighted leader election. This is the existing behavior already,
+/// not a change: nothing below treats zero specially.
 ///
 /// ```text
 /// ACTIVE_SET(epoch) -> Vec<ValidatorRecordV1>

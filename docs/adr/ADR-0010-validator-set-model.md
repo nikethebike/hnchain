@@ -582,13 +582,48 @@ Consensus key rotation must be explicit and delayed.
 Immediate key replacement is rejected because it can create ambiguity in
 in-flight consensus messages.
 
-Key rotation must define:
+**Decided: rotation timing reuses the epoch-boundary delay, no new
+constant.** `validator_update_keys` (the already-decided
+`UpdateKeys` operation, `ValidatorUpdatePayloadV1`) may be submitted at
+any height; the new `consensus_key` becomes active at the next epoch
+boundary — exactly the same "submit any time, effect lands one epoch
+later" mechanism already decided for `validator_activate`/
+`validator_deactivate` ("Timing reuses Epoch Boundaries," above), applied
+here to key rotation instead of status. No second delay constant is
+introduced.
 
-- authorization
-- activation epoch
-- old key validity window
-- evidence implications
-- light-client verification behavior
+**Decided: old key validity — none, invalidated immediately at the
+activation epoch boundary.** The old `consensus_key` is not valid for
+anything once the new key activates — no grace window, no double-validity
+period. This is the simplest, safest option: it removes any window in
+which two keys are simultaneously "live" for the same `validator_id`,
+which would otherwise complicate equivocation evidence (ADR-0015) —
+a signature from the old key after the boundary is unambiguously
+invalid, not merely stale. Historical/in-flight messages signed *before*
+the activation epoch remain verifiable exactly as before: verification
+is always evaluated against whichever key was active *at the height the
+signed message claims*, not against the current key — the same
+height-scoped `active_key(identity, role, height)` lookup this ADR
+already establishes for consensus key resolution generally.
+
+**Not yet implemented**: `apply_validator_update`'s `UpdateKeys`
+operation ([`hn_state::validator_transition`](../../hn-state/src/validator_transition.rs))
+currently replaces `consensus_key` immediately, with no pending-key/
+activation-epoch tracking — the same "mechanism decided, no
+block-processing pipeline exists yet to enforce epoch-boundary timing"
+situation the admission/deactivation delay and epoch-boundary active-set
+transitions are already in. Implementing the actual pending-key state
+(a `pending_consensus_key`/`activates_at_epoch` field on
+`ValidatorRecordV1`, structurally similar to `pending_unbonding`) is
+separate follow-up work, not performed by this decision.
+
+Key rotation must still separately define:
+
+- authorization (derived, not open: the account's own currently-active
+  key authorizes `UpdateKeys`, the same as any other validator operation
+  — no separate rotation-specific authorization rule)
+- evidence implications (ADR-0015, still open there)
+- light-client verification behavior (ADR-0017, still open there)
 
 ### Slashing And Penalties
 
@@ -792,12 +827,16 @@ the value itself. Several are now resolved there.
 - `MAX_ACTIVE_SET_SIZE` value (`K`) — **resolved, ADR-0023: `K = 100`**
   (derivation mechanism decided above — bounded, top-K by
   `voting_power` descending)
-- voting power's *maximum value bound* and zero-power behavior (model,
-  capping algorithm, integer type, overflow behavior, and rounding
-  behavior all decided above — `u128`, checked arithmetic, floor only;
-  a bound below `u128::MAX` and what zero stake/power means for active
-  set membership are the remaining narrower questions — ADR-0023, still
-  open)
+- voting power's *maximum value bound* and zero-power behavior —
+  **resolved, ADR-0023**: no additional bound below `u128::MAX` (the
+  already-decided per-round 10% cap, `cap_numerator/cap_denominator`,
+  already bounds the consensus-safety-relevant consequence regardless of
+  raw magnitude — the same reasoning already applied to "stake
+  concentration limits not needed for v1"); a `voting_power == 0`
+  validator is not specially excluded from `active_set` — it ranks
+  naturally by the existing sort (lowest), contributes zero to quorum
+  sums and zero probability in weighted leader election, and needs no
+  dedicated filter
 - minimum validator bond — **resolved, ADR-0023: `MINIMUM_VALIDATOR_BOND
   = 0.001%` of `GENESIS_SUPPLY` = `10,000` HNCOIN =
   `10_000_000_000_000 hnit`**, denominated as a share of supply rather
@@ -818,7 +857,9 @@ the value itself. Several are now resolved there.
 - epoch length — **resolved, ADR-0023: `EPOCH_LENGTH = 43_200` blocks
   (24 hours at ADR-0009's `TARGET_BLOCK_TIME`)** — see "Epoch
   Boundaries," above
-- key rotation delay (ADR-0023, still open)
+- key rotation delay — **resolved, ADR-0023/above ("Key Rotation")**:
+  reuses the existing epoch-boundary delay, no new constant; old key
+  invalidated immediately at activation, no grace window
 - unbonding period — **resolved, ADR-0023: 21 days, `907_200` blocks**
   (distinct from activation/deactivation, which are decided as a
   mechanism above — "Decided: admission mechanism"). The fund-release

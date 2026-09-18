@@ -94,15 +94,17 @@ home here:
   `tx_version = 1` (no congestion pricing, no priority fee); 70%
   validator / 30% burn distribution split. Fee floor/rate amount and
   storage fees/rent stay open.
-- **Staking economics** — **partially decided**: `MAX_ACTIVE_SET_SIZE
+- **Staking economics** — **decided**: `MAX_ACTIVE_SET_SIZE
   = 100`; `cap_numerator/cap_denominator = 1/10`; unbonding period = 21
   days; `EPOCH_LENGTH = 43,200` blocks (24 hours); delegation supported
   from genesis; validator reward = 70% of transaction fees (the same
   figure as the fee split above — one parameter, not two); minimum
   validator bond = `0.001%` of `GENESIS_SUPPLY` (`10,000` HNCOIN); stake
   concentration limits not needed for v1 (the existing voting-power cap
-  already bounds the consensus-relevant consequence). Key rotation delay
-  stays open.
+  already bounds the consensus-relevant consequence); no additional
+  voting-power maximum bound below `u128::MAX` and no special exclusion
+  for zero-power validators; key rotation reuses the existing
+  epoch-boundary delay with no grace window for the old key.
 - **Slashing economics** — **partially decided**: monetary slashing
   stays not activated (jailing, ADR-0015, remains the only active
   accountability mechanism); evidence submission has no fee. Slashing
@@ -117,9 +119,10 @@ home here:
   agreement is both required — not `1 HNC = 1 vote`, and not a single
   undifferentiated token-weighted pool. Proposal process decided
   separately (ADR-0025, Governance Model — signaling-only, `Active`-
-  validator proposers, quorum-then-majority per chamber). Quorum
-  percentage, voting window length, and scope of what governance may
-  decide stay open.
+  validator proposers, quorum-then-majority per chamber). Quorum = 20%
+  (`1/5`) of each chamber's total weight, independently per chamber;
+  `GOVERNANCE_VOTING_WINDOW = 302,400` blocks (7 days). Scope of what
+  governance may decide stays open.
 
 Each resolved item's full normative content is under "Decided," below,
 grouped by area. Status stays `Proposed` — several items above remain
@@ -272,6 +275,58 @@ whose `bonded_stake >= MINIMUM_VALIDATOR_BOND` is now effectively
 `Activate` operation accepts such a validator on that derived basis, the
 same way it already accepted a literally-stored `Candidate`.
 
+### Decided: Voting Power Maximum Bound And Zero-Power Behavior
+
+No additional maximum bound is placed on raw `voting_power` below
+`u128::MAX`. The already-decided per-round capping algorithm
+(`cap_numerator/cap_denominator = 1/10`, "Decided: Active Set Size And
+Voting Power Cap," above) already bounds the consequence that matters
+for consensus safety — no single validator's effective share of a
+round's total can exceed 10%, regardless of how large its raw stored
+`voting_power` is. An additional absolute-value bound would only be
+defense-in-depth on top of that, the same reasoning already applied to
+"Decided: Stake Concentration Limits — Not Needed For V1," above; `u128`
+itself already provides enormous headroom (~3.4×10^38) against any
+realistic stake magnitude.
+
+A validator with `voting_power == 0` is not specially excluded from
+`active_set` ([`hn_state::active_set`](../../hn-state/src/active_set.rs)):
+it is ranked by the existing `(voting_power desc, validator_id asc)`
+sort like any other candidate (naturally sorting last among nonzero
+peers), contributes zero to any quorum-weight sum, and receives zero
+probability under ADR-0011's deterministic weighted leader election —
+no dedicated filter is needed for correctness. This matches the current
+implementation's own behavior already, requiring no code change: nothing
+in `active_set`'s existing ranking/truncation logic treats zero
+specially, and this decision confirms that is the intended behavior
+rather than an unaddressed gap.
+
+### Decided: Key Rotation Timing
+
+Consensus key rotation (`validator_update_keys` /
+`ValidatorUpdatePayloadV1::UpdateKeys`, ADR-0006/ADR-0010) reuses the
+already-decided epoch-boundary admission/deactivation delay — no new
+delay constant. Submitted at any height, the new `consensus_key`
+activates at the next epoch boundary, exactly the same "one epoch of
+lead time" mechanism ADR-0010's own "Timing reuses Epoch Boundaries"
+text already established for `validator_activate`/`validator_deactivate`.
+
+The old key is invalidated immediately at that activation boundary — no
+grace window in which both keys are simultaneously valid. This is the
+simplest option and avoids complicating equivocation evidence (ADR-0015)
+with a period where two keys are both "live" for the same `validator_id`.
+Historical/in-flight verification is unaffected: a signature is always
+checked against whichever key was active *at the height the signed
+message claims*, never against the "current" key, so messages signed
+before the rotation remain verifiable after it.
+
+Full mechanism detail and rationale live in ADR-0010's own "Key
+Rotation" section, per this ADR's "One Owning Document" rule — not
+duplicated here beyond this pointer. Not yet implemented in code: this
+is a decided mechanism without a consumer yet, the same "decided, no
+block-processing pipeline exists to enforce it" situation the admission/
+deactivation delay and `EPOCH_LENGTH` itself are already in.
+
 ### Decided: Validator Reward / Fee Distribution
 
 ```text
@@ -361,14 +416,52 @@ first decision.
 **Proposal process resolved separately, ADR-0025 (Governance
 Model)**: signaling-only proposals (no automatic on-chain effect),
 `Active` validators may propose, per-chamber quorum-then-majority pass
-rule, height-based voting window. Left open there and here: the
-quorum percentage and voting window length themselves (tunable
-economic parameters, this ADR's own scope), what governance is
-actually empowered to decide (a distinct, larger question ADR-0025
-explicitly defers, not resolved by deciding signaling-only), and
-whether staking delegation (decided above) also carries delegated
+rule, height-based voting window. Left open there and here: what
+governance is actually empowered to decide (a distinct, larger question
+ADR-0025 explicitly defers, not resolved by deciding signaling-only),
+and whether staking delegation (decided above) also carries delegated
 governance voting weight — blocked on delegation's own tracking
 mechanism not existing yet, the same gap ADR-0025 itself names.
+
+### Decided: Governance Quorum And Voting Window
+
+```text
+GOVERNANCE_QUORUM_NUMERATOR / GOVERNANCE_QUORUM_DENOMINATOR = 1 / 5   (20%)
+GOVERNANCE_VOTING_WINDOW = 302_400 blocks                             (7 days)
+```
+
+Quorum applies independently per chamber (validator and staker, ADR-0025
+"Decided: Chamber Pass Rule") — the same 20% threshold for both, not two
+independently-tunable values: nothing about the two chambers'
+composition (one-validator-one-vote vs. stake-weighted) implies they
+need different engagement bars, and a single shared figure is simpler to
+reason about and communicate. 20% sits between a low-friction threshold
+(easy to reach even with modest participation, but easier for a small
+coordinated group to satisfy) and a high one (stronger legitimacy per
+passed proposal, but risks frequent `Expired` outcomes while validator/
+staker counts are still small early in the network's life) — a
+deliberate middle choice for a first value, not derived from any
+existing on-chain precedent this project already committed to.
+
+`GOVERNANCE_VOTING_WINDOW` is height-based (ADR-0025, "Decided: Voting
+Window" already fixed the mechanism; this is the value), derived from
+ADR-0009's `TARGET_BLOCK_TIME = 2` seconds the same way
+`UNBONDING_PERIOD_BLOCKS`/`EPOCH_LENGTH` already were:
+`7 * 24 * 60 * 60 / 2 = 302,400`. 7 days gives the network's validators
+and stakers a full week to notice and act on a proposal — long enough
+to avoid rushing a decision, short enough that a proposal does not stay
+in limbo indefinitely; chosen over 3 days (too little time for
+lower-frequency participants to notice) and 14 days (extends every
+governance action's own latency without a corresponding benefit).
+
+Both values are caller-supplied parameters in
+[`hn_state::governance_transition`](../../hn-state/src/governance_transition.rs)'s
+`apply_propose`/`finalize_proposal` (`voting_window_blocks`/
+`quorum_numerator`/`quorum_denominator`), not hardcoded constants —
+deliberately, the same `MAX_ACTIVE_SET_SIZE`-before-a-real-caller
+pattern `hn_state::active_set`'s own `max_size` parameter already used;
+no block-processing pipeline exists yet to be the real caller that would
+supply these values from a canonical source.
 
 ### Decided: HNCOIN Decimals And Atomic Unit
 
@@ -583,14 +676,12 @@ Fees (mechanism decided, ADR-0006; model decided above — fixed-rate,
 - resource metering formula (gated jointly on a future HNVM metering
   specification, not owned solely by this ADR)
 
-Staking and validator economics (mechanism decided, ADR-0010;
-`MAX_ACTIVE_SET_SIZE`, cap ratio, unbonding period, `EPOCH_LENGTH`,
-delegation support, validator reward share, minimum validator bond, and
-stake concentration limits all decided above):
-
-- voting power maximum value bound (if any, below `u128::MAX`) and
-  zero-power behavior
-- key rotation delay
+Staking and validator economics — **fully resolved** (mechanism decided,
+ADR-0010; `MAX_ACTIVE_SET_SIZE`, cap ratio, unbonding period,
+`EPOCH_LENGTH`, delegation support, validator reward share, minimum
+validator bond, stake concentration limits, voting power maximum bound/
+zero-power behavior, and key rotation timing all decided above). Nothing
+left open in this area.
 
 Slashing economics (evidence/jailing mechanism decided, ADR-0015;
 activation stays not-activated and evidence fees are decided — none —
@@ -611,11 +702,10 @@ area.
 Governance economic weight — voting model **decided: validator +
 staker chambers** (above); proposal process **decided, ADR-0025**
 (signaling-only, `Active`-validator proposers, quorum-then-majority per
-chamber, height-based voting window — mechanisms only); left open:
+chamber, height-based voting window); quorum (20% per chamber) and
+`GOVERNANCE_VOTING_WINDOW` (302,400 blocks / 7 days) **decided above**;
+left open:
 
-- quorum percentage per chamber (ADR-0025's own mechanism, this ADR's
-  value)
-- `GOVERNANCE_VOTING_WINDOW` length (same split)
 - scope of what governance may decide
 - whether staking delegation also carries delegated governance voting
   weight, or needs its own separate delegation step (blocked on

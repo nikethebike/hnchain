@@ -270,9 +270,14 @@ pub fn apply_unbonding_release(
 ///   canceling before ever activating is a real gap this decision does
 ///   not resolve.
 /// - `UpdateKeys`: any status except `Exited` → same status, replaces
-///   `consensus_key`. Exact activation-epoch/old-key-validity-window
-///   mechanics stay owned by ADR-0010's "Key Rotation," not enforced
-///   here.
+///   `consensus_key` immediately. ADR-0010's "Key Rotation" (mechanism
+///   now decided: reuses the epoch-boundary admission/deactivation
+///   delay, old key invalidated immediately at activation, no grace
+///   window) is not yet enforced here — this operation has no
+///   pending-key/activation-epoch tracking, the same "mechanism
+///   decided, no block-processing pipeline exists yet to enforce it"
+///   situation `apply_unbonding_release`/`finalize_proposal` are
+///   already in.
 ///
 /// `Register`/`UpdateKeys` also require `payload.new_consensus_key` to
 /// be present

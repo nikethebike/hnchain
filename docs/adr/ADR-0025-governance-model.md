@@ -118,10 +118,12 @@ weight, a **simple majority** of non-abstaining weight must vote `for`.
 a participant that intentionally declines to take a side still
 signals engagement, distinct from not voting at all.
 
-The quorum *percentage* is deliberately not decided here — a tunable
-economic parameter, the same class of decision as the voting-power cap
-ratio or minimum bond (ADR-0023), not a structural one. See Open
-Decisions.
+The quorum *percentage* itself is **resolved, ADR-0023 ("Decided:
+Governance Quorum And Voting Window")**: 20% (`1/5`) of each chamber's
+total weight, the same figure for both chambers — a tunable economic
+parameter, the same class of decision as the voting-power cap ratio or
+minimum bond, owned by ADR-0023 rather than restated normatively here
+per this project's "One Owning Document" rule.
 
 ### Decided: Proposal Outcome States
 
@@ -146,11 +148,12 @@ At the voting window's close (Decided: Voting Window, below):
 Height-based, fixed duration — the same choice already made for
 `ValidityWindowV1` (ADR-0006) and epoch boundaries (ADR-0010) over a
 wall-clock alternative, for the same reason: `BlockHeader.timestamp`'s
-own consensus semantics remain undecided (ADR-0008). The exact
-duration (`GOVERNANCE_VOTING_WINDOW`, in blocks) is not decided here —
-a tunable constant owned by ADR-0023, the same mechanism-now/amount-
-later split already applied to `EPOCH_LENGTH` and the unbonding
-period.
+own consensus semantics remain undecided (ADR-0008). The exact duration
+is **resolved, ADR-0023 ("Decided: Governance Quorum And Voting
+Window")**: `GOVERNANCE_VOTING_WINDOW = 302,400` blocks (7 days at
+ADR-0009's `TARGET_BLOCK_TIME`) — a tunable constant owned by ADR-0023,
+the same mechanism-now/amount-later split already applied to
+`EPOCH_LENGTH` and the unbonding period, not restated normatively here.
 
 ### Decided: Who May Propose
 
@@ -417,10 +420,6 @@ consensus-relevant rule change does.
 
 ## Open Decisions
 
-- quorum percentage per chamber (ADR-0023 — mechanism decided above,
-  the value is not)
-- `GOVERNANCE_VOTING_WINDOW` (ADR-0023 — mechanism decided above,
-  height-based fixed duration, the value is not)
 - vote-changing (may a sender's `Vote` for a given proposal be
   resubmitted to change their own recorded choice before the window
   closes, or is the first vote final)
