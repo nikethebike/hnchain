@@ -19,6 +19,9 @@ Referenced By:
   `key_reference` field this ADR's own "Decided: `SignatureEnvelope`
   concrete field list" anticipated but did not add, for the
   `account_signing` role only)
+- ADR-0027: Identity State And Account Key Bootstrap (resolves this
+  ADR's own `active_key(identity, role, height)` Deferred Decision for
+  the `account_signing` role)
 
 ## Context
 
@@ -509,12 +512,14 @@ for Ed25519 under algorithm ID `0x0001` is a breaking protocol change.
 ## Deferred Decisions
 
 - key rotation transaction semantics
-- `active_key(identity, role, height)` state lookup mechanism (the
-  concrete state read `SignatureEnvelope` verification depends on for
-  the ordinary single-key case — needs Identity State's own schema,
-  which does not exist yet; still unresolved even after ADR-0026,
-  which deliberately does not touch it — see ADR-0026's own "Explicitly
-  Not Resolved")
+- `active_key(identity, role, height)` state lookup mechanism — for the
+  `validator_consensus` role, already resolved (`hn_state::active_key`,
+  reading `ValidatorRecordV1.consensus_key`); for `account_signing`,
+  **resolved, ADR-0027** (Identity State And Account Key Bootstrap):
+  `IdentityValueV1` (`SectionId 0x01`) plus a bootstrap procedure for a
+  never-before-seen account's first transaction. Account-level key
+  *rotation* (changing an already-populated `IdentityValueV1`) remains
+  a separate, still-open item, ADR-0027's own Open Decisions.
 - threshold and multisignature identity model — **resolved for the
   `account_signing` role, ADR-0026** (Threshold And Multisignature
   Authorization): `key_reference` reintroduced as an optional indexed

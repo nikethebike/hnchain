@@ -49,6 +49,7 @@ TransactionEnvelope
   network_id
   tx_type
   sender
+  bootstrap_key
   nonce
   fee_limit
   validity_window
@@ -56,6 +57,12 @@ TransactionEnvelope
   payload
   signatures
 ```
+
+`bootstrap_key` (ADR-0027, "Identity State And Account Key Bootstrap"):
+optional, present if and only if `sender` has no stored Identity State
+yet — lets a node verify a never-before-seen account's first
+transaction, since Ed25519 signatures carry no recoverable public key
+and `sender` is only a one-way address hash.
 
 All fields are consensus-relevant unless a future schema explicitly states
 otherwise.
@@ -341,12 +348,18 @@ TransactionSigningPayload
   tx_version
   tx_type
   sender
+  bootstrap_key
   nonce
   fee_limit
   validity_window
   access_list
   payload
 ```
+
+`bootstrap_key` is an ordinary field here too (ADR-0027) — including it
+in what gets signed is not required for soundness (the address-
+derivation check already binds it to `sender`) but adds no cost either,
+so no special carve-out was introduced for it.
 
 `protocol_name` is not a field: domain separation is already provided by
 the hash construction's own `domain_tag` (see below), so a redundant

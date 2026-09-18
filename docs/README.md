@@ -42,6 +42,7 @@ docs/
     ADR-0024-hncoin-monetary-policy.md
     ADR-0025-governance-model.md
     ADR-0026-threshold-and-multisignature-authorization.md
+    ADR-0027-identity-state-and-account-key-bootstrap.md
 
   specs/
     core/

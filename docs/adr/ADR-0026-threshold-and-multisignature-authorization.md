@@ -82,10 +82,11 @@ consensus-role ones the same section also lists.
 
 **Opt-in per account, not universal.** An account with no stored
 multisig configuration behaves exactly as it does today: single active
-key, resolved however ADR-0002's own still-deferred
-`active_key(identity, role, height)` mechanism eventually resolves it —
-this ADR does not touch that lookup or its own deferred status (see
-"Explicitly Not Resolved," below). Only an account that has sent a
+key, resolved via ADR-0002's `active_key(identity, role, height)`
+mechanism — now concretely resolved for `account_signing` by ADR-0027
+(Identity State And Account Key Bootstrap), written after this ADR but
+depended on by it retroactively (see "Explicitly Not Resolved," below,
+updated accordingly). Only an account that has sent a
 `permission_update` activating this feature gains a threshold
 requirement. This is the same lazy-by-default shape Extension State
 (§4.8) already uses, and it means the schema growth this ADR introduces
@@ -248,15 +249,17 @@ An account cannot use `permission_update` to remove its
 `account_signing_multisig` configuration and revert to plain single-key
 mode. This is a deliberate scope cut, not an oversight: reverting would
 require designating which one key becomes "the" account's active
-identity key afterward, and that question depends on ADR-0002's own
-still-open `active_key(identity, role, height)` state lookup mechanism —
-listed there as a Deferred Decision *before* this ADR existed, for the
-ordinary single-key case, independent of multisig entirely. Inventing an
-answer here, ahead of that mechanism being decided, would risk
-contradicting whatever Identity State (SectionId `0x01`, itself with no
-decided schema yet either) eventually specifies. Once Identity State and
-`active_key(...)` are resolved, adding a deactivation path is natural,
-narrow follow-up work — not blocked on anything this ADR introduces.
+identity key afterward — writing a new `IdentityValueV1`
+(ADR-0027, Identity State And Account Key Bootstrap, resolved after this
+ADR was first written) — which is exactly the shape of an
+account-level key *rotation*, a distinct question ADR-0027 itself
+deliberately leaves open (its own Open Decisions) even though it
+resolves Identity State's schema and initial-population bootstrap.
+Inventing an answer here, ahead of that being decided on its own terms,
+would risk contradicting whatever account-level rotation semantics
+eventually get decided. Once that item is resolved, adding a
+deactivation path is natural, narrow follow-up work — not blocked on
+anything this ADR introduces.
 
 The other 7 Permission State capabilities (administration, operation,
 viewing/read-only access, voting delegation, spending limits, session
@@ -383,10 +386,11 @@ them into this mechanism instead.
 
 ## Open Decisions
 
-- Identity State (`SectionId = 0x01`) schema and the
-  `active_key(identity, role, height)` lookup mechanism it would back —
-  ADR-0002's own pre-existing Deferred Decision, unresolved by this ADR,
-  and the reason deactivation (above) is out of scope here
+- account-level key rotation (changing an already-populated
+  `IdentityValueV1` after ADR-0027's bootstrap-only pass) — **not**
+  resolved by ADR-0027 either, deliberately left for its own decision;
+  the reason deactivation (below) is still out of scope here despite
+  Identity State's schema itself now being resolved (ADR-0027)
 - deactivation back to single-key mode (blocked on the item above)
 - the 7 remaining Permission State capabilities this ADR does not touch:
   administration, operation, viewing/read-only access, voting delegation,
@@ -405,6 +409,7 @@ them into this mechanism instead.
 - `docs/adr/ADR-0002-cryptographic-identity.md`
 - `docs/adr/ADR-0006-transaction-format.md`
 - `docs/adr/ADR-0007-state-tree.md`
+- `docs/adr/ADR-0027-identity-state-and-account-key-bootstrap.md`
 - `docs/specs/core/account-state.md`
 - `docs/specs/core/genesis-security.md`
 - `docs/whitepaper/HNChain-Whitepaper-v0.1-draft.md` (§17.10,

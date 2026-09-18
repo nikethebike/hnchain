@@ -132,6 +132,27 @@ active for `account_signing` at `algorithm_id = 0x0001`).
 This allows key rotation, multisignature, session keys, hardware wallets, and
 future post-quantum migration without redefining account identity.
 
+**Decided: `IdentityValueV1` (`SectionId 0x01`)** —
+`docs/adr/ADR-0027-identity-state-and-account-key-bootstrap.md`:
+
+```text
+IdentityValueV1
+  u16 identity_version = 1
+  u16 algorithm_id
+  bytes public_key   (bounded, hn_crypto::PUBLIC_KEY_MAX_LEN)
+```
+
+The account's currently-active `account_signing` key, mirroring
+`hn_crypto::KeyDescriptor`'s own concrete fields — the same shape
+`MultisigConfigV1.authorized_keys` entries already use (ADR-0026).
+Populated automatically the first time an account transacts (ADR-0027's
+own "bootstrap" procedure, resolving the exact chicken-and-egg problem
+implicit account creation otherwise leaves unsolved: an Ed25519
+signature cannot be verified without already knowing the public key,
+and nothing before this decision supplied one for a never-before-seen
+account). Account-level key *rotation* — changing an already-populated
+`IdentityValueV1` — remains open, ADR-0027's own Open Decisions.
+
 ## 4. Required Sections
 
 ### 4.1 Envelope
@@ -649,12 +670,6 @@ The following decisions are required before implementation:
 - account address derivation function (namespace, length, and payload
   exclusion are resolved; the exact `HASH_PROFILE_0x0001` inputs are not —
   see below)
-- Identity State value schema (`SectionId 0x01`) — surfaced explicitly
-  while writing ADR-0026 (Threshold And Multisignature Authorization):
-  referenced by §3.2 "Identity Binding" and by `identity_version` in
-  `SectionVersionsV1` (§4.1), but no `IdentityValueV1`-shaped schema has
-  ever been decided, and ADR-0002's own `active_key(identity, role,
-  height)` state lookup mechanism depends on it existing
 - native token unit and numeric width
 - nonce model
 - canonical serialization format
@@ -674,9 +689,12 @@ Resolved and removed from this list:
 - "cryptographic identity" is resolved by `docs/adr/ADR-0002-cryptographic-
   identity.md` (Accepted): the `KeyDescriptor`/`SignatureEnvelope` model,
   algorithm-agile with Ed25519 (`algorithm_id = 0x0001`) as the only active
-  consensus signing algorithm for `account_signing` at genesis. Key
-  rotation transaction semantics and the threshold/multisignature identity
-  model remain ADR-0002 Deferred Decisions, not blockers for this item.
+  consensus signing algorithm for `account_signing` at genesis. Threshold/
+  multisignature identity for `account_signing` is resolved, ADR-0026;
+  Identity State's own value schema and the account-key bootstrap problem
+  are resolved, ADR-0027 (§3.2, above). Account-level key rotation
+  transaction semantics remain open (ADR-0027's own Open Decisions), not a
+  blocker for this item.
 - "account address derivation" is partially resolved by
   `docs/adr/ADR-0003-address-format.md` (Accepted): `address_namespace`,
   `address_body` length (32 bytes), and the absence of `chain_id`/

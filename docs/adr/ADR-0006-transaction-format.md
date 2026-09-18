@@ -42,6 +42,7 @@ TransactionEnvelope
   network_id
   tx_type
   sender
+  bootstrap_key
   nonce
   fee_limit
   validity_window
@@ -49,6 +50,15 @@ TransactionEnvelope
   payload
   signatures
 ```
+
+**Decided: `bootstrap_key` (ADR-0027, Identity State And Account Key
+Bootstrap).** Optional, present if and only if `sender` has no stored
+Identity State (`IdentityValueV1`) yet — the mechanism that lets a
+node verify a never-before-seen account's very first transaction at
+all, since neither `sender` (a one-way address hash) nor
+`SignatureEnvelope` (no public key field) can otherwise supply one, and
+Ed25519 signatures do not support public-key recovery. Full mechanism
+in ADR-0027, not restated here.
 
 The transaction identifier is computed from the canonical HNCS encoding of the
 transaction under a transaction ID hash profile.
@@ -606,8 +616,9 @@ merely unaddressed:**
   an account's `account_signing`-role multisig configuration. Scoped
   narrowly: 7 of account-state.md §4.5's 8 conceptual capabilities
   remain unaddressed, and deactivating back to single-key mode is
-  explicitly out of scope (blocked on Identity State, ADR-0002's own
-  separately open `active_key(...)` mechanism).
+  explicitly out of scope (Identity State itself is now resolved,
+  ADR-0027 — the remaining blocker is narrower: account-level key
+  rotation, which ADR-0027 deliberately also leaves open).
 - `system` (`0x09`): scope not yet concrete — no protocol module
   operation has been specified that would use it.
 
@@ -732,9 +743,14 @@ the already-decided `chain_id`/`network_id` fields (above), not
 duplicated identifiers.
 
 `TransactionSigningPayload` mirrors `TransactionEnvelope` minus
-`signatures`. Every field's shape except `payload` is now decided (above
-and in Access List, Fees, Validity Window); `payload`'s own per-`tx_type`
-schema (§5) is the one remaining open piece of either structure.
+`signatures` — `bootstrap_key` (ADR-0027) is an ordinary field of both,
+no new carve-out: unlike `signatures`, including it creates no
+circularity, and binding the presented key bytes directly into what is
+signed is a belt-and-suspenders addition on top of ADR-0027's own
+address-derivation check. Every field's shape except `payload` is now
+decided (above and in Access List, Fees, Validity Window, Identity
+State And Account Key Bootstrap); `payload`'s own per-`tx_type` schema
+(§5) is the one remaining open piece of either structure.
 
 ### Transaction ID
 
@@ -880,13 +896,13 @@ change.
 
 - final transaction envelope fields (every field except `payload` is now
   decided above: `chain_id`/`network_id`/`tx_version`/`tx_type`/`sender`/
-  `validity_window`/`fee_limit`'s type/`access_list`; `payload` shape is
-  now decided for 6 of 9 `tx_type`s — `transfer`, `stake`, `unstake`,
-  `validator_update`, `governance` (ADR-0025), `permission_update`
-  (ADR-0026), §5 — each remaining one parked on a named blocker, not
-  merely unaddressed; `stake`/`unstake` are fully closed — minimum bond
-  is decided, ADR-0023, `10,000 HNCOIN`; `governance` still needs its
-  quorum percentage and voting window length (ADR-0023))
+  `bootstrap_key` (ADR-0027)/`validity_window`/`fee_limit`'s type/
+  `access_list`; `payload` shape is now decided for 6 of 9 `tx_type`s —
+  `transfer`, `stake`, `unstake`, `validator_update`, `governance`
+  (ADR-0025), `permission_update` (ADR-0026), §5 — each remaining one
+  parked on a named blocker, not merely unaddressed; `stake`/`unstake`/
+  `governance` are all fully closed — minimum bond `10,000 HNCOIN` and
+  governance quorum/voting-window are all decided, ADR-0023)
 - newly-created accounts' Metadata initial value (`transfer` implicit
   creation, §5) — blocked on account-state.md §4.6, still fully
   undecided. Permission's own initial value is no longer blocked: a
