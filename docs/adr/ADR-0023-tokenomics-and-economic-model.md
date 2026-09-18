@@ -98,9 +98,11 @@ home here:
   = 100`; `cap_numerator/cap_denominator = 1/10`; unbonding period = 21
   days; `EPOCH_LENGTH = 43,200` blocks (24 hours); delegation supported
   from genesis; validator reward = 70% of transaction fees (the same
-  figure as the fee split above — one parameter, not two). Minimum
-  validator bond, stake concentration limits, and key rotation delay
-  stay open.
+  figure as the fee split above — one parameter, not two); minimum
+  validator bond = `0.001%` of `GENESIS_SUPPLY` (`10,000` HNCOIN); stake
+  concentration limits not needed for v1 (the existing voting-power cap
+  already bounds the consensus-relevant consequence). Key rotation delay
+  stays open.
 - **Slashing economics** — **partially decided**: monetary slashing
   stays not activated (jailing, ADR-0015, remains the only active
   accountability mechanism); evidence submission has no fee. Slashing
@@ -149,14 +151,29 @@ already-implemented top-K selection in
 ### Decided: Delegation Supported
 
 Delegated staking is supported from genesis — not deferred to a later
-protocol version. Stake concentration limits (a cap on how much of one
-validator's `voting_power` may come from delegators, or how
-concentrated delegation may be toward one validator) remain open: no
-dominant industry practice exists to derive a starting value from, and
-the underlying delegation transaction/reward-accounting design itself
-is not yet specified (ADR-0006 lists `stake`/`unstake` as sender-only,
-with no delegator-vs-self-stake distinction yet — a real, separate
-design task this decision does not resolve).
+protocol version. The underlying delegation transaction/reward-
+accounting design itself is not yet specified (ADR-0006 lists
+`stake`/`unstake` as sender-only, with no delegator-vs-self-stake
+distinction yet — a real, separate design task this decision does not
+resolve).
+
+### Decided: Stake Concentration Limits — Not Needed For V1
+
+No separate cap on how much of one validator's `voting_power` may come
+from delegators, or how concentrated delegation may be toward one
+validator, is introduced. The already-decided per-round voting-power
+cap (`cap_numerator/cap_denominator = 1/10`, "Decided: Active Set Size
+And Voting Power Cap," above) already bounds the consequence that
+matters for consensus safety — no single validator's *voting power* can
+exceed 10% of a round's total, regardless of how concentrated the raw
+`bonded_stake` behind it is. A separate concentration limit would only
+be defense-in-depth on top of that, not a safety requirement left
+unmet, and there is no dominant industry practice to derive a starting
+value from even if one were added. Delegation's own per-delegator
+tracking mechanism also does not exist yet (see "Decided: Delegation
+Supported," above) to enforce a concentration cap even if one were
+decided. Left as a possible future addition, not reopened as an Open
+Decision.
 
 ### Decided: Unbonding Period
 
@@ -224,19 +241,36 @@ derived from height) — the same "decided, not yet a consumer" state
 `MAX_ACTIVE_SET_SIZE`/`cap_numerator` were already in before this
 pass, not a gap specific to this value.
 
-### Decided: Minimum Validator Bond — Still Open, Reasoning Recorded
+### Decided: Minimum Validator Bond
 
-Deliberately not fixed to an absolute HNCOIN figure: without a stable
-market price estimate for HNCOIN, an absolute figure risks being
-either meaningless (too low, in real terms, after any price
-appreciation) or prohibitive (too high, if HNCOIN's value is initially
-uncertain) — the same accessibility/Sybil-resistance/decentralization
-tension the whitepaper itself already flagged (§12.4) as one of the
-most sensitive parameters in the whole model. A future revision of this
-item may denominate it some other way (for example, a share of total
-supply, or fiat-pegged with a defined re-pricing rule) rather than a
-fixed atomic-unit constant — that mechanism question is itself still
-open, not just the number.
+```text
+MINIMUM_VALIDATOR_BOND = 0.001% of GENESIS_SUPPLY
+                        = 10,000 HNCOIN
+                        = 10_000_000_000_000 hnit
+```
+
+Denominated as a share of `GENESIS_SUPPLY` (ADR-0024, `1,000,000,000
+HNCOIN`) rather than a fixed absolute HNCOIN figure: without a stable
+market price estimate for HNCOIN, an absolute figure risks being either
+meaningless (too low, in real terms, after any price appreciation) or
+prohibitive (too high, if HNCOIN's value is initially uncertain) — the
+same accessibility/Sybil-resistance/decentralization tension the
+whitepaper itself already flagged (§12.4) as one of the most sensitive
+parameters in the whole model. A share of genesis supply sidesteps that
+dependency entirely, since it needs no market price at all. Expressed
+in `hnit` (ADR-0023's own "Decided: HNCOIN Decimals And Atomic Unit,"
+below — `1 HNCOIN = 10^9 hnit`, the same unit `bonded_stake` and
+`native_balance` already count in): `10,000 * 10^9 =
+10_000_000_000_000`.
+
+Plugs into ADR-0010's already-decided "Decided: admission mechanism"
+(`registered → candidate` is a derived condition read from canonical
+state, not a separately stored transition): a `Registered` validator
+whose `bonded_stake >= MINIMUM_VALIDATOR_BOND` is now effectively
+`Candidate` without any stored status change, and
+[`hn_state::apply_validator_update`](../../hn-state/src/validator_transition.rs)'s
+`Activate` operation accepts such a validator on that derived basis, the
+same way it already accepted a literally-stored `Candidate`.
 
 ### Decided: Validator Reward / Fee Distribution
 
@@ -512,11 +546,12 @@ Unbounded delegation concentration:
   delegated stake well beyond what the 10% per-round voting-power cap
   alone constrains at the raw `bonded_stake` level, even though
   `voting_power` itself stays capped.
-- Mitigation: the 10% voting-power cap (`cap_numerator/cap_denominator
+- Mitigation: "Decided: Stake Concentration Limits — Not Needed For
+  V1," above — the 10% voting-power cap (`cap_numerator/cap_denominator
   = 1/10`) already bounds the consequence that matters for consensus
-  safety regardless of how concentrated delegation gets; concentration
-  limits, if added later, would be a defense-in-depth addition, not a
-  safety requirement this ADR leaves unmet.
+  safety regardless of how concentrated delegation gets; a
+  concentration limit, if added later, would be a defense-in-depth
+  addition, not a safety requirement this ADR leaves unmet.
 
 ## Compatibility
 
@@ -550,14 +585,11 @@ Fees (mechanism decided, ADR-0006; model decided above — fixed-rate,
 
 Staking and validator economics (mechanism decided, ADR-0010;
 `MAX_ACTIVE_SET_SIZE`, cap ratio, unbonding period, `EPOCH_LENGTH`,
-delegation support, and validator reward share all decided above):
+delegation support, validator reward share, minimum validator bond, and
+stake concentration limits all decided above):
 
 - voting power maximum value bound (if any, below `u128::MAX`) and
   zero-power behavior
-- minimum validator bond (reasoning for leaving it open recorded
-  above, under "Decided: Minimum Validator Bond")
-- stake concentration limits (delegation itself is decided — supported
-  — only a concentration cap, if any, remains open)
 - key rotation delay
 
 Slashing economics (evidence/jailing mechanism decided, ADR-0015;

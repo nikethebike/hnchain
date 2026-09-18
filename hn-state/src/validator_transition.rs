@@ -30,6 +30,22 @@ use crate::{
 /// target — a known, accepted imprecision, not an oversight.
 pub const UNBONDING_PERIOD_BLOCKS: u64 = 907_200;
 
+/// The minimum bonded stake a `Registered` validator needs before its
+/// status is effectively `Candidate` (ADR-0010, "Decided: admission
+/// mechanism" — `registered → candidate` is automatic, "a derived
+/// condition read from canonical state," not a stored transition;
+/// ADR-0023, "Decided: Minimum Validator Bond"). Denominated as a share
+/// of supply rather than an absolute figure, specifically to avoid
+/// depending on a HNCOIN market price this project has no way to know
+/// yet (ADR-0023's own recorded reasoning for leaving it open as long
+/// as it did): `0.001%` of `GENESIS_SUPPLY` (ADR-0024, `1,000,000,000
+/// HNCOIN`) = `10,000` HNCOIN, in `hnit` (ADR-0023's decided atomic
+/// unit, `1 HNCOIN = 10^9 hnit` — the same unit `bonded_stake`/
+/// `native_balance` already count in, since bonded and liquid HNCOIN
+/// are the same fungible asset, just partitioned):
+/// `10_000 * 10^9 = 10_000_000_000_000`.
+pub const MINIMUM_VALIDATOR_BOND: u128 = 10_000_000_000_000;
+
 /// Computes the one updated write-set leaf a `stake` produces (ADR-0006,
 /// "Decided: `stake`/`unstake`/`validator_update` payload shapes"):
 /// `record`'s `bonded_stake` increased by `payload.amount`.
@@ -239,7 +255,12 @@ pub fn apply_unbonding_release(
 ///   ([`ValidatorAlreadyRegistered`](StateError::ValidatorAlreadyRegistered)
 ///   otherwise). Creates a new record: `validator_id = sender`,
 ///   `bonded_stake = 0`, `voting_power = 0`, `status = Registered`.
-/// - `Activate`: `Candidate`, `Inactive`, or `Jailed` → `Active`. The
+/// - `Activate`: `Candidate`, `Inactive`, or `Jailed` → `Active` — and
+///   also `Registered` whenever `bonded_stake >= MINIMUM_VALIDATOR_BOND`
+///   (ADR-0010's own "derived condition," above: a `Registered`
+///   validator meeting the bond is already effectively `Candidate`
+///   without a separate stored transition, so `Activate` must accept it
+///   too, not only a record literally stored as `Candidate`). The
 ///   `Jailed` case is the jailing-release reactivation path (ADR-0015,
 ///   "Reactivation" — no jail duration or cooldown: `Jailed` reactivates
 ///   directly, with no mandatory intermediate `Inactive` step).
@@ -284,15 +305,18 @@ pub fn apply_validator_update(
         }
         ValidatorOperation::Activate => {
             let record = require_record(existing, sender)?;
-            require_status(
-                record,
-                &[
-                    ValidatorStatus::Candidate,
-                    ValidatorStatus::Inactive,
-                    ValidatorStatus::Jailed,
-                ],
-                payload.operation,
-            )?;
+            let effectively_candidate_or_better = matches!(
+                record.status,
+                ValidatorStatus::Candidate | ValidatorStatus::Inactive | ValidatorStatus::Jailed
+            ) || (record.status
+                == ValidatorStatus::Registered
+                && record.bonded_stake >= MINIMUM_VALIDATOR_BOND);
+            if !effectively_candidate_or_better {
+                return Err(StateError::InvalidValidatorStatusTransition {
+                    status: record.status.as_u8(),
+                    operation: payload.operation.as_u8(),
+                });
+            }
             ValidatorRecordV1 {
                 status: ValidatorStatus::Active,
                 ..record.clone()
@@ -678,6 +702,46 @@ mod tests {
             apply_validator_update(Some(&existing), SENDER, &payload),
             Err(StateError::InvalidValidatorStatusTransition {
                 status: ValidatorStatus::Active as u8,
+                operation: ValidatorOperation::Activate as u8,
+            })
+        );
+    }
+
+    #[test]
+    fn activate_succeeds_from_registered_with_sufficient_bonded_stake() -> StateResult<()> {
+        let existing = record(
+            super::MINIMUM_VALIDATOR_BOND,
+            0,
+            ValidatorStatus::Registered,
+        );
+        let payload = ValidatorUpdatePayloadV1 {
+            operation: ValidatorOperation::Activate,
+            new_consensus_key: None,
+        };
+        let [leaf] = apply_validator_update(Some(&existing), SENDER, &payload)?;
+        let expected = ValidatorRecordV1 {
+            status: ValidatorStatus::Active,
+            ..existing
+        };
+        assert_eq!(leaf.1, super::validator_record_leaf(&expected)?.1);
+        Ok(())
+    }
+
+    #[test]
+    fn activate_rejects_registered_with_insufficient_bonded_stake() {
+        let existing = record(
+            super::MINIMUM_VALIDATOR_BOND - 1,
+            0,
+            ValidatorStatus::Registered,
+        );
+        let payload = ValidatorUpdatePayloadV1 {
+            operation: ValidatorOperation::Activate,
+            new_consensus_key: None,
+        };
+        assert_eq!(
+            apply_validator_update(Some(&existing), SENDER, &payload),
+            Err(StateError::InvalidValidatorStatusTransition {
+                status: ValidatorStatus::Registered as u8,
                 operation: ValidatorOperation::Activate as u8,
             })
         );

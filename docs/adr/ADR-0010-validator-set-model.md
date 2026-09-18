@@ -232,9 +232,10 @@ This asymmetry is itself informative, not an oversight to fix:
 
 - `registered → candidate` is **automatic**, not transaction-triggered:
   a `registered` validator's status is `candidate` whenever its bonded
-  stake (`validator_bond`) meets the still-open minimum bond
-  requirement — a derived condition read from canonical state, the same
-  way `EnvelopeValueV1`'s section state is read rather than separately
+  stake (`validator_bond`) meets the minimum bond requirement
+  (`MINIMUM_VALIDATOR_BOND`, **resolved, ADR-0023** — Open Decisions,
+  below) — a derived condition read from canonical state, the same way
+  `EnvelopeValueV1`'s section state is read rather than separately
   flagged. No operation exists to request it because none is needed.
 - `candidate → active` is **explicit**, via `validator_activate`: the
   validator must deliberately opt in, rather than being silently
@@ -244,7 +245,7 @@ This asymmetry is itself informative, not an oversight to fix:
   an operator should choose when their infrastructure is ready to accept
   that exposure, not have it imposed by a balance check alone.
   `validator_activate`'s minimum-bond precondition is checked against
-  the same still-open minimum, without this decision fixing its value.
+  the same now-resolved minimum.
 - **Timing reuses "Epoch Boundaries," below, at individual-validator
   granularity rather than introducing a second delay constant.**
   `validator_activate` (and symmetrically `validator_deactivate`) may be
@@ -265,14 +266,13 @@ This asymmetry is itself informative, not an oversight to fix:
   user named as a live candidate alongside this one. "Jailing
   conditions" (Open Decisions) stays open.
 
-Not resolved by this decision: the minimum bond's numeric value (a
-deferred economic parameter, same group as `MAX_ACTIVE_SET_SIZE` and
-`cap_numerator`/`cap_denominator`), the concrete transaction schemas for
+Not resolved by this decision: the concrete transaction schemas for
 `validator_register`/`validator_bond`/`validator_activate` (ADR-0006's
 own still-open "final validator operation transaction schemas"), and
 whether bonded stake falling below the minimum *after* activation has
 any automatic effect on status (a real open question, but a distinct
-one from admission — not invented here).
+one from admission — not invented here). The minimum bond's numeric
+value itself is resolved, ADR-0023 (see Open Decisions, below).
 
 ### Active Set Derivation
 
@@ -798,12 +798,20 @@ the value itself. Several are now resolved there.
   a bound below `u128::MAX` and what zero stake/power means for active
   set membership are the remaining narrower questions — ADR-0023, still
   open)
-- minimum validator bond — still open (ADR-0023: deliberately not
-  fixed to an absolute HNCOIN figure without a stable price estimate;
-  may end up denominated some other way, e.g. as a share of supply)
+- minimum validator bond — **resolved, ADR-0023: `MINIMUM_VALIDATOR_BOND
+  = 0.001%` of `GENESIS_SUPPLY` = `10,000` HNCOIN =
+  `10_000_000_000_000 hnit`**, denominated as a share of supply rather
+  than an absolute figure. `Registered → candidate` remains the derived
+  condition decided above ("Decided: admission mechanism") — a
+  `Registered` validator meeting this bond is effectively `Candidate`
+  without a stored transition;
+  [`hn_state::apply_validator_update`](../../hn-state/src/validator_transition.rs)'s
+  `Activate` operation now checks this derived condition, not only a
+  literally-stored `Candidate` status.
 - delegation support — **resolved, ADR-0023: supported from genesis**;
-  stake concentration limits still open (no dominant industry practice
-  yet)
+  stake concentration limits — **resolved, ADR-0023: not needed for
+  v1** (the already-decided 10% voting-power cap already bounds the
+  consensus-relevant consequence)
 - stake caps — **resolved, ADR-0023: `cap_numerator/cap_denominator =
   1/10`** (no single validator may exceed 10% of a round's voting
   power; capping algorithm mechanism decided above)
