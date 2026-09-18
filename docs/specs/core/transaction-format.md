@@ -132,10 +132,12 @@ sender_address, nonce)`. Nonce ordering serializes only same-sender
 transactions; cross-sender conflicts are an access list concern, not a
 nonce concern. Decided in ADR-0006, "Nonce".
 
-Still open:
-
-- interaction with multi-signature (depends on account permission rules,
-  not yet activated — account-state.md §4.5)
+Interaction with multi-signature — **resolved, ADR-0026** (Threshold And
+Multisignature Authorization): nonce stays a single per-account counter,
+incrementing once per accepted transaction regardless of whether it was
+authorized by one signature (single-key mode) or `threshold` signatures
+(an active `account_signing_multisig` configuration) — multisig does not
+introduce a second, per-key nonce dimension.
 
 ### 4.6 Fee Limit
 

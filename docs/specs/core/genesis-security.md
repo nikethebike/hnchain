@@ -75,6 +75,16 @@ both left for a dedicated future ADR if this project decides the need
 justifies the scope. This document does not foreclose that; it documents
 the v1 procedural baseline it replaces.
 
+That general threshold/multisignature rule now exists:
+`docs/adr/ADR-0026-threshold-and-multisignature-authorization.md`
+activates it for the `account_signing` role (the role every ordinary
+account, including these three, transacts under). Adopting it for the
+Reserve, Founder, or Community & Airdrop accounts instead of this
+document's procedural model would be a separate, later decision this
+document does not make on its own — ADR-0026 makes it possible, not
+automatic, and this document's own Open Decisions (§10) are unaffected
+until that separate decision is made.
+
 ## 3. Threat Model
 
 - Compromise of a single custodian's key share or device.
@@ -296,6 +306,7 @@ Constraints list.
 - `docs/adr/ADR-0024-hncoin-monetary-policy.md`
 - `docs/adr/ADR-0002-cryptographic-identity.md`
 - `docs/adr/ADR-0003-address-format.md`
+- `docs/adr/ADR-0026-threshold-and-multisignature-authorization.md`
 - `docs/specs/core/genesis.md`
 - `docs/specs/core/account-state.md`
 - `docs/security/README.md`

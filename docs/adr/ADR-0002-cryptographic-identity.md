@@ -13,6 +13,13 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0026: Threshold And Multisignature Authorization (activates the
+  `key_reference` field this ADR's own "Decided: `SignatureEnvelope`
+  concrete field list" anticipated but did not add, for the
+  `account_signing` role only)
+
 ## Context
 
 HNChain requires a cryptographic identity model for accounts, validators,
@@ -503,13 +510,18 @@ for Ed25519 under algorithm ID `0x0001` is a breaking protocol change.
 
 - key rotation transaction semantics
 - `active_key(identity, role, height)` state lookup mechanism (the
-  concrete state read `SignatureEnvelope` verification depends on,
-  now that `key_reference` is decided as context-derived rather than
-  an explicit field — needs validators/accounts-domain state
-  integration, not yet built for either)
-- threshold and multisignature identity model (would need its own
-  `key_reference`-shaped field again if ever accepted — see "Decided:
-  `SignatureEnvelope` concrete field list," above)
+  concrete state read `SignatureEnvelope` verification depends on for
+  the ordinary single-key case — needs Identity State's own schema,
+  which does not exist yet; still unresolved even after ADR-0026,
+  which deliberately does not touch it — see ADR-0026's own "Explicitly
+  Not Resolved")
+- threshold and multisignature identity model — **resolved for the
+  `account_signing` role, ADR-0026** (Threshold And Multisignature
+  Authorization): `key_reference` reintroduced as an optional indexed
+  reference into a stored `authorized_keys` list, exactly the shape
+  this item anticipated. Every other role (`validator_consensus`,
+  `validator_network`, `governance`, `bridge_operator`,
+  `identity_recovery`) remains single-key, still open.
 - hardware wallet compatibility requirements
 - post-quantum migration profile
 - cryptographic library selection

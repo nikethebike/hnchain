@@ -41,6 +41,7 @@ docs/
     ADR-0023-tokenomics-and-economic-model.md
     ADR-0024-hncoin-monetary-policy.md
     ADR-0025-governance-model.md
+    ADR-0026-threshold-and-multisignature-authorization.md
 
   specs/
     core/

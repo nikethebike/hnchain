@@ -601,8 +601,13 @@ merely unaddressed:**
   mirroring `ValidatorUpdatePayloadV1`'s own pattern. Quorum
   percentage and voting window length remain open economic parameters
   (ADR-0023); the payload shape itself is decided.
-- `permission_update` (`0x08`): blocked on account-state.md §4.5
-  Permission State, itself explicitly deferred this session.
+- `permission_update` (`0x08`): **resolved, ADR-0026 (Threshold And
+  Multisignature Authorization)** — `PermissionUpdatePayloadV1`, sets
+  an account's `account_signing`-role multisig configuration. Scoped
+  narrowly: 7 of account-state.md §4.5's 8 conceptual capabilities
+  remain unaddressed, and deactivating back to single-key mode is
+  explicitly out of scope (blocked on Identity State, ADR-0002's own
+  separately open `active_key(...)` mechanism).
 - `system` (`0x09`): scope not yet concrete — no protocol module
   operation has been specified that would use it.
 
@@ -676,16 +681,23 @@ Every signature must bind to:
 - signing purpose
 - canonical signing payload
 
-`signatures` is a list of `SignatureEnvelope` (ADR-0002, Accepted:
-`envelope_version`, `algorithm_id`, `key_reference`, `signature`,
-`verification_context`) — that container shape is already decided by
-ADR-0002 and is not redecided here; this ADR decides what goes into
-`verification_context` (Signing Payload, below), not the envelope that
-carries it.
+`signatures` is a list of `SignatureEnvelope` — that container shape is
+already decided by ADR-0002 and is not redecided here. ADR-0002's own
+concrete `SignatureEnvelope` shape (its "Decided: `SignatureEnvelope`
+concrete field list") is `envelope_version`, `algorithm_id`, `signature`
+only; `verification_context` was dropped as fully redundant with a
+`HASH_PROFILE_0x0001` domain tag plus this ADR's own signing payload
+fields, and `key_reference` was dropped as context-derived under the
+single-active-key default — this ADR decides the signing payload
+(`verification_context`'s replacement), not the envelope that carries it.
 
-Multi-signature and threshold authorization require explicit account permission
-rules before activation — deferred along with account-state.md §4.5
-Permission State, which is itself not yet activated.
+Multi-signature and threshold authorization for the `account_signing`
+role are **resolved, ADR-0026 (Threshold And Multisignature
+Authorization)**: `key_reference` is reintroduced into `SignatureEnvelope`
+as an optional indexed reference, gated on an explicit
+`account-state.md` §4.5 Permission State configuration
+(`permission_update`, `tx_type = 0x08`). Every other role remains
+single-key.
 
 ### Signing Payload
 
@@ -869,14 +881,19 @@ change.
 - final transaction envelope fields (every field except `payload` is now
   decided above: `chain_id`/`network_id`/`tx_version`/`tx_type`/`sender`/
   `validity_window`/`fee_limit`'s type/`access_list`; `payload` shape is
-  now decided for 5 of 9 `tx_type`s — `transfer`, `stake`, `unstake`,
-  `validator_update`, `governance` (ADR-0025), §5 — each remaining one
-  parked on a named blocker, not merely unaddressed; `stake`/`unstake`
-  still need minimum bond decided (ADR-0023; unbonding period itself is
-  already decided, 21 days) before fully closed; `governance` still
-  needs its quorum percentage and voting window length (ADR-0023))
-- newly-created accounts' Permission/Metadata initial values (`transfer`
-  implicit creation, §5) — blocked on account-state.md §4.5/§4.6
+  now decided for 6 of 9 `tx_type`s — `transfer`, `stake`, `unstake`,
+  `validator_update`, `governance` (ADR-0025), `permission_update`
+  (ADR-0026), §5 — each remaining one parked on a named blocker, not
+  merely unaddressed; `stake`/`unstake` are fully closed — minimum bond
+  is decided, ADR-0023, `10,000 HNCOIN`; `governance` still needs its
+  quorum percentage and voting window length (ADR-0023))
+- newly-created accounts' Metadata initial value (`transfer` implicit
+  creation, §5) — blocked on account-state.md §4.6, still fully
+  undecided. Permission's own initial value is no longer blocked: a
+  newly-created account's `PermissionValueV1` is
+  `{ permission_version: 1, account_signing_multisig: absent }` —
+  single-key mode, the same default every account already has today
+  (ADR-0026).
 - final fee model (mechanism decided above — type, payer, cap-not-exact,
   failed-execution obligation; amount, refund arithmetic, validator
   distribution, burn policy, storage costs, and priority-fee market

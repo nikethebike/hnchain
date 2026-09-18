@@ -302,8 +302,44 @@ Conceptual permission capabilities may include:
 - session authorization
 - emergency lock or recovery
 
-These concepts are not activated by this specification. Each permission feature
-requires explicit state transition rules before implementation.
+Of these, only **owner control** has a decided schema, and only for the
+`account_signing` role (below) — the other 7 capabilities are not
+activated by this specification; each still requires its own explicit
+state transition rules before implementation.
+
+**Decided: `PermissionValueV1` (`account_signing` threshold
+authorization only)** — `docs/adr/ADR-0026-threshold-and-
+multisignature-authorization.md`:
+
+```text
+PermissionValueV1
+  u16 permission_version = 1
+  optional MultisigConfigV1 account_signing_multisig
+
+MultisigConfigV1
+  u8 threshold
+  list<KeyDescriptorV1> authorized_keys   (bounded, MAX_AUTHORIZED_KEYS = 16)
+```
+
+`account_signing_multisig` absent (the default for every account unless
+it explicitly opts in via `permission_update`) means single-key mode,
+unchanged from `account_signing`'s existing default authorization rule.
+Present, it requires `threshold`-of-`authorized_keys.len()` distinct
+signatures, each verified via a `key_reference`-indexed
+`SignatureEnvelope` (ADR-0002, ADR-0026) against the same signing
+payload every ordinary transaction already uses. Full mechanism,
+verification rule, and the `permission_update` payload that changes this
+value are specified in ADR-0026, not restated here.
+
+Deliberately not resolved by ADR-0026, still open: administration,
+operation, viewing/read-only access, voting delegation, spending limits,
+session authorization, and emergency lock or recovery; deactivating an
+active multisig configuration back to single-key mode (blocked on
+Identity State — `SectionId 0x01`, referenced by §3.2 Identity Binding
+and by `identity_version` in `SectionVersionsV1` §4.1, but with no
+decided value schema of its own yet, a real pre-existing gap ADR-0026
+found but does not resolve); and threshold/multisignature authorization
+for any role other than `account_signing`.
 
 ### 4.6 Metadata State
 
@@ -613,6 +649,12 @@ The following decisions are required before implementation:
 - account address derivation function (namespace, length, and payload
   exclusion are resolved; the exact `HASH_PROFILE_0x0001` inputs are not —
   see below)
+- Identity State value schema (`SectionId 0x01`) — surfaced explicitly
+  while writing ADR-0026 (Threshold And Multisignature Authorization):
+  referenced by §3.2 "Identity Binding" and by `identity_version` in
+  `SectionVersionsV1` (§4.1), but no `IdentityValueV1`-shaped schema has
+  ever been decided, and ADR-0002's own `active_key(identity, role,
+  height)` state lookup mechanism depends on it existing
 - native token unit and numeric width
 - nonce model
 - canonical serialization format
