@@ -633,6 +633,7 @@ mod tests {
     fn envelope(byte: u8) -> SignatureEnvelope {
         SignatureEnvelope {
             algorithm_id: 1,
+            key_reference: None,
             signature: vec![byte; 64],
         }
     }
@@ -900,6 +901,7 @@ mod tests {
             payload,
             signature: SignatureEnvelope {
                 algorithm_id: 1,
+                key_reference: None,
                 signature: keypair.sign(&digest).to_vec(),
             },
         };
@@ -920,6 +922,7 @@ mod tests {
             payload,
             signature: SignatureEnvelope {
                 algorithm_id: 1,
+                key_reference: None,
                 signature: signer.sign(&digest).to_vec(),
             },
         };
@@ -944,6 +947,7 @@ mod tests {
             payload,
             signature: SignatureEnvelope {
                 algorithm_id: 1,
+                key_reference: None,
                 signature: keypair.sign(&digest).to_vec(),
             },
         };
@@ -1015,6 +1019,7 @@ mod tests {
             let digest = payload.signing_digest()?;
             qc.aggregate_proof.push(SignatureEnvelope {
                 algorithm_id: 1,
+                key_reference: None,
                 signature: keypair.sign(&digest).to_vec(),
             });
         }

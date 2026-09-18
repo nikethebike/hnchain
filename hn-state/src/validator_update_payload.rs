@@ -1,8 +1,8 @@
-use hn_crypto::KeyDescriptor;
+use hn_crypto::{KeyDescriptor, KeyRole};
 use hn_hncs::{Decoder, write_bool, write_u8, write_u16};
 
 use crate::error::{StateError, StateResult};
-use crate::validator_record::{decode_key_descriptor, encode_key_descriptor};
+use crate::key_descriptor::{decode_key_descriptor, encode_key_descriptor};
 
 /// `payload_version` for the current `ValidatorUpdatePayloadV1` shape
 /// (ADR-0006, "Decided: `stake`/`unstake`/`validator_update` payload
@@ -83,7 +83,7 @@ impl ValidatorOperation {
 /// like `target_hash`'s all-zero `Nil` encoding) — but hand-rolled, not
 /// `write_optional`/`read_optional`: those helpers require their inner
 /// closure to return `HncsResult`, and
-/// [`crate::validator_record::decode_key_descriptor`] can fail with a
+/// [`crate::key_descriptor::decode_key_descriptor`] can fail with a
 /// domain-specific [`hn_crypto::IdentityError`]-adjacent
 /// [`StateError`] (unsupported algorithm, invalid key), which
 /// `HncsResult` cannot express — the exact same reason
@@ -130,7 +130,10 @@ impl ValidatorUpdatePayloadV1 {
             ValidatorOperation::from_u8(decoder.read_u8().map_err(StateError::Encoding)?)?;
         let has_key = decoder.read_bool().map_err(StateError::Encoding)?;
         let new_consensus_key = if has_key {
-            Some(decode_key_descriptor(&mut decoder)?)
+            Some(decode_key_descriptor(
+                &mut decoder,
+                KeyRole::ValidatorConsensus,
+            )?)
         } else {
             None
         };
@@ -232,7 +235,7 @@ mod tests {
         let mut encoded = activate().encode()?;
         let presence_index = encoded.len() - 1;
         encoded[presence_index] = 0x01;
-        crate::validator_record::encode_key_descriptor(
+        crate::key_descriptor::encode_key_descriptor(
             &mut encoded,
             &KeyDescriptor::from_public_key_bytes(KeyRole::ValidatorConsensus, PUBLIC_KEY)
                 .map_err(StateError::InvalidConsensusKey)?,

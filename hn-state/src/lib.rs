@@ -134,6 +134,32 @@
 //! `finalize_proposal` has no caller yet, mirroring
 //! `apply_unbonding_release`'s own "no block-processing pipeline
 //! exists in this codebase yet" situation.
+//!
+//! [`key_descriptor`] (crate-private) holds `encode_key_descriptor`/
+//! `decode_key_descriptor`, shared by every wire location carrying a
+//! `hn_crypto::KeyDescriptor` the same way — `ValidatorRecordV1.
+//! consensus_key`/`ValidatorUpdatePayloadV1.new_consensus_key`
+//! (`validator_consensus` role) and, new in this pass,
+//! `MultisigConfigV1.authorized_keys` (`account_signing` role).
+//! [`permission_value`], [`permission_update_payload`], and
+//! [`permission_transition`] add `PermissionValueV1`/
+//! `PermissionUpdatePayloadV1` and their state transition (ADR-0026,
+//! "Threshold And Multisignature Authorization"): activates
+//! account-state.md §4.5 Permission State for the `account_signing`
+//! role only — 7 of its 8 conceptual capabilities remain unaddressed.
+//! `authorized_keys` reuses HNCS's own canonical `set` encoding on the
+//! encode side ([`hn_hncs::write_set`]); the decode side hand-rolls the
+//! equivalent sort/duplicate check inline, the same
+//! `decode_key_descriptor`-can-fail-with-a-domain-error reason
+//! `QuorumCertificate.aggregate_proof`/`ValidatorUpdatePayloadV1.
+//! new_consensus_key` already couldn't use `read_list`/`read_optional`
+//! directly. `verify_multisig_authorization` is the multi-signature
+//! verification rule itself — a pure function taking an
+//! already-fetched `MultisigConfigV1`, mirroring every other `apply_*`
+//! function's "caller already resolved state" boundary; deactivating
+//! back to single-key mode is deliberately not supported (blocked on
+//! Identity State/`active_key(...)`, ADR-0002's own separately open
+//! item, surfaced but not resolved by ADR-0026).
 
 mod access_list;
 mod account;
@@ -149,10 +175,14 @@ mod governance;
 mod governance_payload;
 mod governance_transition;
 mod key;
+mod key_descriptor;
 mod lifecycle_value;
 mod list_merkle;
 mod node;
 mod nonce_value;
+mod permission_transition;
+mod permission_update_payload;
+mod permission_value;
 mod proposal_id;
 mod proposal_record;
 mod proposal_vote_record;
@@ -202,6 +232,15 @@ pub use lifecycle_value::{LIFECYCLE_VERSION_1, LifecycleState, LifecycleValueV1}
 pub use list_merkle::{LIST_TREE_PROFILE_ID, list_empty_root, list_merkle_root, list_node_hash};
 pub use node::{EmptyHashTable, TREE_DEPTH, TREE_PROFILE_ID, internal_hash, leaf_hash, value_hash};
 pub use nonce_value::{NONCE_VERSION_1, NonceValueV1};
+pub use permission_transition::{
+    apply_permission_update, apply_permission_update_with_receipt, verify_multisig_authorization,
+};
+pub use permission_update_payload::{
+    PERMISSION_UPDATE_PAYLOAD_VERSION_1, PermissionUpdatePayloadV1,
+};
+pub use permission_value::{
+    MAX_AUTHORIZED_KEYS, MultisigConfigV1, PERMISSION_VERSION_1, PermissionValueV1,
+};
 pub use proposal_id::proposal_id;
 pub use proposal_record::{PROPOSAL_RECORD_VERSION_1, ProposalRecordV1, ProposalStatus};
 pub use proposal_vote_record::{PROPOSAL_VOTE_RECORD_VERSION_1, ProposalVoteRecordV1};

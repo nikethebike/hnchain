@@ -156,17 +156,23 @@ pub enum StateError {
         /// The rejected version.
         value: u16,
     },
-    /// A decoded `ValidatorRecordV1.consensus_key`'s `algorithm_id` is
-    /// not Ed25519 (`hn_crypto::ED25519_ALGORITHM_ID`), the only active
-    /// `validator_consensus` signing suite at genesis (ADR-0002,
-    /// "Accepted Initial Direction").
+    /// A decoded [`hn_crypto::KeyDescriptor`]'s `algorithm_id` is not
+    /// Ed25519 (`hn_crypto::ED25519_ALGORITHM_ID`), the only active
+    /// signing suite at genesis (ADR-0002, "Accepted Initial
+    /// Direction") — for `ValidatorRecordV1.consensus_key`/
+    /// `ValidatorUpdatePayloadV1.new_consensus_key` (`validator_consensus`
+    /// role) or `MultisigConfigV1.authorized_keys` (`account_signing`
+    /// role, ADR-0026); [`crate::key_descriptor::decode_key_descriptor`]
+    /// is shared by both.
     UnsupportedKeyAlgorithm {
         /// The rejected algorithm identifier.
         value: u16,
     },
-    /// A decoded `ValidatorRecordV1.consensus_key`'s public key bytes
-    /// were rejected by [`hn_crypto::KeyDescriptor`] — wrong length for
-    /// the declared algorithm, or not a canonical Ed25519 point.
+    /// A decoded [`hn_crypto::KeyDescriptor`]'s public key bytes were
+    /// rejected by [`hn_crypto::KeyDescriptor`] itself — wrong length
+    /// for the declared algorithm, or not a canonical Ed25519 point.
+    /// Shared across every `key_descriptor`-decoding site, the same as
+    /// [`StateError::UnsupportedKeyAlgorithm`].
     InvalidConsensusKey(IdentityError),
     /// A decoded `ValidatorRecordV1.status` byte is not a member of the
     /// closed `status` registry (ADR-0010, "Validator Status").
@@ -360,6 +366,47 @@ pub enum StateError {
         /// The rejected version.
         value: u16,
     },
+    /// A decoded `PermissionValueV1.permission_version` does not match
+    /// [`crate::permission_value::PERMISSION_VERSION_1`], the only shape
+    /// this implementation understands.
+    UnsupportedPermissionVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `PermissionUpdatePayloadV1.payload_version` does not
+    /// match
+    /// [`crate::permission_update_payload::PERMISSION_UPDATE_PAYLOAD_VERSION_1`],
+    /// the only shape this implementation understands.
+    UnsupportedPermissionUpdatePayloadVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A `MultisigConfigV1` (ADR-0026) has `threshold == 0` or
+    /// `threshold > authorized_keys.len()` — `1 <= threshold <=
+    /// authorized_keys.len()` is a structural invariant, checked on
+    /// both encode and decode.
+    InvalidMultisigThreshold {
+        /// The rejected `threshold` byte.
+        threshold: u8,
+        /// `authorized_keys.len()` at the time of the check.
+        authorized_key_count: usize,
+    },
+    /// A `SignatureEnvelope` (`hn_crypto`) in a `signatures` list being
+    /// checked against an active `MultisigConfigV1` (ADR-0026) has
+    /// `key_reference: None` — every entry must carry a present
+    /// `key_reference` once an account is in multisig mode; an entry
+    /// shaped for single-key mode has no defined meaning there.
+    MissingKeyReference,
+    /// [`crate::verify_multisig_authorization`] (ADR-0026) found fewer
+    /// distinct, in-bounds, successfully-verified `key_reference`s among
+    /// the supplied `signatures` than `MultisigConfigV1.threshold`
+    /// requires.
+    InsufficientMultisigSignatures {
+        /// `MultisigConfigV1.threshold`.
+        required: u8,
+        /// How many distinct signatures actually verified.
+        valid: usize,
+    },
 }
 
 impl From<HashError> for StateError {
@@ -538,6 +585,29 @@ impl core::fmt::Display for StateError {
             Self::UnsupportedProposalVoteRecordVersion { value } => {
                 write!(formatter, "unsupported vote_version: {value}")
             }
+            Self::UnsupportedPermissionVersion { value } => {
+                write!(formatter, "unsupported permission_version: {value}")
+            }
+            Self::UnsupportedPermissionUpdatePayloadVersion { value } => {
+                write!(
+                    formatter,
+                    "unsupported permission_update payload_version: {value}"
+                )
+            }
+            Self::InvalidMultisigThreshold {
+                threshold,
+                authorized_key_count,
+            } => write!(
+                formatter,
+                "invalid multisig threshold {threshold} for {authorized_key_count} authorized keys"
+            ),
+            Self::MissingKeyReference => {
+                formatter.write_str("signature envelope has no key_reference in multisig mode")
+            }
+            Self::InsufficientMultisigSignatures { required, valid } => write!(
+                formatter,
+                "insufficient multisig signatures: {valid} valid, {required} required"
+            ),
             Self::ExpectedProposeOperation => {
                 formatter.write_str("apply_propose requires a Propose payload")
             }
