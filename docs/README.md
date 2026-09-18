@@ -50,6 +50,7 @@ docs/
       canonical-serialization.md
       hash-algorithms.md
       genesis.md
+      genesis-security.md
       transaction-format.md
       state-tree.md
       block-format.md

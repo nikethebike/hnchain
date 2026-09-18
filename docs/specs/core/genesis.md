@@ -23,7 +23,10 @@ HNCOIN's genesis allocation (total supply, and the amount held by each
 of the three genesis accounts) is decided by
 `docs/adr/ADR-0024-hncoin-monetary-policy.md` — this document does not
 redefine those amounts, only how genesis data as a whole is
-constructed and committed.
+constructed and committed. Custody, key generation, multisignature
+configuration, and vesting for those three accounts is a separate
+document, `docs/specs/core/genesis-security.md` — this document does not
+redefine that either.
 
 This specification is constrained by:
 

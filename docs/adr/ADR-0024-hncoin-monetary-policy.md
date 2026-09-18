@@ -92,10 +92,12 @@ ADR-0003" below):
 
 No additional monetary allocation exists outside this table. Access
 control, multisignature configuration, vesting, and timelocks for these
-three accounts are explicitly deferred to a future genesis-security
-specification (Open Decisions, below) — this ADR fixes the *amounts*
-and the fact that they are genesis-only, not *who holds the keys* or
-*under what spending restrictions*.
+three accounts are deferred to `docs/specs/core/genesis-security.md`
+(Draft — mechanism decided: procedural/off-protocol custody for v1, no
+on-chain threshold or vesting enforcement; exact thresholds and the
+Founder vesting schedule remain that document's own Open Decisions) —
+this ADR fixes the *amounts* and the fact that they are genesis-only,
+not *who holds the keys* or *under what spending restrictions*.
 
 ### Consistency With ADR-0003 (Address Format)
 
@@ -352,10 +354,11 @@ Genesis allocation key compromise:
   controlling key(s) allows an attacker to spend those funds.
 - Mitigation: compromise of an allocation account's key never grants
   minting authority — the fixed-supply invariant holds regardless of
-  which account controls which existing funds. Multisig/hardware-
-  wallet/timelock/vesting mechanisms for these three accounts are
-  explicitly deferred to a future genesis-security specification, not
-  decided by this ADR.
+  which account controls which existing funds. Custody, multisig,
+  hardware-wallet, and vesting practice for these three accounts is
+  specified in `docs/specs/core/genesis-security.md` (Draft) — decided
+  there as procedural/off-protocol for v1, not a consensus rule this ADR
+  itself defines.
 
 Genesis misconfiguration:
 
@@ -410,8 +413,11 @@ separate follow-up work):
   `burn` entry yet)
 - genesis allocation account key material, multisignature
   configuration, hardware-wallet requirements, timelocks, and Founder
-  allocation vesting schedule (genesis-security specification, not yet
-  written)
+  allocation vesting schedule — **partially resolved,
+  `docs/specs/core/genesis-security.md` (Draft)**: mechanism decided
+  (procedural/off-protocol custody, not on-chain enforced, for v1); the
+  exact per-account thresholds and the Founder vesting schedule remain
+  that document's own Open Decisions
 - Community & Airdrop distribution schedule and mechanism
 - Liquidity & Ecosystem Reserve spending authorization and use-case
   approval process
@@ -426,4 +432,6 @@ separate follow-up work):
   non-accepted `100,000,000 HNC` figure)
 - `docs/specs/core/genesis.md` (genesis allocation construction —
   currently Draft, defers "genesis allocation" to this ADR)
+- `docs/specs/core/genesis-security.md` (custody, key generation,
+  multisig, and vesting for the three genesis accounts — Draft)
 - `docs/adr/ADR-0023-tokenomics-and-economic-model.md`
