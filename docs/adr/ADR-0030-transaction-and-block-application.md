@@ -22,6 +22,7 @@ Supersedes: None
 Referenced By:
 
 - ADR-0031: Write-Set Value Bytes And Overlay State Reader
+- ADR-0032: Governance Chamber-Weight Query And Propose/Vote Wiring
 
 ## Context
 
@@ -160,15 +161,19 @@ just a hash) results, and `apply_block` uses a new `OverlayReader` to
 give each transaction a correct, up-to-date view of every earlier
 transaction's effects in the same block.
 
-**`governance` (`propose`/`vote`) stays unwired.** `apply_propose`/
-`apply_vote` need chamber-weight totals as caller-supplied parameters
-(ADR-0025) — computing them requires summing every validator's
-`bonded_stake`/counting `Active` validators, a query this crate has
-never built (`governance_transition.rs`'s own documentation already
-named this: "this crate owns state transitions, not the query that
-produces a total validator count or a total bonded-stake sum"). Wiring
-`governance` needs that query first — real, separate, smaller follow-up
-work, not done here.
+**`governance` (`propose`/`vote`) stays unwired — resolved separately,
+ADR-0032.** `apply_propose`/`apply_vote` needed chamber-weight totals
+as caller-supplied parameters (ADR-0025) — computing them requires
+summing every validator's `bonded_stake`/counting `Active` validators,
+a query this crate had never built (`governance_transition.rs`'s own
+documentation already named this: "this crate owns state transitions,
+not the query that produces a total validator count or a total
+bonded-stake sum"). ADR-0032 ("Governance Chamber-Weight Query And
+Propose/Vote Wiring") is that follow-up: a pure `chamber_weights`
+function over an already-fetched validator-candidate slice (mirroring
+`active_set`'s own precedent, since a `StateReader` alone cannot
+enumerate "every validator"), plus real dispatch for both `propose` and
+`vote` in `apply_transaction`.
 
 **`StateWriter` stays uncalled.** Nothing in this codebase implements
 it yet (no durable backend, ADR-0019), and `apply_transaction`/
@@ -236,7 +241,7 @@ signature.
 
 - intra-block overlay reader / value-byte-exposing `apply_*` return
   shape — resolved, ADR-0031
-- governance chamber-weight-total query (see "Explicitly Not Resolved")
+- governance chamber-weight-total query — resolved, ADR-0032
 - real backend-integrated `StateWriter` persistence and `state_root`
   computation (ADR-0019's own still-open "initial storage backend")
 - real block/header validation (proposer, signatures, `consensus_root`
@@ -251,3 +256,4 @@ signature.
 - `docs/adr/ADR-0019-storage-state-interfaces.md`
 - `docs/adr/ADR-0025-governance-model.md`
 - `docs/adr/ADR-0031-write-set-values-and-overlay-state-reader.md`
+- `docs/adr/ADR-0032-governance-chamber-weight-query-and-propose-vote-wiring.md`

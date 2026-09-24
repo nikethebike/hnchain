@@ -3,6 +3,11 @@ use hn_crypto::Digest;
 
 use crate::active_set::fetch_validator_record;
 use crate::error::{StateError, StateResult};
+use crate::governance_payload::GovernancePayloadV1;
+use crate::governance_transition::{
+    GOVERNANCE_VOTING_WINDOW, apply_propose_with_receipt, apply_vote_with_receipt, chamber_weights,
+    fetch_proposal, fetch_proposal_vote,
+};
 use crate::identity_transition::apply_identity_bootstrap;
 use crate::list_merkle::list_merkle_root;
 use crate::nonce_transition::{fetch_nonce, nonce_write};
@@ -16,6 +21,7 @@ use crate::transaction_envelope::{
 };
 use crate::transfer::{apply_transfer_with_receipt, fetch_transfer_party};
 use crate::tx_id::tx_id;
+use crate::validator_record::ValidatorRecordV1;
 use crate::validator_transition::{
     apply_stake_with_receipt, apply_unstake_with_receipt, apply_validator_update_with_receipt,
 };
@@ -69,16 +75,32 @@ pub struct AppliedTransaction {
 ///
 /// Deducts no fee (ADR-0030, "Decided: no fee deduction in this
 /// pass" — the fee rate/floor remains an undecided economic
-/// parameter). `governance` and the 3 still-undecided `tx_type`s are
-/// not wired — [`decode_transaction_payload`] itself already rejects
-/// the latter; `governance` is rejected here too
-/// ([`StateError::UndecidedTransactionPayload`]), named explicitly in
-/// ADR-0030's own "Explicitly Not Resolved" (needs a chamber-weight
-/// query this crate does not have yet).
+/// parameter). The 3 still-undecided `tx_type`s
+/// (`contract_deploy`/`contract_call`/`system`) are not wired —
+/// [`decode_transaction_payload`] itself already rejects them.
+///
+/// `governance` (`propose`/`vote`) is wired (ADR-0032, "Governance
+/// Chamber-Weight Query And Propose/Vote Wiring"): `validator_candidates`
+/// is every current validator record, already fetched by the caller as
+/// of `current_height` — this function cannot enumerate them itself
+/// ([`crate::StateReader`] is a point-lookup interface only, ADR-0019),
+/// the same "caller already fetched it" boundary
+/// [`crate::active_set`] draws for its own candidate slice. A `Propose`
+/// fetches `sender`'s own validator record ([`StateError::UnknownValidator`]
+/// if absent, the same treatment `stake`/`unstake` already give a
+/// missing record) and computes a fresh [`crate::ChamberWeights`]
+/// snapshot from `validator_candidates` via
+/// [`crate::governance_transition::chamber_weights`]. A `Vote` fetches
+/// its target `ProposalRecordV1` by the payload's own `proposal_id`
+/// ([`StateError::UnknownProposal`] if absent — same "caller-supplied
+/// key not found" hard-error treatment as `UnknownValidator`, not a
+/// `Failed` receipt), `sender`'s own optional validator record, and any
+/// existing vote already cast.
 pub fn apply_transaction(
     envelope: &TransactionEnvelope,
     reader: &impl StateReader,
     current_height: BlockHeight,
+    validator_candidates: &[ValidatorRecordV1],
 ) -> StateResult<AppliedTransaction> {
     envelope.verify(reader)?;
 
@@ -146,11 +168,43 @@ pub fn apply_transaction(
             )?;
             (writes.map(|writes| writes.to_vec()), receipt)
         }
-        TransactionPayload::Governance(_) => {
-            return Err(StateError::UndecidedTransactionPayload {
-                tx_type: envelope.tx_type.as_u8(),
-            });
-        }
+        TransactionPayload::Governance(payload) => match &payload {
+            GovernancePayloadV1::Propose { .. } => {
+                let proposer_record = fetch_validator_record(reader, &envelope.sender)?.ok_or(
+                    StateError::UnknownValidator {
+                        validator_id: envelope.sender,
+                    },
+                )?;
+                let weights = chamber_weights(validator_candidates)?;
+                let (outcome, receipt) = apply_propose_with_receipt(
+                    envelope.sender,
+                    &proposer_record,
+                    &payload,
+                    current_height,
+                    GOVERNANCE_VOTING_WINDOW,
+                    weights.validator_chamber_total_weight,
+                    weights.staker_chamber_total_weight,
+                    tx_id_value,
+                )?;
+                (outcome.map(|(_, writes)| writes.to_vec()), receipt)
+            }
+            GovernancePayloadV1::Vote { proposal_id, .. } => {
+                let proposal =
+                    fetch_proposal(reader, proposal_id)?.ok_or(StateError::UnknownProposal)?;
+                let voter_record = fetch_validator_record(reader, &envelope.sender)?;
+                let existing_vote = fetch_proposal_vote(reader, proposal_id, &envelope.sender)?;
+                let (writes, receipt) = apply_vote_with_receipt(
+                    envelope.sender,
+                    voter_record.as_ref(),
+                    &payload,
+                    &proposal,
+                    existing_vote.as_ref(),
+                    current_height,
+                    tx_id_value,
+                )?;
+                (writes.map(|writes| writes.to_vec()), receipt)
+            }
+        },
         TransactionPayload::PermissionUpdate(payload) => {
             let payload: PermissionUpdatePayloadV1 = payload;
             let (writes, receipt) =
@@ -200,15 +254,25 @@ pub struct BlockApplicationResult {
 /// compute `BlockHeader.state_root`: doing so needs the complete current
 /// leaf set, which nothing in this project maintains yet (no durable
 /// backend, ADR-0019).
+///
+/// `validator_candidates` is passed straight through to every
+/// [`apply_transaction`] call, unchanged for the whole block (ADR-0032)
+/// — a `Propose` transaction's chamber-weight snapshot reflects
+/// validator state as of `current_height`, not any earlier transaction
+/// in the same block, which matches ADR-0025's own height-granularity
+/// snapshot discipline ("snapshotted at the proposal's creation
+/// height") rather than falling short of it: nothing about "creation
+/// height" implies sub-block transaction-ordinal precision.
 pub fn apply_block(
     transactions: &[TransactionEnvelope],
     reader: &impl StateReader,
     current_height: BlockHeight,
+    validator_candidates: &[ValidatorRecordV1],
 ) -> StateResult<BlockApplicationResult> {
     let mut overlay = OverlayReader::new(reader);
     let mut applied = Vec::with_capacity(transactions.len());
     for envelope in transactions {
-        let entry = apply_transaction(envelope, &overlay, current_height)?;
+        let entry = apply_transaction(envelope, &overlay, current_height, validator_candidates)?;
         overlay.fold(&entry.write_set);
         applied.push(entry);
     }
@@ -237,13 +301,17 @@ mod tests {
     use super::{apply_block, apply_identity_bootstrap, apply_transaction};
     use crate::access_list::AccessListV1;
     use crate::error::{StateError, StateResult};
-    use crate::governance_payload::GovernancePayloadV1;
+    use crate::governance::proposal_record_state_key;
+    use crate::governance_payload::{GovernancePayloadV1, VoteChoice};
     use crate::list_merkle::list_merkle_root;
+    use crate::proposal_record::{ProposalRecordV1, ProposalStatus};
     use crate::receipt::{ReceiptStatus, ReceiptV1};
     use crate::state_store::StateReader;
     use crate::transaction_envelope::{TX_VERSION_1, TransactionEnvelope, TxType};
     use crate::transfer_payload::TransferPayloadV1;
     use crate::tx_id::tx_id;
+    use crate::validator::{ValidatorSection, validator_section_state_key};
+    use crate::validator_record::{ValidatorRecordV1, ValidatorStatus};
     use crate::validity_window::ValidityWindowV1;
 
     const NETWORK_ID: u16 = 1;
@@ -340,7 +408,7 @@ mod tests {
         )?;
         let reader = empty_reader();
 
-        let applied = apply_transaction(&envelope, &reader, BlockHeight::GENESIS)?;
+        let applied = apply_transaction(&envelope, &reader, BlockHeight::GENESIS, &[])?;
 
         let expected_bootstrap_write =
             apply_identity_bootstrap(envelope.sender, &keypair.key_descriptor())?;
@@ -365,7 +433,7 @@ mod tests {
         let reader = empty_reader();
 
         assert_eq!(
-            apply_transaction(&envelope, &reader, BlockHeight::GENESIS),
+            apply_transaction(&envelope, &reader, BlockHeight::GENESIS, &[]),
             Err(StateError::NonceMismatch {
                 expected: 0,
                 found: 1,
@@ -391,15 +459,56 @@ mod tests {
         let reader = empty_reader();
 
         assert_eq!(
-            apply_transaction(&envelope, &reader, BlockHeight::new(1)),
+            apply_transaction(&envelope, &reader, BlockHeight::new(1), &[]),
             Err(StateError::TransactionOutsideValidityWindow)
         );
         Ok(())
     }
 
+    fn active_validator_record(validator_id: Digest, bonded_stake: u128) -> ValidatorRecordV1 {
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [0x33; 32]);
+        ValidatorRecordV1 {
+            validator_id,
+            consensus_key: keypair.key_descriptor(),
+            bonded_stake,
+            voting_power: bonded_stake,
+            status: ValidatorStatus::Active,
+            pending_unbonding: None,
+        }
+    }
+
+    fn reader_with(entries: Vec<(Digest, Vec<u8>)>) -> StateResult<MapReader> {
+        Ok(MapReader(entries.into_iter().collect()))
+    }
+
     #[test]
-    fn rejects_governance_as_undecided() -> StateResult<()> {
-        let keypair = keypair(0x04);
+    fn propose_creates_a_proposal_using_a_live_chamber_weight_snapshot() -> StateResult<()> {
+        let keypair = keypair(0x08);
+        let sender = address_of(&keypair)?;
+        let proposer = active_validator_record(sender, 500);
+        let payload = GovernancePayloadV1::Propose {
+            title: "test".to_string(),
+            content_hash: [0x55; 32],
+        }
+        .encode()?;
+        let envelope = bootstrap_envelope(&keypair, 0, TxType::Governance, payload, no_window())?;
+
+        let record_key = validator_section_state_key(&sender, ValidatorSection::Record)?;
+        let reader = reader_with(vec![(record_key, proposer.encode()?)])?;
+        let candidates = [proposer];
+
+        let applied = apply_transaction(&envelope, &reader, BlockHeight::GENESIS, &candidates)?;
+
+        // bootstrap write, proposal-record write, nonce write.
+        assert_eq!(applied.write_set.len(), 3);
+        assert_eq!(applied.receipt.status, ReceiptStatus::Success);
+        Ok(())
+    }
+
+    #[test]
+    fn propose_rejects_a_sender_with_no_validator_record() -> StateResult<()> {
+        let keypair = keypair(0x09);
+        let sender = address_of(&keypair)?;
         let payload = GovernancePayloadV1::Propose {
             title: "test".to_string(),
             content_hash: [0x55; 32],
@@ -409,10 +518,73 @@ mod tests {
         let reader = empty_reader();
 
         assert_eq!(
-            apply_transaction(&envelope, &reader, BlockHeight::GENESIS),
-            Err(StateError::UndecidedTransactionPayload {
-                tx_type: TxType::Governance.as_u8()
+            apply_transaction(&envelope, &reader, BlockHeight::GENESIS, &[]),
+            Err(StateError::UnknownValidator {
+                validator_id: sender
             })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn vote_succeeds_against_an_existing_proposal() -> StateResult<()> {
+        let keypair = keypair(0x0a);
+        let sender = address_of(&keypair)?;
+        let voter = active_validator_record(sender, 500);
+        let proposal_id = [0x44; 32];
+        let proposal = ProposalRecordV1 {
+            proposal_id,
+            proposer: [0x77; 32],
+            title: "test".to_string(),
+            content_hash: [0x55; 32],
+            created_at_height: BlockHeight::new(100),
+            voting_ends_at_height: BlockHeight::new(600),
+            status: ProposalStatus::Voting,
+            validator_chamber_for: 0,
+            validator_chamber_against: 0,
+            validator_chamber_abstain: 0,
+            staker_chamber_for: 0,
+            staker_chamber_against: 0,
+            staker_chamber_abstain: 0,
+            validator_chamber_total_weight: 20,
+            staker_chamber_total_weight: 1_000_000,
+        };
+        let payload = GovernancePayloadV1::Vote {
+            proposal_id,
+            choice: VoteChoice::For,
+        }
+        .encode()?;
+        let envelope = bootstrap_envelope(&keypair, 0, TxType::Governance, payload, no_window())?;
+
+        let record_key = validator_section_state_key(&sender, ValidatorSection::Record)?;
+        let proposal_key = proposal_record_state_key(&proposal_id)?;
+        let reader = reader_with(vec![
+            (record_key, voter.encode()?),
+            (proposal_key, proposal.encode()?),
+        ])?;
+
+        let applied = apply_transaction(&envelope, &reader, BlockHeight::new(200), &[])?;
+
+        // bootstrap write, proposal-record write, vote-record write, nonce write.
+        assert_eq!(applied.write_set.len(), 4);
+        assert_eq!(applied.receipt.status, ReceiptStatus::Success);
+        Ok(())
+    }
+
+    #[test]
+    fn vote_rejects_an_unknown_proposal() -> StateResult<()> {
+        let keypair = keypair(0x0b);
+        let payload = GovernancePayloadV1::Vote {
+            proposal_id: [0x44; 32],
+            choice: VoteChoice::For,
+        }
+        .encode()?;
+        let envelope = bootstrap_envelope(&keypair, 0, TxType::Governance, payload, no_window())?;
+        let reader = empty_reader();
+
+        assert_eq!(
+            apply_transaction(&envelope, &reader, BlockHeight::GENESIS, &[]),
+            Err(StateError::UnknownProposal)
         );
         Ok(())
     }
@@ -441,6 +613,7 @@ mod tests {
             &[first.clone(), second.clone()],
             &reader,
             BlockHeight::GENESIS,
+            &[],
         )?;
 
         let expected_tx_ids = vec![tx_id(&first.encode()?)?, tx_id(&second.encode()?)?];
@@ -504,7 +677,7 @@ mod tests {
         }];
 
         let reader = empty_reader();
-        let result = apply_block(&[first, second], &reader, BlockHeight::GENESIS)?;
+        let result = apply_block(&[first, second], &reader, BlockHeight::GENESIS, &[])?;
 
         assert_eq!(result.applied.len(), 2);
         assert_eq!(result.applied[0].receipt.status, ReceiptStatus::Success);

@@ -126,14 +126,28 @@
 //! `apply_propose`/`apply_vote`/`finalize_proposal`. Signaling-only
 //! (ADR-0025, "Decided: Signaling Only") — a `Passed` proposal has no
 //! automatic effect anywhere in this crate or elsewhere. Quorum
-//! percentage and voting-window length are still-undecided ADR-0023
-//! economic parameters, so `finalize_proposal`/`apply_propose` take
-//! them as caller-supplied parameters rather than constants, the same
-//! `max_size`-style pattern `active_set` already used for
-//! `MAX_ACTIVE_SET_SIZE` before that value was decided.
-//! `finalize_proposal` has no caller yet, mirroring
-//! `apply_unbonding_release`'s own "no block-processing pipeline
-//! exists in this codebase yet" situation.
+//! percentage (`GOVERNANCE_QUORUM_NUMERATOR`/`_DENOMINATOR`) and
+//! voting-window length (`GOVERNANCE_VOTING_WINDOW`) are now real
+//! constants (ADR-0023's own already-decided `1/5`, `302_400` blocks) —
+//! `apply_propose`/`finalize_proposal` still take them as parameters
+//! rather than reading the constants directly, so both stay testable
+//! against other values without redefining the constants themselves,
+//! the same `max_size`-style pattern `active_set` already used.
+//! [`governance_transition::chamber_weights`] computes
+//! [`governance_transition::ChamberWeights`] from an already-fetched
+//! candidate slice — the query this module's own documentation used to
+//! name as missing, closed the same way `active_set` already resolved
+//! the identical "this crate can't enumerate storage" structural
+//! problem (ADR-0032, "Governance Chamber-Weight Query And Propose/Vote
+//! Wiring"). `fetch_proposal`/`fetch_proposal_vote` are the point-lookup
+//! fetch helpers `apply_transaction` needed but nothing had built yet,
+//! mirroring `fetch_identity`'s own shape. `finalize_proposal` still has
+//! no caller — closing a proposal needs a per-block sweep over every
+//! still-`Voting` proposal, which needs enumerating "every open
+//! proposal," the same missing capability `chamber_weights` needed a
+//! caller-supplied slice to work around; `propose`/`vote` don't have
+//! that problem since their target (a proposal, an account) is always a
+//! single already-known key.
 //!
 //! [`key_descriptor`] (crate-private) holds `encode_key_descriptor`/
 //! `decode_key_descriptor`, shared by every wire location carrying a
@@ -251,28 +265,33 @@
 //! ([`StateError::NonceMismatch`]) and `validity_window` against the
 //! caller-supplied `current_height`
 //! ([`StateError::TransactionOutsideValidityWindow`]), dispatches
-//! `transfer`/`stake`/`unstake`/`validator_update`/`permission_update` to
-//! their existing `apply_*_with_receipt` functions, and always appends
-//! the nonce-update write — ADR-0006's "nonce consumed on inclusion even
-//! on failure" rule, implemented here for the first time. Deducts no
-//! fee (still-undecided ADR-0023 parameter) and rejects `governance`
-//! outright ([`StateError::UndecidedTransactionPayload`]: no
-//! chamber-weight-total query exists yet). `apply_block` applies every
-//! transaction in a slice against an [`OverlayReader`] layering each
-//! transaction's own writes over the base `reader` before the next
-//! transaction runs, then aggregates `tx_id`s/receipt digests into
-//! `transactions_root`/`receipts_root` via `list_merkle_root` — it does
-//! not compute `BlockHeader.state_root` (needs the complete current leaf
-//! set, no durable backend exists yet, ADR-0019).
+//! `transfer`/`stake`/`unstake`/`validator_update`/`permission_update`/
+//! `governance` to their existing `apply_*_with_receipt` functions, and
+//! always appends the nonce-update write — ADR-0006's "nonce consumed
+//! on inclusion even on failure" rule, implemented here for the first
+//! time. Deducts no fee (still-undecided ADR-0023 parameter). Since
+//! ADR-0032 ("Governance Chamber-Weight Query And Propose/Vote
+//! Wiring"), `governance` is fully wired: `apply_transaction` gained a
+//! `validator_candidates: &[ValidatorRecordV1]` parameter (unused by
+//! every non-`Propose` payload) so a `Propose` can compute a live
+//! `ChamberWeights` snapshot without this crate needing to enumerate
+//! storage itself; `apply_block` threads it through unchanged for every
+//! transaction in the block, which matches ADR-0025's own
+//! height-granularity snapshot discipline rather than falling short of
+//! it. `apply_block` applies every transaction in a slice against an
+//! [`OverlayReader`] layering each transaction's own writes over the
+//! base `reader` before the next transaction runs, then aggregates
+//! `tx_id`s/receipt digests into `transactions_root`/`receipts_root` via
+//! `list_merkle_root` — it does not compute `BlockHeader.state_root`
+//! (needs the complete current leaf set, no durable backend exists yet,
+//! ADR-0019).
 //!
 //! [`state_store::Write`] and [`overlay_reader::OverlayReader`]
 //! (ADR-0031, "Write-Set Value Bytes And Overlay State Reader") are why
 //! `apply_block` can do that at all: every `apply_*` function in this
-//! crate (except `governance_transition`'s, deliberately unconverted —
-//! `governance` is not dispatched by `apply_transaction`, see ADR-0030)
-//! now returns `Write`/`[Write; N]`/`Vec<Write>` — real canonical value
-//! bytes, exactly what `StateReader::get` would return for that key
-//! after the write applies — rather than the earlier `Leaf`-only
+//! crate now returns `Write`/`[Write; N]`/`Vec<Write>` — real canonical
+//! value bytes, exactly what `StateReader::get` would return for that
+//! key after the write applies — rather than the earlier `Leaf`-only
 //! `(state_key, leaf_hash)` shape, which was built for
 //! `compute_state_root` and could never itself answer a `get` call.
 //! [`tree::leaf_for_write`] derives a `Leaf` from a `Write` on demand
@@ -356,7 +375,9 @@ pub use governance_payload::{
     GovernancePayloadV1, VoteChoice,
 };
 pub use governance_transition::{
-    ProposeOutcome, apply_propose, apply_propose_with_receipt, apply_vote, apply_vote_with_receipt,
+    ChamberWeights, GOVERNANCE_QUORUM_DENOMINATOR, GOVERNANCE_QUORUM_NUMERATOR,
+    GOVERNANCE_VOTING_WINDOW, ProposeOutcome, apply_propose, apply_propose_with_receipt,
+    apply_vote, apply_vote_with_receipt, chamber_weights, fetch_proposal, fetch_proposal_vote,
     finalize_proposal,
 };
 pub use identity_transition::{

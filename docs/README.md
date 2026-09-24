@@ -47,6 +47,7 @@ docs/
     ADR-0029-multisig-deactivation.md
     ADR-0030-transaction-and-block-application.md
     ADR-0031-write-set-values-and-overlay-state-reader.md
+    ADR-0032-governance-chamber-weight-query-and-propose-vote-wiring.md
 
   specs/
     core/

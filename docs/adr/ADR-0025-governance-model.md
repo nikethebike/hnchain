@@ -19,6 +19,10 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0032: Governance Chamber-Weight Query And Propose/Vote Wiring
+
 ## Context
 
 `governance` (`tx_type = 0x07`) has been reserved in ADR-0006's closed
@@ -434,8 +438,12 @@ consensus-relevant rule change does.
 - `GovernancePayloadV1`/`ProposalRecordV1`/`ProposalVoteRecordV1` exact
   field widths and encode/decode (implementation work, not decided
   here — see "Decided: State Shape")
-- `apply_propose`/`apply_vote` state transitions (implementation work,
-  following `hn_state::validator_transition`'s own precedent)
+- `apply_propose`/`apply_vote` state transitions — implemented and
+  wired into `apply_transaction`, ADR-0032
+- `finalize_proposal` still has no caller: closing a proposal at its
+  voting-window close needs a per-block sweep over every still-`Voting`
+  proposal, a capability this crate cannot yet provide for itself
+  (ADR-0032's own "Explicitly Not Resolved")
 - governance minimum proposal spacing or rate limiting, if needed
   beyond "only Active validators may propose"
 
@@ -448,3 +456,4 @@ consensus-relevant rule change does.
   correction)
 - `docs/specs/core/genesis.md` (document commitment pattern reused for
   `content_hash`)
+- `docs/adr/ADR-0032-governance-chamber-weight-query-and-propose-vote-wiring.md`

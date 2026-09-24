@@ -16,6 +16,10 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0032: Governance Chamber-Weight Query And Propose/Vote Wiring
+
 ## Context
 
 ADR-0030's own "Explicitly Not Resolved" section named a real gap and
@@ -236,7 +240,7 @@ after hashing.
 - `compute_state_root` integration once a real backend can produce a
   complete leaf set
 - governance's own `Leaf` → `Write` conversion, whenever `governance`
-  gets wired into `apply_transaction`
+  gets wired into `apply_transaction` — resolved, ADR-0032
 - cross-block (not just intra-block) write visibility, gated on the
   same real-backend dependency as `StateWriter` above
 

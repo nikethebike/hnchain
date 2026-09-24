@@ -5,18 +5,114 @@ use crate::{
     error::{StateError, StateResult},
     governance::{proposal_record_state_key, proposal_vote_record_state_key},
     governance_payload::{GovernancePayloadV1, VoteChoice},
-    node::{leaf_hash, value_hash},
     proposal_id::proposal_id,
     proposal_record::{ProposalRecordV1, ProposalStatus},
     proposal_vote_record::ProposalVoteRecordV1,
     receipt::{ReceiptStatus, ReceiptV1},
-    tree::Leaf,
+    state_store::{StateReader, Write},
     validator_record::{ValidatorRecordV1, ValidatorStatus},
 };
 
+/// The governance voting window (ADR-0023, "Decided: Governance Quorum
+/// And Voting Window"; ADR-0025, "Decided: Voting Window") — height-
+/// based, fixed duration, 7 days at ADR-0009's `TARGET_BLOCK_TIME`. Now
+/// a real constant, not just a caller-supplied parameter: ADR-0032
+/// ("Governance Chamber-Weight Query And Propose/Vote Wiring") makes
+/// `apply_transaction` this module's first real caller.
+pub const GOVERNANCE_VOTING_WINDOW: u64 = 302_400;
+
+/// The governance quorum fraction (ADR-0023, "Decided: Governance
+/// Quorum And Voting Window"): `1 / 5` (20%), the same figure for both
+/// chambers (ADR-0025, "Decided: Chamber Pass Rule"). Integer
+/// numerator/denominator, never a float (ADR-0000).
+pub const GOVERNANCE_QUORUM_NUMERATOR: u128 = 1;
+/// See [`GOVERNANCE_QUORUM_NUMERATOR`].
+pub const GOVERNANCE_QUORUM_DENOMINATOR: u128 = 5;
+
 /// [`apply_propose`]'s own success value: the new proposal's id, plus
-/// the one write-set leaf its initial record occupies.
-pub type ProposeOutcome = (Digest, [Leaf; 1]);
+/// the one write-set entry its initial record occupies.
+pub type ProposeOutcome = (Digest, [Write; 1]);
+
+/// A proposal's chamber-weight snapshot (ADR-0025, "Decided: Chambers,
+/// Membership, And Weight"), computed from `candidates` — closes the
+/// gap this module's own documentation used to name explicitly: "this
+/// crate owns state transitions, not the query that produces a total
+/// validator count or a total bonded-stake sum." `candidates` is
+/// whatever the caller already fetched from canonical state as of the
+/// snapshot height (ADR-0032, "Governance Chamber-Weight Query And
+/// Propose/Vote Wiring") — the same "caller already fetched it"
+/// boundary [`crate::active_set`] already draws for its own candidate
+/// slice; this crate owns state interfaces, not a storage engine, and
+/// nothing in it can enumerate "every validator" from a [`StateReader`]
+/// alone (point lookups only, ADR-0019).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChamberWeights {
+    /// Validator chamber total: one vote per `status == Active`
+    /// validator (ADR-0025 — not stake-weighted).
+    pub validator_chamber_total_weight: u128,
+    /// Staker chamber total: the sum of every candidate's own
+    /// `bonded_stake`, regardless of status (ADR-0025's own "Scoping
+    /// note" — the only trackable staker-weight source until
+    /// delegation gets a real per-delegator mechanism).
+    pub staker_chamber_total_weight: u128,
+}
+
+/// Computes [`ChamberWeights`] from `candidates` (ADR-0025, "Decided:
+/// Chambers, Membership, And Weight"). Pure, over an already-fetched
+/// slice — see [`ChamberWeights`]'s own documentation for why. The
+/// validator-chamber count can never realistically overflow `u128`; the
+/// staker-chamber sum uses checked arithmetic anyway, reusing
+/// [`StateError::GovernanceTallyOverflow`], the same variant this
+/// module's own vote-tally arithmetic already uses for the identical
+/// class of computation.
+pub fn chamber_weights(candidates: &[ValidatorRecordV1]) -> StateResult<ChamberWeights> {
+    let validator_chamber_total_weight = candidates
+        .iter()
+        .filter(|record| record.status == ValidatorStatus::Active)
+        .count() as u128;
+
+    let mut staker_chamber_total_weight: u128 = 0;
+    for record in candidates {
+        staker_chamber_total_weight = staker_chamber_total_weight
+            .checked_add(record.bonded_stake)
+            .ok_or(StateError::GovernanceTallyOverflow)?;
+    }
+
+    Ok(ChamberWeights {
+        validator_chamber_total_weight,
+        staker_chamber_total_weight,
+    })
+}
+
+/// Fetches and decodes a proposal's current [`ProposalRecordV1`] from
+/// `reader`, or `None` if nothing is stored at its state key — mirrors
+/// [`crate::fetch_identity`]'s own shape for the `governance` domain's
+/// proposal records.
+pub fn fetch_proposal(
+    reader: &impl StateReader,
+    proposal_id: &Digest,
+) -> StateResult<Option<ProposalRecordV1>> {
+    let key = proposal_record_state_key(proposal_id)?;
+    match reader.get(&key)? {
+        Some(bytes) => Ok(Some(ProposalRecordV1::decode(&bytes)?)),
+        None => Ok(None),
+    }
+}
+
+/// Fetches and decodes `voter`'s existing [`ProposalVoteRecordV1`] for
+/// `proposal_id` from `reader`, or `None` if `voter` has not yet voted
+/// on it — mirrors [`fetch_proposal`]'s own shape.
+pub fn fetch_proposal_vote(
+    reader: &impl StateReader,
+    proposal_id: &Digest,
+    voter: &Digest,
+) -> StateResult<Option<ProposalVoteRecordV1>> {
+    let key = proposal_vote_record_state_key(proposal_id, voter)?;
+    match reader.get(&key)? {
+        Some(bytes) => Ok(Some(ProposalVoteRecordV1::decode(&bytes)?)),
+        None => Ok(None),
+    }
+}
 
 /// Creates a new proposal (ADR-0025, "Decided: State Shape"),
 /// producing its own `proposal_id` and the one write-set leaf its
@@ -31,17 +127,15 @@ pub type ProposeOutcome = (Digest, [Leaf; 1]);
 ///
 /// `validator_chamber_total_weight`/`staker_chamber_total_weight` are
 /// the caller-computed chamber snapshots taken at `created_at_height`
-/// (ADR-0025, "Snapshot Determinism") — this crate owns state
-/// *transitions*, not the query that produces a total validator count
-/// or a total bonded-stake sum, the same boundary [`crate::active_set`]
-/// already draws for its own candidate slice.
+/// (ADR-0025, "Snapshot Determinism") — ordinarily [`chamber_weights`]'s
+/// own output, still passed as plain parameters here rather than a
+/// `&[ValidatorRecordV1]` slice, since this function's own job is
+/// applying an already-resolved snapshot, not computing one.
 ///
-/// `voting_window_blocks` is `GOVERNANCE_VOTING_WINDOW` (ADR-0023,
-/// "Decided: Governance Quorum And Voting Window" — resolved:
-/// `302_400` blocks, 7 days) — a parameter here, not a constant,
-/// mirroring [`crate::active_set`]'s own `max_size` parameter: no real
-/// caller (block-processing pipeline) exists yet to be the canonical
-/// source that supplies this value.
+/// `voting_window_blocks` is [`GOVERNANCE_VOTING_WINDOW`] — a parameter
+/// here rather than reading the constant directly, so this function
+/// stays testable against other windows without redefining the
+/// constant itself.
 pub fn apply_propose(
     sender: Digest,
     proposer_record: &ValidatorRecordV1,
@@ -87,7 +181,7 @@ pub fn apply_propose(
         staker_chamber_total_weight,
     };
 
-    Ok((proposal_id_value, [proposal_record_leaf(&record)?]))
+    Ok((proposal_id_value, [proposal_record_write(&record)?]))
 }
 
 /// Applies a `propose` and produces its [`ReceiptV1`] in one step,
@@ -168,7 +262,7 @@ pub fn apply_vote(
     proposal: &ProposalRecordV1,
     existing_vote: Option<&ProposalVoteRecordV1>,
     current_height: BlockHeight,
-) -> StateResult<[Leaf; 2]> {
+) -> StateResult<[Write; 2]> {
     let GovernancePayloadV1::Vote {
         proposal_id: voted_proposal_id,
         choice,
@@ -224,8 +318,8 @@ pub fn apply_vote(
     let vote_record = ProposalVoteRecordV1 { choice: *choice };
 
     Ok([
-        proposal_record_leaf(&updated)?,
-        proposal_vote_record_leaf(&proposal.proposal_id, &sender, &vote_record)?,
+        proposal_record_write(&updated)?,
+        proposal_vote_record_write(&proposal.proposal_id, &sender, &vote_record)?,
     ])
 }
 
@@ -245,7 +339,7 @@ pub fn apply_vote_with_receipt(
     existing_vote: Option<&ProposalVoteRecordV1>,
     current_height: BlockHeight,
     tx_id: Digest,
-) -> StateResult<(Option<[Leaf; 2]>, ReceiptV1)> {
+) -> StateResult<(Option<[Write; 2]>, ReceiptV1)> {
     match apply_vote(
         sender,
         voter_record,
@@ -254,8 +348,8 @@ pub fn apply_vote_with_receipt(
         existing_vote,
         current_height,
     ) {
-        Ok(leaves) => Ok((
-            Some(leaves),
+        Ok(writes) => Ok((
+            Some(writes),
             ReceiptV1 {
                 tx_id,
                 status: ReceiptStatus::Success,
@@ -303,7 +397,7 @@ pub fn finalize_proposal(
     current_height: BlockHeight,
     quorum_numerator: u128,
     quorum_denominator: u128,
-) -> StateResult<Option<[Leaf; 1]>> {
+) -> StateResult<Option<[Write; 1]>> {
     if proposal.status != ProposalStatus::Voting {
         return Ok(None);
     }
@@ -351,7 +445,7 @@ pub fn finalize_proposal(
         status,
         ..proposal.clone()
     };
-    Ok(Some([proposal_record_leaf(&updated)?]))
+    Ok(Some([proposal_record_write(&updated)?]))
 }
 
 fn sum3(a: u128, b: u128, c: u128) -> StateResult<u128> {
@@ -375,22 +469,26 @@ fn meets_quorum(
     Ok(lhs >= rhs)
 }
 
-fn proposal_record_leaf(record: &ProposalRecordV1) -> StateResult<Leaf> {
+fn proposal_record_write(record: &ProposalRecordV1) -> StateResult<Write> {
     let key = proposal_record_state_key(&record.proposal_id)?;
-    let value_bytes = record.encode()?;
-    let vh = value_hash(&value_bytes)?;
-    Ok((key, leaf_hash(&key, &vh)?))
+    let value = record.encode()?;
+    Ok(Write {
+        state_key: key,
+        value,
+    })
 }
 
-fn proposal_vote_record_leaf(
+fn proposal_vote_record_write(
     proposal_id: &Digest,
     voter: &Digest,
     record: &ProposalVoteRecordV1,
-) -> StateResult<Leaf> {
+) -> StateResult<Write> {
     let key = proposal_vote_record_state_key(proposal_id, voter)?;
-    let value_bytes = record.encode();
-    let vh = value_hash(&value_bytes)?;
-    Ok((key, leaf_hash(&key, &vh)?))
+    let value = record.encode();
+    Ok(Write {
+        state_key: key,
+        value,
+    })
 }
 
 #[cfg(test)]
@@ -400,14 +498,16 @@ mod tests {
 
     use super::{
         apply_propose, apply_propose_with_receipt, apply_vote, apply_vote_with_receipt,
-        finalize_proposal,
+        chamber_weights, fetch_proposal, fetch_proposal_vote, finalize_proposal,
     };
     use crate::{
         error::{StateError, StateResult},
+        governance::{proposal_record_state_key, proposal_vote_record_state_key},
         governance_payload::{GovernancePayloadV1, VoteChoice},
         proposal_record::{ProposalRecordV1, ProposalStatus},
         proposal_vote_record::ProposalVoteRecordV1,
         receipt::ReceiptStatus,
+        state_store::StateReader,
         validator_record::{ValidatorRecordV1, ValidatorStatus},
     };
 
@@ -437,7 +537,7 @@ mod tests {
     fn propose_succeeds_from_an_active_validator() -> StateResult<()> {
         let proposer = validator(ValidatorStatus::Active, 1_000);
         let payload = propose_payload();
-        let (proposal_id, [leaf]) = apply_propose(
+        let (proposal_id, [write]) = apply_propose(
             SENDER,
             &proposer,
             &payload,
@@ -464,7 +564,7 @@ mod tests {
             validator_chamber_total_weight: 20,
             staker_chamber_total_weight: 1_000_000,
         };
-        assert_eq!(leaf.1, super::proposal_record_leaf(&expected_record)?.1);
+        assert_eq!(write, super::proposal_record_write(&expected_record)?);
         Ok(())
     }
 
@@ -538,7 +638,7 @@ mod tests {
         let proposal = sample_proposal();
         let payload = vote_payload(VoteChoice::For);
 
-        let [record_leaf, _vote_leaf] = apply_vote(
+        let [record_write, _vote_write] = apply_vote(
             SENDER,
             Some(&voter),
             &payload,
@@ -552,7 +652,7 @@ mod tests {
             staker_chamber_for: 500,
             ..proposal
         };
-        assert_eq!(record_leaf.1, super::proposal_record_leaf(&expected)?.1);
+        assert_eq!(record_write, super::proposal_record_write(&expected)?);
         Ok(())
     }
 
@@ -562,7 +662,7 @@ mod tests {
         let proposal = sample_proposal();
         let payload = vote_payload(VoteChoice::Against);
 
-        let [record_leaf, _vote_leaf] = apply_vote(
+        let [record_write, _vote_write] = apply_vote(
             SENDER,
             Some(&voter),
             &payload,
@@ -576,7 +676,7 @@ mod tests {
             staker_chamber_against: 500,
             ..proposal
         };
-        assert_eq!(record_leaf.1, super::proposal_record_leaf(&expected)?.1);
+        assert_eq!(record_write, super::proposal_record_write(&expected)?);
         Ok(())
     }
 
@@ -694,13 +794,13 @@ mod tests {
         proposal.validator_chamber_for = 1;
         proposal.staker_chamber_for = 900_000; // staker chamber meets quorum on its own
 
-        let [leaf] = finalize_proposal(&proposal, BlockHeight::new(600), 2, 3)?
+        let [write] = finalize_proposal(&proposal, BlockHeight::new(600), 2, 3)?
             .ok_or(StateError::UnknownProposal)?;
         let expected = ProposalRecordV1 {
             status: ProposalStatus::Expired,
             ..proposal
         };
-        assert_eq!(leaf.1, super::proposal_record_leaf(&expected)?.1);
+        assert_eq!(write, super::proposal_record_write(&expected)?);
         Ok(())
     }
 
@@ -710,13 +810,13 @@ mod tests {
         proposal.validator_chamber_for = 20; // full validator turnout, unanimous for
         proposal.staker_chamber_against = 900_000; // staker chamber meets quorum, votes against
 
-        let [leaf] = finalize_proposal(&proposal, BlockHeight::new(600), 2, 3)?
+        let [write] = finalize_proposal(&proposal, BlockHeight::new(600), 2, 3)?
             .ok_or(StateError::UnknownProposal)?;
         let expected = ProposalRecordV1 {
             status: ProposalStatus::Rejected,
             ..proposal
         };
-        assert_eq!(leaf.1, super::proposal_record_leaf(&expected)?.1);
+        assert_eq!(write, super::proposal_record_write(&expected)?);
         Ok(())
     }
 
@@ -729,13 +829,117 @@ mod tests {
         proposal.staker_chamber_for = 800_000;
         proposal.staker_chamber_against = 100_000;
 
-        let [leaf] = finalize_proposal(&proposal, BlockHeight::new(600), 2, 3)?
+        let [write] = finalize_proposal(&proposal, BlockHeight::new(600), 2, 3)?
             .ok_or(StateError::UnknownProposal)?;
         let expected = ProposalRecordV1 {
             status: ProposalStatus::Passed,
             ..proposal
         };
-        assert_eq!(leaf.1, super::proposal_record_leaf(&expected)?.1);
+        assert_eq!(write, super::proposal_record_write(&expected)?);
+        Ok(())
+    }
+
+    struct MapReader(std::collections::BTreeMap<[u8; 32], Vec<u8>>);
+
+    impl StateReader for MapReader {
+        fn get(&self, state_key: &[u8; 32]) -> StateResult<Option<Vec<u8>>> {
+            Ok(self.0.get(state_key).cloned())
+        }
+    }
+
+    fn candidate(id: [u8; 32], bonded_stake: u128, status: ValidatorStatus) -> ValidatorRecordV1 {
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, id);
+        ValidatorRecordV1 {
+            validator_id: id,
+            consensus_key: keypair.key_descriptor(),
+            bonded_stake,
+            voting_power: bonded_stake,
+            status,
+            pending_unbonding: None,
+        }
+    }
+
+    #[test]
+    fn chamber_weights_counts_active_validators_and_sums_all_bonded_stake() -> StateResult<()> {
+        let candidates = [
+            candidate([0x01; 32], 100, ValidatorStatus::Active),
+            candidate([0x02; 32], 200, ValidatorStatus::Active),
+            candidate([0x03; 32], 300, ValidatorStatus::Inactive),
+            candidate([0x04; 32], 400, ValidatorStatus::Candidate),
+        ];
+
+        let weights = chamber_weights(&candidates)?;
+
+        // Validator chamber: one vote per Active validator, not
+        // stake-weighted — 2 of the 4 candidates.
+        assert_eq!(weights.validator_chamber_total_weight, 2);
+        // Staker chamber: every candidate's own bonded_stake, regardless
+        // of status (ADR-0025's own "Scoping note").
+        assert_eq!(weights.staker_chamber_total_weight, 1_000);
+        Ok(())
+    }
+
+    #[test]
+    fn chamber_weights_of_an_empty_candidate_set_is_zero() -> StateResult<()> {
+        let weights = chamber_weights(&[])?;
+        assert_eq!(weights.validator_chamber_total_weight, 0);
+        assert_eq!(weights.staker_chamber_total_weight, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn chamber_weights_rejects_a_staker_total_overflow() {
+        let candidates = [
+            candidate([0x01; 32], u128::MAX, ValidatorStatus::Active),
+            candidate([0x02; 32], 1, ValidatorStatus::Active),
+        ];
+        assert_eq!(
+            chamber_weights(&candidates),
+            Err(StateError::GovernanceTallyOverflow)
+        );
+    }
+
+    #[test]
+    fn fetch_proposal_defaults_to_none_when_absent() -> StateResult<()> {
+        let reader = MapReader(std::collections::BTreeMap::new());
+        assert_eq!(fetch_proposal(&reader, &[0x44; 32])?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_proposal_reads_a_stored_value() -> StateResult<()> {
+        let proposal = sample_proposal();
+        let key = proposal_record_state_key(&proposal.proposal_id)?;
+        let reader = MapReader(std::collections::BTreeMap::from([(
+            key,
+            proposal.encode()?,
+        )]));
+        assert_eq!(
+            fetch_proposal(&reader, &proposal.proposal_id)?,
+            Some(proposal)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_proposal_vote_defaults_to_none_when_absent() -> StateResult<()> {
+        let reader = MapReader(std::collections::BTreeMap::new());
+        assert_eq!(fetch_proposal_vote(&reader, &[0x44; 32], &SENDER)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_proposal_vote_reads_a_stored_value() -> StateResult<()> {
+        let proposal_id = [0x44; 32];
+        let vote = ProposalVoteRecordV1 {
+            choice: VoteChoice::For,
+        };
+        let key = proposal_vote_record_state_key(&proposal_id, &SENDER)?;
+        let reader = MapReader(std::collections::BTreeMap::from([(key, vote.encode())]));
+        assert_eq!(
+            fetch_proposal_vote(&reader, &proposal_id, &SENDER)?,
+            Some(vote)
+        );
         Ok(())
     }
 }
