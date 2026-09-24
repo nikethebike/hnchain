@@ -894,15 +894,18 @@ change.
 
 ## Open Decisions
 
-- final transaction envelope fields (every field except `payload` is now
-  decided above: `chain_id`/`network_id`/`tx_version`/`tx_type`/`sender`/
-  `bootstrap_key` (ADR-0027)/`validity_window`/`fee_limit`'s type/
-  `access_list`; `payload` shape is now decided for 6 of 9 `tx_type`s —
-  `transfer`, `stake`, `unstake`, `validator_update`, `governance`
-  (ADR-0025), `permission_update` (ADR-0026), §5 — each remaining one
-  parked on a named blocker, not merely unaddressed; `stake`/`unstake`/
-  `governance` are all fully closed — minimum bond `10,000 HNCOIN` and
-  governance quorum/voting-window are all decided, ADR-0023)
+- final transaction envelope fields — **resolved and implemented**
+  (every field except `payload` is decided above:
+  `chain_id`/`network_id`/`tx_version`/`tx_type`/`sender`/`bootstrap_key`
+  (ADR-0027)/`validity_window`/`fee_limit`'s type/`access_list`;
+  `TransactionEnvelope`/`TransactionSigningPayload` are now concrete
+  Rust types, `hn_state::transaction_envelope`; `payload` shape is now
+  decided for 6 of 9 `tx_type`s — `transfer`, `stake`, `unstake`,
+  `validator_update`, `governance` (ADR-0025), `permission_update`
+  (ADR-0026), §5 — each remaining one parked on a named blocker, not
+  merely unaddressed; `stake`/`unstake`/`governance` are all fully
+  closed — minimum bond `10,000 HNCOIN` and governance quorum/voting-
+  window are all decided, ADR-0023)
 - newly-created accounts' Metadata initial value (`transfer` implicit
   creation, §5) — blocked on account-state.md §4.6, still fully
   undecided. Permission's own initial value is no longer blocked: a

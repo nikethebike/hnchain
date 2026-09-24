@@ -1,5 +1,5 @@
 use hn_crypto::Digest;
-use hn_hncs::{Decoder, write_fixed_bytes, write_set};
+use hn_hncs::{Decoder, HncsResult, write_fixed_bytes, write_set};
 
 use crate::error::{StateError, StateResult};
 
@@ -26,50 +26,52 @@ pub struct AccessListV1 {
 
 impl AccessListV1 {
     /// Encodes this value as canonical HNCS bytes (ADR-0006, "Access
-    /// List"): each of `reads`/`writes` is an independent bounded
-    /// canonical set (HNCS `set`, ADR-0004 — sorted by encoded bytes,
-    /// duplicates rejected).
+    /// List").
     pub fn encode(&self) -> StateResult<Vec<u8>> {
         let mut out = Vec::new();
-        write_set(
-            &mut out,
-            &self.reads,
-            MAX_ACCESS_LIST_ENTRIES,
-            |out, key| {
-                write_fixed_bytes(out, key);
-                Ok(())
-            },
-        )
-        .map_err(StateError::Encoding)?;
-        write_set(
-            &mut out,
-            &self.writes,
-            MAX_ACCESS_LIST_ENTRIES,
-            |out, key| {
-                write_fixed_bytes(out, key);
-                Ok(())
-            },
-        )
-        .map_err(StateError::Encoding)?;
+        self.encode_into(&mut out).map_err(StateError::Encoding)?;
         Ok(out)
+    }
+
+    /// Appends this value's canonical HNCS bytes to `out`. Shared by
+    /// [`AccessListV1::encode`] and by [`crate::TransactionEnvelope`],
+    /// which embeds this value flat rather than as a separately
+    /// length-prefixed blob. Each of `reads`/`writes` is an independent
+    /// bounded canonical set (HNCS `set`, ADR-0004 — sorted by encoded
+    /// bytes, duplicates rejected). `HncsResult`-typed: a fixed-width
+    /// `state_key` has no possible domain-specific decode error, so this
+    /// composes directly with generic HNCS helpers.
+    pub fn encode_into(&self, out: &mut Vec<u8>) -> HncsResult<()> {
+        write_set(out, &self.reads, MAX_ACCESS_LIST_ENTRIES, |out, key| {
+            write_fixed_bytes(out, key);
+            Ok(())
+        })?;
+        write_set(out, &self.writes, MAX_ACCESS_LIST_ENTRIES, |out, key| {
+            write_fixed_bytes(out, key);
+            Ok(())
+        })?;
+        Ok(())
     }
 
     /// Decodes and validates canonical HNCS bytes produced by
     /// [`AccessListV1::encode`].
     pub fn decode(bytes: &[u8]) -> StateResult<Self> {
         let mut decoder = Decoder::new(bytes);
-
-        let reads = decoder
-            .read_set(MAX_ACCESS_LIST_ENTRIES, |decoder| {
-                decoder.read_fixed_bytes::<32>()
-            })
-            .map_err(StateError::Encoding)?;
-        let writes = decoder
-            .read_set(MAX_ACCESS_LIST_ENTRIES, |decoder| {
-                decoder.read_fixed_bytes::<32>()
-            })
-            .map_err(StateError::Encoding)?;
+        let access_list = Self::decode_from(&mut decoder).map_err(StateError::Encoding)?;
         decoder.finish().map_err(StateError::Encoding)?;
+        Ok(access_list)
+    }
+
+    /// Decodes this value's fields from `decoder` without requiring the
+    /// decoder to be exhausted afterward — the counterpart to
+    /// [`AccessListV1::encode_into`], shared the same way.
+    pub fn decode_from(decoder: &mut Decoder<'_>) -> HncsResult<Self> {
+        let reads = decoder.read_set(MAX_ACCESS_LIST_ENTRIES, |decoder| {
+            decoder.read_fixed_bytes::<32>()
+        })?;
+        let writes = decoder.read_set(MAX_ACCESS_LIST_ENTRIES, |decoder| {
+            decoder.read_fixed_bytes::<32>()
+        })?;
 
         Ok(Self { reads, writes })
     }

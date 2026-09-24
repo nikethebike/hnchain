@@ -160,6 +160,28 @@
 //! back to single-key mode is deliberately not supported (blocked on
 //! Identity State/`active_key(...)`, ADR-0002's own separately open
 //! item, surfaced but not resolved by ADR-0026).
+//!
+//! [`transaction_envelope`] adds `TransactionEnvelope`/
+//! `TransactionSigningPayload` themselves as concrete Rust types
+//! (ADR-0006, every field decision through ADR-0027's `bootstrap_key`)
+//! — previously the only major structure in this project that existed
+//! solely "by field," each piece ([`stake_payload`], [`access_list`],
+//! [`validity_window`], `hn_crypto::SignatureEnvelope`, ...) decided and
+//! implemented independently with no containing struct. `payload` stays
+//! opaque bytes on `TransactionEnvelope` itself, not a
+//! [`TransactionPayload`] field directly — 3 of 9 `tx_type`s
+//! (`contract_deploy`/`contract_call`/`system`) have no decided payload
+//! schema yet, so decoding the envelope must not require every
+//! `tx_type` to be interpretable; [`decode_transaction_payload`]
+//! interprets `payload` separately, given `tx_type`, for the 6 that do.
+//! [`ValidityWindowV1`]/[`AccessListV1`] gained `encode_into`/
+//! `decode_from` alongside their existing standalone `encode`/`decode`,
+//! the same flat-embedding convention `SignatureEnvelope` already
+//! established, so `TransactionEnvelope` can embed them without a
+//! redundant length-prefixed wrapper. No verification method exists
+//! yet (resolving `bootstrap_key`/`IdentityValueV1`/multisig against
+//! real state is separate follow-up work — no block-processing
+//! pipeline exists anywhere in this codebase to call it).
 
 mod access_list;
 mod account;
@@ -189,6 +211,7 @@ mod proposal_vote_record;
 mod receipt;
 mod stake_payload;
 mod state_store;
+mod transaction_envelope;
 mod transfer;
 mod transfer_payload;
 mod tree;
@@ -247,6 +270,10 @@ pub use proposal_vote_record::{PROPOSAL_VOTE_RECORD_VERSION_1, ProposalVoteRecor
 pub use receipt::{RECEIPT_VERSION_1, ReceiptStatus, ReceiptV1};
 pub use stake_payload::{STAKE_PAYLOAD_VERSION_1, StakePayloadV1};
 pub use state_store::{StateReader, StateWriter};
+pub use transaction_envelope::{
+    MAX_SIGNATURES, MAX_TRANSACTION_SIZE, TX_VERSION_1, TransactionEnvelope, TransactionPayload,
+    TransactionSigningPayload, TxType, decode_transaction_payload,
+};
 pub use transfer::{TransferParty, apply_transfer, apply_transfer_with_receipt};
 pub use transfer_payload::{TRANSFER_PAYLOAD_VERSION_1, TransferPayloadV1};
 pub use tree::{Leaf, compute_state_root};

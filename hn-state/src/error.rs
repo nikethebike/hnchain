@@ -407,6 +407,36 @@ pub enum StateError {
         /// How many distinct signatures actually verified.
         valid: usize,
     },
+    /// A decoded `TransactionEnvelope.tx_version` does not match
+    /// [`crate::transaction_envelope::TX_VERSION_1`], the only shape
+    /// this implementation understands.
+    UnsupportedTxVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `TransactionEnvelope.tx_type` byte is not a member of
+    /// the closed `tx_type` registry (ADR-0006, "Decided: `tx_type`
+    /// registry") — `0x00` is reserved and always invalid.
+    InvalidTxType {
+        /// The rejected byte.
+        value: u8,
+    },
+    /// A raw `TransactionEnvelope` byte slice exceeds
+    /// [`crate::transaction_envelope::MAX_TRANSACTION_SIZE`] (ADR-0006,
+    /// "Decided: Transaction size limit") — checked before attempting
+    /// to decode anything else.
+    TransactionTooLarge {
+        /// The rejected byte length.
+        size: usize,
+    },
+    /// [`crate::decode_transaction_payload`] was called with a
+    /// `tx_type` that has no decided payload schema yet
+    /// (`contract_deploy`/`contract_call`/`system`) — a structurally
+    /// valid `tx_type` registry value, not a malformed encoding.
+    UndecidedTransactionPayload {
+        /// The `tx_type` byte with no payload schema.
+        tx_type: u8,
+    },
 }
 
 impl From<HashError> for StateError {
@@ -620,6 +650,20 @@ impl core::fmt::Display for StateError {
             Self::GovernanceTallyOverflow => {
                 formatter.write_str("governance chamber tally would overflow u128")
             }
+            Self::UnsupportedTxVersion { value } => {
+                write!(formatter, "unsupported tx_version: {value}")
+            }
+            Self::InvalidTxType { value } => {
+                write!(formatter, "invalid tx_type: 0x{value:02x}")
+            }
+            Self::TransactionTooLarge { size } => write!(
+                formatter,
+                "transaction of {size} bytes exceeds MAX_TRANSACTION_SIZE"
+            ),
+            Self::UndecidedTransactionPayload { tx_type } => write!(
+                formatter,
+                "tx_type 0x{tx_type:02x} has no decided payload schema yet"
+            ),
         }
     }
 }

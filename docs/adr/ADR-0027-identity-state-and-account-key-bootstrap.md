@@ -259,13 +259,15 @@ Redundant or missing `bootstrap_key`:
 ## Compatibility
 
 Additive to `TransactionEnvelope`'s own conceptual field list — as with
-ADR-0026's `key_reference`, this is refining an already-decided-but-
-never-yet-implemented structure (`TransactionEnvelope`/
-`TransactionSigningPayload` have no concrete Rust type anywhere in this
-codebase yet; only their individual field shapes are implemented
-piecemeal), not a breaking change to shipped wire bytes. `IdentityValueV1`
-fills a previously-placeholder leaf (`SectionId 0x01`) with no prior
-consensus-relevant content to preserve.
+ADR-0026's `key_reference`, this refined an already-decided-but-not-
+yet-implemented structure at the time this ADR was written.
+`TransactionEnvelope`/`TransactionSigningPayload` are now implemented
+(`hn_state::transaction_envelope`, a direct follow-up to this ADR — see
+its own crate-level documentation), with `bootstrap_key` included from
+the start, so this was not a breaking change to any shipped wire bytes.
+`IdentityValueV1` itself remains unimplemented (below): it fills a
+previously-placeholder leaf (`SectionId 0x01`) with no prior
+consensus-relevant content to preserve, whenever it is built.
 
 ## Open Decisions
 
@@ -273,9 +275,14 @@ consensus-relevant content to preserve.
   first written) — a distinct, separate decision this ADR does not
   make; ADR-0010's own "Key Rotation" (validator consensus keys) is
   unrelated and unaffected
-- `TransactionEnvelope`/`TransactionSigningPayload` themselves remain
-  unimplemented in code — this ADR decides their (now one field larger)
-  conceptual shape, not the Rust types
+- `IdentityValueV1` itself, and the bootstrap verification procedure
+  (address-derivation check, signature verification, the write-on-
+  success side effect) — not yet implemented; `TransactionEnvelope`
+  now carries `bootstrap_key` structurally
+  (`hn_state::transaction_envelope`), but nothing yet resolves it
+  against real state, the same "no block-processing pipeline exists
+  yet" situation most of this crate's own state-transition primitives
+  are already in
 - whether a future post-quantum or alternate algorithm profile changes
   `IdentityValueV1`'s bound `public_key` length assumptions (already
   algorithm-agile via `PUBLIC_KEY_MAX_LEN`, ADR-0002's own reserved

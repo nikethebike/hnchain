@@ -1,5 +1,5 @@
 use hn_core::BlockHeight;
-use hn_hncs::{Decoder, write_optional, write_u64};
+use hn_hncs::{Decoder, HncsResult, write_optional, write_u64};
 
 use crate::error::{StateError, StateResult};
 
@@ -17,37 +17,55 @@ pub struct ValidityWindowV1 {
 
 impl ValidityWindowV1 {
     /// Encodes this value as canonical HNCS bytes (ADR-0006, "Validity
-    /// Window"). Both bounds are independent HNCS `optional` fields
-    /// (ADR-0004), not a sentinel value, and `ValidityWindowV1` itself
-    /// is not nested in an outer `optional`: "no window" is already
-    /// expressible as both bounds absent.
+    /// Window").
     pub fn encode(&self) -> StateResult<Vec<u8>> {
         let mut out = Vec::with_capacity(2 + 16);
-        write_optional(&mut out, self.min_height.as_ref(), |out, height| {
-            write_u64(out, height.get());
-            Ok(())
-        })
-        .map_err(StateError::Encoding)?;
-        write_optional(&mut out, self.max_height.as_ref(), |out, height| {
-            write_u64(out, height.get());
-            Ok(())
-        })
-        .map_err(StateError::Encoding)?;
+        self.encode_into(&mut out).map_err(StateError::Encoding)?;
         Ok(out)
+    }
+
+    /// Appends this value's canonical HNCS bytes to `out`. Shared by
+    /// [`ValidityWindowV1::encode`] and by
+    /// [`crate::TransactionEnvelope`], which embeds this value flat
+    /// rather than as a separately length-prefixed blob — the same
+    /// `encode_into`/`decode_from` convention
+    /// [`hn_crypto::SignatureEnvelope`] already established. Both
+    /// bounds are independent HNCS `optional` fields (ADR-0004), not a
+    /// sentinel value, and `ValidityWindowV1` itself is not nested in
+    /// an outer `optional`: "no window" is already expressible as both
+    /// bounds absent. `HncsResult`-typed: neither bound's decode can
+    /// fail with a domain-specific error (every `u64` is a valid
+    /// height), so this composes directly with generic HNCS helpers,
+    /// unlike [`crate::key_descriptor::decode_key_descriptor`].
+    pub fn encode_into(&self, out: &mut Vec<u8>) -> HncsResult<()> {
+        write_optional(out, self.min_height.as_ref(), |out, height| {
+            write_u64(out, height.get());
+            Ok(())
+        })?;
+        write_optional(out, self.max_height.as_ref(), |out, height| {
+            write_u64(out, height.get());
+            Ok(())
+        })?;
+        Ok(())
     }
 
     /// Decodes canonical HNCS bytes produced by
     /// [`ValidityWindowV1::encode`].
     pub fn decode(bytes: &[u8]) -> StateResult<Self> {
         let mut decoder = Decoder::new(bytes);
-
-        let min_height = decoder
-            .read_optional(|decoder| decoder.read_u64().map(BlockHeight::new))
-            .map_err(StateError::Encoding)?;
-        let max_height = decoder
-            .read_optional(|decoder| decoder.read_u64().map(BlockHeight::new))
-            .map_err(StateError::Encoding)?;
+        let window = Self::decode_from(&mut decoder).map_err(StateError::Encoding)?;
         decoder.finish().map_err(StateError::Encoding)?;
+        Ok(window)
+    }
+
+    /// Decodes this value's fields from `decoder` without requiring the
+    /// decoder to be exhausted afterward — the counterpart to
+    /// [`ValidityWindowV1::encode_into`], shared the same way.
+    pub fn decode_from(decoder: &mut Decoder<'_>) -> HncsResult<Self> {
+        let min_height =
+            decoder.read_optional(|decoder| decoder.read_u64().map(BlockHeight::new))?;
+        let max_height =
+            decoder.read_optional(|decoder| decoder.read_u64().map(BlockHeight::new))?;
 
         Ok(Self {
             min_height,
