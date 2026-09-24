@@ -54,3 +54,24 @@ pub trait StateWriter {
     /// replacing whatever was stored there before.
     fn set(&mut self, state_key: Digest, value: Vec<u8>) -> StateResult<()>;
 }
+
+/// One `(state_key, value)` write-set entry — every `apply_*` function
+/// in this crate's real output (ADR-0031, "Write-Set Value Bytes And
+/// Overlay State Reader"), replacing the earlier `Leaf`-only
+/// `(state_key, leaf_hash)` shape those functions used to return.
+/// `value` is exactly what [`StateReader::get`] would return for
+/// `state_key` after this write applies (already-canonical HNCS bytes,
+/// not a hash) — the same "canonical bytes at boundaries" contract
+/// [`StateReader`]/[`StateWriter`] already state, bundled once so it can
+/// travel as a single return value through an `apply_*` function, an
+/// [`crate::AppliedTransaction::write_set`], and into
+/// [`crate::OverlayReader`]. A [`crate::tree::Leaf`] (hash pair) is
+/// still derivable on demand from a `Write` via
+/// [`crate::leaf_for_write`], never computed redundantly alongside it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Write {
+    /// The state key this write targets (ADR-0007).
+    pub state_key: Digest,
+    /// The already-canonical HNCS bytes to store there.
+    pub value: Vec<u8>,
+}

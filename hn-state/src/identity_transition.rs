@@ -3,9 +3,7 @@ use hn_crypto::{Digest, KeyDescriptor, account_address_body};
 use crate::account::{AccountSection, account_section_state_key};
 use crate::error::{StateError, StateResult};
 use crate::identity_value::IdentityValueV1;
-use crate::node::{leaf_hash, value_hash};
-use crate::state_store::StateReader;
-use crate::tree::Leaf;
+use crate::state_store::{StateReader, Write};
 
 /// Fetches and decodes `account`'s current [`IdentityValueV1`] from
 /// `reader`, or `None` if nothing is stored at its Identity-section
@@ -95,11 +93,11 @@ pub fn resolve_account_signing_key(
 pub fn apply_identity_bootstrap(
     sender: Digest,
     bootstrap_key: &KeyDescriptor,
-) -> StateResult<Leaf> {
+) -> StateResult<Write> {
     let value = IdentityValueV1 {
         key: *bootstrap_key,
     };
-    identity_value_leaf(&sender, &value)
+    identity_value_write(&sender, &value)
 }
 
 /// Computes the one write-set leaf a `permission_update`
@@ -116,16 +114,18 @@ pub fn apply_identity_bootstrap(
 /// transaction-validation concern checked before this function runs,
 /// the same boundary [`apply_identity_bootstrap`] already draws for its
 /// own address-derivation check.
-pub fn apply_identity_rotation(sender: Digest, new_key: &KeyDescriptor) -> StateResult<Leaf> {
+pub fn apply_identity_rotation(sender: Digest, new_key: &KeyDescriptor) -> StateResult<Write> {
     let value = IdentityValueV1 { key: *new_key };
-    identity_value_leaf(&sender, &value)
+    identity_value_write(&sender, &value)
 }
 
-fn identity_value_leaf(sender: &Digest, value: &IdentityValueV1) -> StateResult<Leaf> {
+fn identity_value_write(sender: &Digest, value: &IdentityValueV1) -> StateResult<Write> {
     let key = account_section_state_key(sender, AccountSection::Identity)?;
-    let value_bytes = value.encode()?;
-    let vh = value_hash(&value_bytes)?;
-    Ok((key, leaf_hash(&key, &vh)?))
+    let value = value.encode()?;
+    Ok(Write {
+        state_key: key,
+        value,
+    })
 }
 
 #[cfg(test)]
@@ -200,18 +200,18 @@ mod tests {
     #[test]
     fn apply_identity_bootstrap_produces_the_identity_leaf() -> StateResult<()> {
         let descriptor = keypair(0x05).key_descriptor();
-        let leaf = apply_identity_bootstrap(SENDER, &descriptor)?;
+        let write = apply_identity_bootstrap(SENDER, &descriptor)?;
 
         let expected_key = crate::account::account_section_state_key(
             &SENDER,
             crate::account::AccountSection::Identity,
         )?;
-        assert_eq!(leaf.0, expected_key);
+        assert_eq!(write.state_key, expected_key);
 
         let expected_value = IdentityValueV1 { key: descriptor };
         assert_eq!(
-            leaf.1,
-            super::identity_value_leaf(&SENDER, &expected_value)?.1
+            write,
+            super::identity_value_write(&SENDER, &expected_value)?
         );
         Ok(())
     }
@@ -219,18 +219,18 @@ mod tests {
     #[test]
     fn apply_identity_rotation_produces_the_identity_leaf() -> StateResult<()> {
         let new_key = keypair(0x06).key_descriptor();
-        let leaf = super::apply_identity_rotation(SENDER, &new_key)?;
+        let write = super::apply_identity_rotation(SENDER, &new_key)?;
 
         let expected_key = crate::account::account_section_state_key(
             &SENDER,
             crate::account::AccountSection::Identity,
         )?;
-        assert_eq!(leaf.0, expected_key);
+        assert_eq!(write.state_key, expected_key);
 
         let expected_value = IdentityValueV1 { key: new_key };
         assert_eq!(
-            leaf.1,
-            super::identity_value_leaf(&SENDER, &expected_value)?.1
+            write,
+            super::identity_value_write(&SENDER, &expected_value)?
         );
         Ok(())
     }

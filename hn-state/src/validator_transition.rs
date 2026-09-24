@@ -3,11 +3,10 @@ use hn_crypto::Digest;
 
 use crate::{
     error::{StateError, StateResult},
-    node::{leaf_hash, value_hash},
     receipt::{ReceiptStatus, ReceiptV1},
     stake_payload::StakePayloadV1,
-    transfer::balance_leaf,
-    tree::Leaf,
+    state_store::Write,
+    transfer::balance_write,
     unstake_payload::UnstakePayloadV1,
     validator::{ValidatorSection, validator_section_state_key},
     validator_record::{PendingUnbondingV1, ValidatorRecordV1, ValidatorStatus},
@@ -60,7 +59,10 @@ pub const MINIMUM_VALIDATOR_BOND: u128 = 10_000_000_000_000;
 /// practically unreachable given realistic amounts, but not silently
 /// wrapped, mirroring [`crate::apply_transfer`]'s own `BalanceOverflow`
 /// check).
-pub fn apply_stake(record: &ValidatorRecordV1, payload: &StakePayloadV1) -> StateResult<[Leaf; 1]> {
+pub fn apply_stake(
+    record: &ValidatorRecordV1,
+    payload: &StakePayloadV1,
+) -> StateResult<[Write; 1]> {
     let bonded_stake = record
         .bonded_stake
         .checked_add(payload.amount)
@@ -69,7 +71,7 @@ pub fn apply_stake(record: &ValidatorRecordV1, payload: &StakePayloadV1) -> Stat
         bonded_stake,
         ..record.clone()
     };
-    Ok([validator_record_leaf(&updated)?])
+    Ok([validator_record_write(&updated)?])
 }
 
 /// Applies a `stake` and produces its [`ReceiptV1`] in one step, mirroring
@@ -84,10 +86,10 @@ pub fn apply_stake_with_receipt(
     record: &ValidatorRecordV1,
     payload: &StakePayloadV1,
     tx_id: Digest,
-) -> StateResult<(Option<[Leaf; 1]>, ReceiptV1)> {
+) -> StateResult<(Option<[Write; 1]>, ReceiptV1)> {
     match apply_stake(record, payload) {
-        Ok(leaves) => Ok((
-            Some(leaves),
+        Ok(writes) => Ok((
+            Some(writes),
             ReceiptV1 {
                 tx_id,
                 status: ReceiptStatus::Success,
@@ -123,7 +125,7 @@ pub fn apply_unstake(
     record: &ValidatorRecordV1,
     payload: &UnstakePayloadV1,
     current_height: BlockHeight,
-) -> StateResult<[Leaf; 1]> {
+) -> StateResult<[Write; 1]> {
     if record.pending_unbonding.is_some() {
         return Err(StateError::PendingUnbondingAlreadyExists);
     }
@@ -143,7 +145,7 @@ pub fn apply_unstake(
         }),
         ..record.clone()
     };
-    Ok([validator_record_leaf(&updated)?])
+    Ok([validator_record_write(&updated)?])
 }
 
 /// Applies an `unstake` and produces its [`ReceiptV1`] in one step. See
@@ -161,10 +163,10 @@ pub fn apply_unstake_with_receipt(
     payload: &UnstakePayloadV1,
     current_height: BlockHeight,
     tx_id: Digest,
-) -> StateResult<(Option<[Leaf; 1]>, ReceiptV1)> {
+) -> StateResult<(Option<[Write; 1]>, ReceiptV1)> {
     match apply_unstake(record, payload, current_height) {
-        Ok(leaves) => Ok((
-            Some(leaves),
+        Ok(writes) => Ok((
+            Some(writes),
             ReceiptV1 {
                 tx_id,
                 status: ReceiptStatus::Success,
@@ -216,7 +218,7 @@ pub fn apply_unbonding_release(
     record: &ValidatorRecordV1,
     current_native_balance: u128,
     current_height: BlockHeight,
-) -> StateResult<Option<[Leaf; 2]>> {
+) -> StateResult<Option<[Write; 2]>> {
     let Some(pending) = record.pending_unbonding else {
         return Ok(None);
     };
@@ -233,8 +235,8 @@ pub fn apply_unbonding_release(
     };
 
     Ok(Some([
-        validator_record_leaf(&updated_record)?,
-        balance_leaf(&record.validator_id, new_balance)?,
+        validator_record_write(&updated_record)?,
+        balance_write(&record.validator_id, new_balance)?,
     ]))
 }
 
@@ -290,7 +292,7 @@ pub fn apply_validator_update(
     existing: Option<&ValidatorRecordV1>,
     sender: Digest,
     payload: &ValidatorUpdatePayloadV1,
-) -> StateResult<[Leaf; 1]> {
+) -> StateResult<[Write; 1]> {
     let updated = match payload.operation {
         ValidatorOperation::Register => {
             if existing.is_some() {
@@ -366,7 +368,7 @@ pub fn apply_validator_update(
         }
     };
 
-    Ok([validator_record_leaf(&updated)?])
+    Ok([validator_record_write(&updated)?])
 }
 
 /// Applies a `validator_update` and produces its [`ReceiptV1`] in one
@@ -380,10 +382,10 @@ pub fn apply_validator_update_with_receipt(
     sender: Digest,
     payload: &ValidatorUpdatePayloadV1,
     tx_id: Digest,
-) -> StateResult<(Option<[Leaf; 1]>, ReceiptV1)> {
+) -> StateResult<(Option<[Write; 1]>, ReceiptV1)> {
     match apply_validator_update(existing, sender, payload) {
-        Ok(leaves) => Ok((
-            Some(leaves),
+        Ok(writes) => Ok((
+            Some(writes),
             ReceiptV1 {
                 tx_id,
                 status: ReceiptStatus::Success,
@@ -427,11 +429,13 @@ fn require_status(
     }
 }
 
-fn validator_record_leaf(record: &ValidatorRecordV1) -> StateResult<Leaf> {
+fn validator_record_write(record: &ValidatorRecordV1) -> StateResult<Write> {
     let key = validator_section_state_key(&record.validator_id, ValidatorSection::Record)?;
-    let value_bytes = record.encode()?;
-    let vh = value_hash(&value_bytes)?;
-    Ok((key, leaf_hash(&key, &vh)?))
+    let value = record.encode()?;
+    Ok(Write {
+        state_key: key,
+        value,
+    })
 }
 
 #[cfg(test)]
@@ -472,16 +476,16 @@ mod tests {
         let before = record(1_000, 700, ValidatorStatus::Active);
         let payload = StakePayloadV1 { amount: 300 };
 
-        let [leaf] = apply_stake(&before, &payload)?;
+        let [write] = apply_stake(&before, &payload)?;
 
         let expected_key = validator_section_state_key(&SENDER, ValidatorSection::Record)?;
-        assert_eq!(leaf.0, expected_key);
+        assert_eq!(write.state_key, expected_key);
 
         let after = ValidatorRecordV1 {
             bonded_stake: 1_300,
             ..before.clone()
         };
-        assert_eq!(leaf.1, super::validator_record_leaf(&after)?.1);
+        assert_eq!(write, super::validator_record_write(&after)?);
         Ok(())
     }
 
@@ -499,8 +503,8 @@ mod tests {
     fn stake_with_receipt_yields_success() -> StateResult<()> {
         let before = record(1_000, 0, ValidatorStatus::Active);
         let payload = StakePayloadV1 { amount: 300 };
-        let (leaves, receipt) = apply_stake_with_receipt(&before, &payload, TX_ID)?;
-        assert!(leaves.is_some());
+        let (writes, receipt) = apply_stake_with_receipt(&before, &payload, TX_ID)?;
+        assert!(writes.is_some());
         assert_eq!(receipt.status, ReceiptStatus::Success);
         Ok(())
     }
@@ -509,8 +513,8 @@ mod tests {
     fn stake_with_receipt_yields_failed_on_overflow() -> StateResult<()> {
         let before = record(u128::MAX, 0, ValidatorStatus::Active);
         let payload = StakePayloadV1 { amount: 1 };
-        let (leaves, receipt) = apply_stake_with_receipt(&before, &payload, TX_ID)?;
-        assert!(leaves.is_none());
+        let (writes, receipt) = apply_stake_with_receipt(&before, &payload, TX_ID)?;
+        assert!(writes.is_none());
         assert_eq!(receipt.status, ReceiptStatus::Failed);
         Ok(())
     }
@@ -521,7 +525,7 @@ mod tests {
         let payload = UnstakePayloadV1 { amount: 300 };
         let current_height = hn_core::BlockHeight::new(1_000);
 
-        let [leaf] = apply_unstake(&before, &payload, current_height)?;
+        let [write] = apply_unstake(&before, &payload, current_height)?;
 
         let after = ValidatorRecordV1 {
             bonded_stake: 700,
@@ -533,7 +537,7 @@ mod tests {
             }),
             ..before.clone()
         };
-        assert_eq!(leaf.1, super::validator_record_leaf(&after)?.1);
+        assert_eq!(write, super::validator_record_write(&after)?);
         Ok(())
     }
 
@@ -566,9 +570,9 @@ mod tests {
     fn unstake_with_receipt_yields_failed_on_insufficient_stake() -> StateResult<()> {
         let before = record(10, 0, ValidatorStatus::Active);
         let payload = UnstakePayloadV1 { amount: 11 };
-        let (leaves, receipt) =
+        let (writes, receipt) =
             apply_unstake_with_receipt(&before, &payload, hn_core::BlockHeight::new(0), TX_ID)?;
-        assert!(leaves.is_none());
+        assert!(writes.is_none());
         assert_eq!(receipt.status, ReceiptStatus::Failed);
         Ok(())
     }
@@ -611,11 +615,11 @@ mod tests {
             pending_unbonding: None,
             ..before.clone()
         };
-        let expected_record_leaf = super::validator_record_leaf(&expected_record)?;
-        let expected_balance_leaf = crate::transfer::balance_leaf(&before.validator_id, 350)?;
+        let expected_record_write = super::validator_record_write(&expected_record)?;
+        let expected_balance_write = crate::transfer::balance_write(&before.validator_id, 350)?;
         assert_eq!(
             released,
-            Some([expected_record_leaf, expected_balance_leaf])
+            Some([expected_record_write, expected_balance_write])
         );
         Ok(())
     }
@@ -646,7 +650,7 @@ mod tests {
             new_consensus_key: Some(new_key()?),
         };
 
-        let [leaf] = apply_validator_update(None, SENDER, &payload)?;
+        let [write] = apply_validator_update(None, SENDER, &payload)?;
 
         let expected = ValidatorRecordV1 {
             validator_id: SENDER,
@@ -656,7 +660,7 @@ mod tests {
             status: ValidatorStatus::Registered,
             pending_unbonding: None,
         };
-        assert_eq!(leaf.1, super::validator_record_leaf(&expected)?.1);
+        assert_eq!(write, super::validator_record_write(&expected)?);
         Ok(())
     }
 
@@ -686,12 +690,12 @@ mod tests {
             ValidatorStatus::Jailed,
         ] {
             let existing = record(0, 0, status);
-            let [leaf] = apply_validator_update(Some(&existing), SENDER, &payload)?;
+            let [write] = apply_validator_update(Some(&existing), SENDER, &payload)?;
             let expected = ValidatorRecordV1 {
                 status: ValidatorStatus::Active,
                 ..existing
             };
-            assert_eq!(leaf.1, super::validator_record_leaf(&expected)?.1);
+            assert_eq!(write, super::validator_record_write(&expected)?);
         }
         Ok(())
     }
@@ -723,12 +727,12 @@ mod tests {
             operation: ValidatorOperation::Activate,
             new_consensus_key: None,
         };
-        let [leaf] = apply_validator_update(Some(&existing), SENDER, &payload)?;
+        let [write] = apply_validator_update(Some(&existing), SENDER, &payload)?;
         let expected = ValidatorRecordV1 {
             status: ValidatorStatus::Active,
             ..existing
         };
-        assert_eq!(leaf.1, super::validator_record_leaf(&expected)?.1);
+        assert_eq!(write, super::validator_record_write(&expected)?);
         Ok(())
     }
 
@@ -759,12 +763,12 @@ mod tests {
             operation: ValidatorOperation::Deactivate,
             new_consensus_key: None,
         };
-        let [leaf] = apply_validator_update(Some(&existing), SENDER, &payload)?;
+        let [write] = apply_validator_update(Some(&existing), SENDER, &payload)?;
         let expected = ValidatorRecordV1 {
             status: ValidatorStatus::Inactive,
             ..existing
         };
-        assert_eq!(leaf.1, super::validator_record_leaf(&expected)?.1);
+        assert_eq!(write, super::validator_record_write(&expected)?);
         Ok(())
     }
 
@@ -775,12 +779,12 @@ mod tests {
             operation: ValidatorOperation::Exit,
             new_consensus_key: None,
         };
-        let [leaf] = apply_validator_update(Some(&existing), SENDER, &payload)?;
+        let [write] = apply_validator_update(Some(&existing), SENDER, &payload)?;
         let expected = ValidatorRecordV1 {
             status: ValidatorStatus::Exited,
             ..existing
         };
-        assert_eq!(leaf.1, super::validator_record_leaf(&expected)?.1);
+        assert_eq!(write, super::validator_record_write(&expected)?);
 
         let active = record(0, 0, ValidatorStatus::Active);
         assert_eq!(
@@ -800,12 +804,12 @@ mod tests {
             operation: ValidatorOperation::UpdateKeys,
             new_consensus_key: Some(new_key()?),
         };
-        let [leaf] = apply_validator_update(Some(&existing), SENDER, &payload)?;
+        let [write] = apply_validator_update(Some(&existing), SENDER, &payload)?;
         let expected = ValidatorRecordV1 {
             consensus_key: new_key()?,
             ..existing
         };
-        assert_eq!(leaf.1, super::validator_record_leaf(&expected)?.1);
+        assert_eq!(write, super::validator_record_write(&expected)?);
 
         let exited = record(0, 0, ValidatorStatus::Exited);
         assert_eq!(
@@ -839,9 +843,9 @@ mod tests {
             operation: ValidatorOperation::Activate,
             new_consensus_key: None,
         };
-        let (leaves, receipt) =
+        let (writes, receipt) =
             apply_validator_update_with_receipt(Some(&existing), SENDER, &payload, TX_ID)?;
-        assert!(leaves.is_none());
+        assert!(writes.is_none());
         assert_eq!(receipt.status, ReceiptStatus::Failed);
         Ok(())
     }
@@ -853,9 +857,9 @@ mod tests {
             operation: ValidatorOperation::Deactivate,
             new_consensus_key: None,
         };
-        let (leaves, receipt) =
+        let (writes, receipt) =
             apply_validator_update_with_receipt(Some(&existing), SENDER, &payload, TX_ID)?;
-        assert!(leaves.is_some());
+        assert!(writes.is_some());
         assert_eq!(receipt.status, ReceiptStatus::Success);
         Ok(())
     }

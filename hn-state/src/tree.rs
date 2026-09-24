@@ -2,12 +2,28 @@ use hn_crypto::Digest;
 
 use crate::{
     error::{StateError, StateResult},
-    node::{EmptyHashTable, TREE_DEPTH, internal_hash},
+    node::{EmptyHashTable, TREE_DEPTH, internal_hash, leaf_hash, value_hash},
+    state_store::Write,
 };
 
 /// One `(state_key, leaf_hash)` entry in a write set passed to
 /// [`compute_state_root`].
 pub type Leaf = (Digest, Digest);
+
+/// Derives the [`Leaf`] (hash pair) a [`Write`] (state key + real value
+/// bytes) commits to (ADR-0031, "Write-Set Value Bytes And Overlay
+/// State Reader") — the only place this crate still needs to go from
+/// "what an `apply_*` function produced" to "what [`compute_state_root`]
+/// needs," now that every `apply_*` function returns real value bytes
+/// rather than a pre-computed hash. Pure derivation, computed on demand:
+/// never stored redundantly alongside `write.value` itself, the same
+/// "one authoritative value, everything else derived from it" principle
+/// this project applied after finding the opposite mistake four times
+/// earlier this session.
+pub fn leaf_for_write(write: &Write) -> StateResult<Leaf> {
+    let vh = value_hash(&write.value)?;
+    Ok((write.state_key, leaf_hash(&write.state_key, &vh)?))
+}
 
 /// Computes the `hn-smt-256-v1` state root for a finished write set
 /// (ADR-0007, "Updates": "The state tree layer accepts a deterministic

@@ -19,6 +19,10 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0031: Write-Set Value Bytes And Overlay State Reader
+
 ## Context
 
 Every commit across ADR-0025 through ADR-0029 ends with the same
@@ -138,24 +142,23 @@ the three sections nothing had a fetch helper for yet.
 
 ## Explicitly Not Resolved
 
-**Intra-block same-sender visibility.** `apply_block` applies every
-transaction against the *same* pre-block `reader` — a second
-transaction from a sender whose nonce or balance the *first* transaction
-in the same block already changed will not see that change; both would
-be checked against the pre-block state. A correct implementation needs
-an overlay/staging reader layering "this block's writes so far" on top
-of the base `reader`, which in turn needs every `apply_*` function to
-expose canonical *value bytes*, not just `(state_key, leaf_hash)` pairs
-— those functions were built for state-root computation, not for
-reconstructing storable values, and changing that return shape touches
-every transition primitive built this session. Two same-sender
-transactions in one block will, at best, both apply against stale state
-today (silently producing a block whose write-set is likely wrong for
-the second one) — named honestly here as a real, known v1 limitation,
-not fixed by this pass. A duplicate `state_key` across two colliding
-writes is at least loudly rejected by `compute_state_root` if anyone
-tries to use this write-set for that purpose, rather than silently
-merged wrong.
+**Intra-block same-sender visibility — resolved separately, ADR-0031.**
+`apply_block` applied every transaction against the *same* pre-block
+`reader` — a second transaction from a sender whose nonce or balance the
+*first* transaction in the same block already changed would not see
+that change; both would be checked against the pre-block state. Fixing
+it needed an overlay/staging reader layering "this block's writes so
+far" on top of the base `reader`, which in turn needed every `apply_*`
+function to expose canonical *value bytes*, not just `(state_key,
+leaf_hash)` pairs — those functions were built for state-root
+computation, not for reconstructing storable values, and changing that
+return shape touched every transition primitive built this session, too
+large a change to attempt in this pass. ADR-0031 ("Write-Set Value
+Bytes And Overlay State Reader") is exactly that follow-up: every
+`apply_*` function now returns `Write`-shaped (real value bytes, not
+just a hash) results, and `apply_block` uses a new `OverlayReader` to
+give each transaction a correct, up-to-date view of every earlier
+transaction's effects in the same block.
 
 **`governance` (`propose`/`vote`) stays unwired.** `apply_propose`/
 `apply_vote` need chamber-weight totals as caller-supplied parameters
@@ -187,7 +190,9 @@ Rejected for this pass: would require every existing `apply_*` function
 to also expose canonical value bytes (not just leaf hashes), a change
 touching every transition primitive built across ADR-0025 through
 ADR-0029. Named as the real fix in "Explicitly Not Resolved" rather than
-attempted piecemeal here.
+attempted piecemeal here — built as its own follow-up decision,
+ADR-0031, once the ADR-0026 through ADR-0029 series had actually
+finished and this became the very next thing to close.
 
 ### Computing `state_root` From The Block's Write-Set Alone
 
@@ -208,10 +213,9 @@ Intra-block replay via duplicate nonce:
 
 - Risk: two transactions from the same sender in one block, both
   carrying the same (correct, pre-block) nonce.
-- Mitigation: both would be individually valid against the shared
-  pre-block `reader` (the exact limitation named above) — not
-  mitigated by this ADR. A real pipeline needs the overlay-reader fix
-  before this is safe to run against untrusted block proposers.
+- Mitigation: not mitigated by this ADR alone — see ADR-0031, which
+  built the overlay-reader fix this risk was originally flagged as
+  needing.
 
 Missing fee deduction:
 
@@ -231,7 +235,7 @@ signature.
 ## Open Decisions
 
 - intra-block overlay reader / value-byte-exposing `apply_*` return
-  shape (see "Explicitly Not Resolved")
+  shape — resolved, ADR-0031
 - governance chamber-weight-total query (see "Explicitly Not Resolved")
 - real backend-integrated `StateWriter` persistence and `state_root`
   computation (ADR-0019's own still-open "initial storage backend")
@@ -246,3 +250,4 @@ signature.
 - `docs/adr/ADR-0008-block-format.md`
 - `docs/adr/ADR-0019-storage-state-interfaces.md`
 - `docs/adr/ADR-0025-governance-model.md`
+- `docs/adr/ADR-0031-write-set-values-and-overlay-state-reader.md`

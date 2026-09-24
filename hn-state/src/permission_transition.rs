@@ -3,12 +3,10 @@ use hn_crypto::{Digest, SignatureEnvelope};
 use crate::account::{AccountSection, account_section_state_key};
 use crate::error::{StateError, StateResult};
 use crate::identity_transition::apply_identity_rotation;
-use crate::node::{leaf_hash, value_hash};
 use crate::permission_update_payload::PermissionUpdatePayloadV1;
 use crate::permission_value::{MultisigConfigV1, PermissionValueV1};
 use crate::receipt::{ReceiptStatus, ReceiptV1};
-use crate::state_store::StateReader;
-use crate::tree::Leaf;
+use crate::state_store::{StateReader, Write};
 
 /// Fetches and decodes `account`'s current [`PermissionValueV1`] from
 /// `reader`, or `None` if nothing is stored at its Permission-section
@@ -72,13 +70,13 @@ pub fn fetch_permission(
 pub fn apply_permission_update(
     sender: Digest,
     payload: &PermissionUpdatePayloadV1,
-) -> StateResult<Vec<Leaf>> {
+) -> StateResult<Vec<Write>> {
     match payload {
         PermissionUpdatePayloadV1::SetAccountSigningMultisig(config) => {
             let value = PermissionValueV1 {
                 account_signing_multisig: Some(config.clone()),
             };
-            Ok(vec![permission_value_leaf(&sender, &value)?])
+            Ok(vec![permission_value_write(&sender, &value)?])
         }
         PermissionUpdatePayloadV1::RotateIdentityKey(new_key) => {
             Ok(vec![apply_identity_rotation(sender, new_key)?])
@@ -88,7 +86,7 @@ pub fn apply_permission_update(
                 account_signing_multisig: None,
             };
             Ok(vec![
-                permission_value_leaf(&sender, &cleared)?,
+                permission_value_write(&sender, &cleared)?,
                 apply_identity_rotation(sender, successor)?,
             ])
         }
@@ -112,10 +110,10 @@ pub fn apply_permission_update_with_receipt(
     sender: Digest,
     payload: &PermissionUpdatePayloadV1,
     tx_id: Digest,
-) -> StateResult<(Vec<Leaf>, ReceiptV1)> {
-    let leaves = apply_permission_update(sender, payload)?;
+) -> StateResult<(Vec<Write>, ReceiptV1)> {
+    let writes = apply_permission_update(sender, payload)?;
     Ok((
-        leaves,
+        writes,
         ReceiptV1 {
             tx_id,
             status: ReceiptStatus::Success,
@@ -182,11 +180,13 @@ pub fn verify_multisig_authorization(
     }
 }
 
-fn permission_value_leaf(sender: &Digest, value: &PermissionValueV1) -> StateResult<Leaf> {
+fn permission_value_write(sender: &Digest, value: &PermissionValueV1) -> StateResult<Write> {
     let key = account_section_state_key(sender, AccountSection::Permission)?;
-    let value_bytes = value.encode()?;
-    let vh = value_hash(&value_bytes)?;
-    Ok((key, leaf_hash(&key, &vh)?))
+    let value = value.encode()?;
+    Ok(Write {
+        state_key: key,
+        value,
+    })
 }
 
 #[cfg(test)]
@@ -285,14 +285,14 @@ mod tests {
         let successor =
             Ed25519KeyPair::from_seed(KeyRole::AccountSigning, [0x0b; 32]).key_descriptor();
         let payload = PermissionUpdatePayloadV1::DeactivateMultisig(successor);
-        let leaves = apply_permission_update(SENDER, &payload)?;
-        assert_eq!(leaves.len(), 2);
+        let writes = apply_permission_update(SENDER, &payload)?;
+        assert_eq!(writes.len(), 2);
 
         let permission_key = account_section_state_key(&SENDER, AccountSection::Permission)?;
         let identity_key = account_section_state_key(&SENDER, AccountSection::Identity)?;
-        let leaf_keys: Vec<_> = leaves.iter().map(|leaf| leaf.0).collect();
-        assert!(leaf_keys.contains(&permission_key));
-        assert!(leaf_keys.contains(&identity_key));
+        let write_keys: Vec<_> = writes.iter().map(|write| write.state_key).collect();
+        assert!(write_keys.contains(&permission_key));
+        assert!(write_keys.contains(&identity_key));
         Ok(())
     }
 

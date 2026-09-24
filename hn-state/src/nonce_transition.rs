@@ -3,10 +3,8 @@ use hn_crypto::Digest;
 
 use crate::account::{AccountSection, account_section_state_key};
 use crate::error::StateResult;
-use crate::node::{leaf_hash, value_hash};
 use crate::nonce_value::NonceValueV1;
-use crate::state_store::StateReader;
-use crate::tree::Leaf;
+use crate::state_store::{StateReader, Write};
 
 /// Fetches `account`'s current nonce from `reader` — absence maps to
 /// [`AccountNonce::INITIAL`], `hn_core::AccountNonce`'s own already-
@@ -28,18 +26,20 @@ pub fn fetch_nonce(reader: &impl StateReader, account: &Digest) -> StateResult<A
 /// succeeded — nonce consumption on failure is already decided
 /// (account-state.md §4.4/ADR-0006), this is simply its first
 /// implementation.
-pub fn nonce_leaf(account: &Digest, nonce: AccountNonce) -> StateResult<Leaf> {
+pub fn nonce_write(account: &Digest, nonce: AccountNonce) -> StateResult<Write> {
     let key = account_section_state_key(account, AccountSection::Nonce)?;
-    let value_bytes = NonceValueV1 { nonce }.encode();
-    let vh = value_hash(&value_bytes)?;
-    Ok((key, leaf_hash(&key, &vh)?))
+    let value = NonceValueV1 { nonce }.encode();
+    Ok(Write {
+        state_key: key,
+        value,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use hn_core::AccountNonce;
 
-    use super::{fetch_nonce, nonce_leaf};
+    use super::{fetch_nonce, nonce_write};
     use crate::account::{AccountSection, account_section_state_key};
     use crate::error::{StateError, StateResult};
     use crate::nonce_value::NonceValueV1;
@@ -74,10 +74,10 @@ mod tests {
     }
 
     #[test]
-    fn nonce_leaf_targets_the_nonce_section_key() -> StateResult<()> {
-        let leaf = nonce_leaf(&ACCOUNT, AccountNonce::new(3))?;
+    fn nonce_write_targets_the_nonce_section_key() -> StateResult<()> {
+        let write = nonce_write(&ACCOUNT, AccountNonce::new(3))?;
         let expected_key = account_section_state_key(&ACCOUNT, AccountSection::Nonce)?;
-        assert_eq!(leaf.0, expected_key);
+        assert_eq!(write.state_key, expected_key);
         Ok(())
     }
 

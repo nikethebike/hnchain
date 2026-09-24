@@ -5,11 +5,9 @@ use crate::{
     asset_value::AssetValueV1,
     balance_value::BalanceValueV1,
     error::{StateError, StateResult},
-    node::{leaf_hash, value_hash},
     receipt::{ReceiptStatus, ReceiptV1},
-    state_store::StateReader,
+    state_store::{StateReader, Write},
     transfer_payload::TransferPayloadV1,
-    tree::Leaf,
 };
 
 /// One account's current balance-domain state, as needed to apply a
@@ -90,7 +88,7 @@ pub fn apply_transfer(
     sender: &TransferParty,
     recipient: &TransferParty,
     payload: &TransferPayloadV1,
-) -> StateResult<[Leaf; 2]> {
+) -> StateResult<[Write; 2]> {
     match payload.asset_id {
         None => apply_balance_transfer(sender, recipient, payload.amount),
         Some(asset_id) => apply_asset_transfer(sender, recipient, asset_id, payload.amount),
@@ -118,10 +116,10 @@ pub fn apply_transfer_with_receipt(
     recipient: &TransferParty,
     payload: &TransferPayloadV1,
     tx_id: Digest,
-) -> StateResult<(Option<[Leaf; 2]>, ReceiptV1)> {
+) -> StateResult<(Option<[Write; 2]>, ReceiptV1)> {
     match apply_transfer(sender, recipient, payload) {
-        Ok(leaves) => Ok((
-            Some(leaves),
+        Ok(writes) => Ok((
+            Some(writes),
             ReceiptV1 {
                 tx_id,
                 status: ReceiptStatus::Success,
@@ -142,7 +140,7 @@ fn apply_balance_transfer(
     sender: &TransferParty,
     recipient: &TransferParty,
     amount: u128,
-) -> StateResult<[Leaf; 2]> {
+) -> StateResult<[Write; 2]> {
     let new_sender_balance = sender
         .balance
         .native_balance
@@ -155,16 +153,18 @@ fn apply_balance_transfer(
         .ok_or(StateError::BalanceOverflow)?;
 
     Ok([
-        balance_leaf(&sender.address, new_sender_balance)?,
-        balance_leaf(&recipient.address, new_recipient_balance)?,
+        balance_write(&sender.address, new_sender_balance)?,
+        balance_write(&recipient.address, new_recipient_balance)?,
     ])
 }
 
-pub(crate) fn balance_leaf(address: &Digest, native_balance: u128) -> StateResult<Leaf> {
+pub(crate) fn balance_write(address: &Digest, native_balance: u128) -> StateResult<Write> {
     let key = account_section_state_key(address, AccountSection::Balance)?;
-    let value_bytes = BalanceValueV1 { native_balance }.encode();
-    let vh = value_hash(&value_bytes)?;
-    Ok((key, leaf_hash(&key, &vh)?))
+    let value = BalanceValueV1 { native_balance }.encode();
+    Ok(Write {
+        state_key: key,
+        value,
+    })
 }
 
 fn apply_asset_transfer(
@@ -172,7 +172,7 @@ fn apply_asset_transfer(
     recipient: &TransferParty,
     asset_id: u16,
     amount: u128,
-) -> StateResult<[Leaf; 2]> {
+) -> StateResult<[Write; 2]> {
     let sender_current = holding_amount(&sender.assets, asset_id);
     let new_sender_amount = sender_current
         .checked_sub(amount)
@@ -187,8 +187,8 @@ fn apply_asset_transfer(
     let recipient_holdings = set_holding(&recipient.assets, asset_id, new_recipient_amount);
 
     Ok([
-        asset_leaf(&sender.address, sender_holdings)?,
-        asset_leaf(&recipient.address, recipient_holdings)?,
+        asset_write(&sender.address, sender_holdings)?,
+        asset_write(&recipient.address, recipient_holdings)?,
     ])
 }
 
@@ -217,11 +217,13 @@ fn set_holding(assets: &AssetValueV1, asset_id: u16, new_amount: u128) -> Vec<(u
     holdings
 }
 
-fn asset_leaf(address: &Digest, holdings: Vec<(u16, u128)>) -> StateResult<Leaf> {
+fn asset_write(address: &Digest, holdings: Vec<(u16, u128)>) -> StateResult<Write> {
     let key = account_section_state_key(address, AccountSection::Asset)?;
-    let value_bytes = AssetValueV1 { holdings }.encode()?;
-    let vh = value_hash(&value_bytes)?;
-    Ok((key, leaf_hash(&key, &vh)?))
+    let value = AssetValueV1 { holdings }.encode()?;
+    Ok(Write {
+        state_key: key,
+        value,
+    })
 }
 
 #[cfg(test)]
@@ -334,15 +336,15 @@ mod tests {
             amount: 300,
         };
 
-        let [sender_leaf, recipient_leaf] = apply_transfer(&sender, &recipient, &payload)?;
+        let [sender_write, recipient_write] = apply_transfer(&sender, &recipient, &payload)?;
 
         let expected_sender =
             crate::account_section_state_key(&SENDER_ADDRESS, crate::AccountSection::Balance)?;
         let expected_recipient =
             crate::account_section_state_key(&RECIPIENT_ADDRESS, crate::AccountSection::Balance)?;
-        assert_eq!(sender_leaf.0, expected_sender);
-        assert_eq!(recipient_leaf.0, expected_recipient);
-        assert_ne!(sender_leaf.1, recipient_leaf.1);
+        assert_eq!(sender_write.state_key, expected_sender);
+        assert_eq!(recipient_write.state_key, expected_recipient);
+        assert_ne!(sender_write.value, recipient_write.value);
         Ok(())
     }
 
@@ -374,9 +376,9 @@ mod tests {
             amount: 300,
         };
 
-        let (leaves, receipt) = apply_transfer_with_receipt(&sender, &recipient, &payload, TX_ID)?;
+        let (writes, receipt) = apply_transfer_with_receipt(&sender, &recipient, &payload, TX_ID)?;
 
-        assert!(leaves.is_some());
+        assert!(writes.is_some());
         assert_eq!(receipt.tx_id, TX_ID);
         assert_eq!(receipt.status, ReceiptStatus::Success);
         Ok(())
@@ -392,9 +394,9 @@ mod tests {
             amount: 11,
         };
 
-        let (leaves, receipt) = apply_transfer_with_receipt(&sender, &recipient, &payload, TX_ID)?;
+        let (writes, receipt) = apply_transfer_with_receipt(&sender, &recipient, &payload, TX_ID)?;
 
-        assert!(leaves.is_none());
+        assert!(writes.is_none());
         assert_eq!(receipt.tx_id, TX_ID);
         assert_eq!(receipt.status, ReceiptStatus::Failed);
         Ok(())
@@ -410,27 +412,25 @@ mod tests {
             amount: 250,
         };
 
-        let [sender_leaf, recipient_leaf] = apply_transfer(&sender, &recipient, &payload)?;
+        let [sender_write, recipient_write] = apply_transfer(&sender, &recipient, &payload)?;
 
-        // Sender's holding drops to zero, so its Asset leaf must equal an
-        // account with an empty holdings map (account-state.md §4.7:
+        // Sender's holding drops to zero, so its Asset write must equal
+        // an account with an empty holdings map (account-state.md §4.7:
         // absence means zero, not an explicit zero entry).
         let empty_asset_value = AssetValueV1 { holdings: vec![] }.encode()?;
-        let empty_vh = crate::value_hash(&empty_asset_value)?;
         let sender_key =
             crate::account_section_state_key(&SENDER_ADDRESS, crate::AccountSection::Asset)?;
-        let expected_sender_leaf = crate::leaf_hash(&sender_key, &empty_vh)?;
-        assert_eq!(sender_leaf.1, expected_sender_leaf);
+        assert_eq!(sender_write.state_key, sender_key);
+        assert_eq!(sender_write.value, empty_asset_value);
 
         let recipient_asset_value = AssetValueV1 {
             holdings: vec![(7, 250)],
         }
         .encode()?;
-        let recipient_vh = crate::value_hash(&recipient_asset_value)?;
         let recipient_key =
             crate::account_section_state_key(&RECIPIENT_ADDRESS, crate::AccountSection::Asset)?;
-        let expected_recipient_leaf = crate::leaf_hash(&recipient_key, &recipient_vh)?;
-        assert_eq!(recipient_leaf.1, expected_recipient_leaf);
+        assert_eq!(recipient_write.state_key, recipient_key);
+        assert_eq!(recipient_write.value, recipient_asset_value);
 
         Ok(())
     }

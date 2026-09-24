@@ -14,7 +14,8 @@ use hn_state::{
     AccountSection, AccountType, AssetValueV1, BalanceValueV1, EmptyHashTable, EnvelopeValueV1,
     Leaf, LifecycleState, LifecycleValueV1, NonceValueV1, SectionVersionsV1, TransferParty,
     TransferPayloadV1, account_extension_payload_state_key, account_extension_registry_state_key,
-    account_section_state_key, apply_transfer, compute_state_root, leaf_hash, value_hash,
+    account_section_state_key, apply_transfer, compute_state_root, leaf_for_write, leaf_hash,
+    value_hash,
 };
 
 const SENDER_PUBLIC_KEY: [u8; 32] = [
@@ -82,11 +83,17 @@ fn transfer_between_two_accounts_matches_independent_oracle() -> TestResult {
         assets: AssetValueV1 { holdings: vec![] },
     };
 
-    let [new_sender_balance_leaf, new_recipient_balance_leaf] =
+    let [new_sender_balance_write, new_recipient_balance_write] =
         apply_transfer(&sender_party, &recipient_party, &payload)?;
 
-    replace_leaf(&mut sender_leaves, new_sender_balance_leaf);
-    replace_leaf(&mut recipient_leaves, new_recipient_balance_leaf);
+    replace_leaf(
+        &mut sender_leaves,
+        leaf_for_write(&new_sender_balance_write)?,
+    );
+    replace_leaf(
+        &mut recipient_leaves,
+        leaf_for_write(&new_recipient_balance_write)?,
+    );
 
     let mut after_leaves = sender_leaves;
     after_leaves.extend(recipient_leaves);

@@ -45,6 +45,8 @@ docs/
     ADR-0027-identity-state-and-account-key-bootstrap.md
     ADR-0028-account-level-key-rotation.md
     ADR-0029-multisig-deactivation.md
+    ADR-0030-transaction-and-block-application.md
+    ADR-0031-write-set-values-and-overlay-state-reader.md
 
   specs/
     core/

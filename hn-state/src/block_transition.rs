@@ -5,16 +5,16 @@ use crate::active_set::fetch_validator_record;
 use crate::error::{StateError, StateResult};
 use crate::identity_transition::apply_identity_bootstrap;
 use crate::list_merkle::list_merkle_root;
-use crate::nonce_transition::{fetch_nonce, nonce_leaf};
+use crate::nonce_transition::{fetch_nonce, nonce_write};
+use crate::overlay_reader::OverlayReader;
 use crate::permission_transition::apply_permission_update_with_receipt;
 use crate::permission_update_payload::PermissionUpdatePayloadV1;
 use crate::receipt::ReceiptV1;
-use crate::state_store::StateReader;
+use crate::state_store::{StateReader, Write};
 use crate::transaction_envelope::{
     TransactionEnvelope, TransactionPayload, decode_transaction_payload,
 };
 use crate::transfer::{apply_transfer_with_receipt, fetch_transfer_party};
-use crate::tree::Leaf;
 use crate::tx_id::tx_id;
 use crate::validator_transition::{
     apply_stake_with_receipt, apply_unstake_with_receipt, apply_validator_update_with_receipt,
@@ -26,13 +26,16 @@ use crate::validator_transition::{
 pub struct AppliedTransaction {
     /// This transaction's own ID (ADR-0006, "Transaction ID").
     pub tx_id: Digest,
-    /// Every write-set leaf this transaction produces, in order: the
-    /// bootstrap `IdentityValueV1` leaf (ADR-0027), if `bootstrap_key`
+    /// Every write-set entry this transaction produces, in order: the
+    /// bootstrap `IdentityValueV1` write (ADR-0027), if `bootstrap_key`
     /// was present and verification succeeded; then the underlying
-    /// `apply_*` operation's own leaves (if any; a `Failed` receipt
+    /// `apply_*` operation's own writes (if any; a `Failed` receipt
     /// writes none of its own); then the unconditional nonce update
-    /// ([`crate::nonce_leaf`]), always.
-    pub write_set: Vec<Leaf>,
+    /// ([`crate::nonce_write`]), always. Carries real canonical value
+    /// bytes, not just a leaf hash (ADR-0031, "Write-Set Value Bytes And
+    /// Overlay State Reader") — [`crate::leaf_for_write`] derives a
+    /// [`crate::tree::Leaf`] from any entry here on demand.
+    pub write_set: Vec<Write>,
     /// This transaction's receipt.
     pub receipt: ReceiptV1,
 }
@@ -60,7 +63,7 @@ pub struct AppliedTransaction {
 /// function's job ([`crate::apply_identity_bootstrap`]) — ADR-0027,
 /// "write once, reuse forever".
 ///
-/// The nonce leaf ([`crate::nonce_leaf`]) is always appended to the
+/// The nonce write ([`crate::nonce_write`]) is always appended to the
 /// write-set, success or failure — ADR-0006's own "nonce still consumed
 /// on failure" rule, implemented here for the first time.
 ///
@@ -79,7 +82,7 @@ pub fn apply_transaction(
 ) -> StateResult<AppliedTransaction> {
     envelope.verify(reader)?;
 
-    let bootstrap_leaf = match &envelope.bootstrap_key {
+    let bootstrap_write = match &envelope.bootstrap_key {
         Some(key) => Some(apply_identity_bootstrap(envelope.sender, key)?),
         None => None,
     };
@@ -106,13 +109,13 @@ pub fn apply_transaction(
     let tx_id_value = tx_id(&envelope.encode()?)?;
     let payload = decode_transaction_payload(envelope.tx_type, &envelope.payload)?;
 
-    let (leaves, receipt) = match payload {
+    let (writes, receipt) = match payload {
         TransactionPayload::Transfer(payload) => {
             let sender = fetch_transfer_party(reader, envelope.sender)?;
             let recipient = fetch_transfer_party(reader, payload.recipient)?;
-            let (leaves, receipt) =
+            let (writes, receipt) =
                 apply_transfer_with_receipt(&sender, &recipient, &payload, tx_id_value)?;
-            (leaves.map(|leaves| leaves.to_vec()), receipt)
+            (writes.map(|writes| writes.to_vec()), receipt)
         }
         TransactionPayload::Stake(payload) => {
             let record = fetch_validator_record(reader, &envelope.sender)?.ok_or(
@@ -120,8 +123,8 @@ pub fn apply_transaction(
                     validator_id: envelope.sender,
                 },
             )?;
-            let (leaves, receipt) = apply_stake_with_receipt(&record, &payload, tx_id_value)?;
-            (leaves.map(|leaves| leaves.to_vec()), receipt)
+            let (writes, receipt) = apply_stake_with_receipt(&record, &payload, tx_id_value)?;
+            (writes.map(|writes| writes.to_vec()), receipt)
         }
         TransactionPayload::Unstake(payload) => {
             let record = fetch_validator_record(reader, &envelope.sender)?.ok_or(
@@ -129,19 +132,19 @@ pub fn apply_transaction(
                     validator_id: envelope.sender,
                 },
             )?;
-            let (leaves, receipt) =
+            let (writes, receipt) =
                 apply_unstake_with_receipt(&record, &payload, current_height, tx_id_value)?;
-            (leaves.map(|leaves| leaves.to_vec()), receipt)
+            (writes.map(|writes| writes.to_vec()), receipt)
         }
         TransactionPayload::ValidatorUpdate(payload) => {
             let existing = fetch_validator_record(reader, &envelope.sender)?;
-            let (leaves, receipt) = apply_validator_update_with_receipt(
+            let (writes, receipt) = apply_validator_update_with_receipt(
                 existing.as_ref(),
                 envelope.sender,
                 &payload,
                 tx_id_value,
             )?;
-            (leaves.map(|leaves| leaves.to_vec()), receipt)
+            (writes.map(|writes| writes.to_vec()), receipt)
         }
         TransactionPayload::Governance(_) => {
             return Err(StateError::UndecidedTransactionPayload {
@@ -150,21 +153,21 @@ pub fn apply_transaction(
         }
         TransactionPayload::PermissionUpdate(payload) => {
             let payload: PermissionUpdatePayloadV1 = payload;
-            let (leaves, receipt) =
+            let (writes, receipt) =
                 apply_permission_update_with_receipt(envelope.sender, &payload, tx_id_value)?;
-            (Some(leaves), receipt)
+            (Some(writes), receipt)
         }
     };
 
     let mut write_set = Vec::new();
-    if let Some(bootstrap_leaf) = bootstrap_leaf {
-        write_set.push(bootstrap_leaf);
+    if let Some(bootstrap_write) = bootstrap_write {
+        write_set.push(bootstrap_write);
     }
-    write_set.extend(leaves.unwrap_or_default());
+    write_set.extend(writes.unwrap_or_default());
     let next_nonce = stored_nonce
         .checked_next()
         .map_err(|_| StateError::NonceOverflow)?;
-    write_set.push(nonce_leaf(&envelope.sender, next_nonce)?);
+    write_set.push(nonce_write(&envelope.sender, next_nonce)?);
 
     Ok(AppliedTransaction {
         tx_id: tx_id_value,
@@ -187,21 +190,27 @@ pub struct BlockApplicationResult {
     pub receipts_root: Digest,
 }
 
-/// Applies every transaction in `transactions`, in order, against the
-/// same pre-block `reader` — see ADR-0030's own "Explicitly Not
-/// Resolved" for why this does not yet give a second same-sender
-/// transaction in one block a correct, up-to-date view of the first
-/// one's effects. Does not compute `BlockHeader.state_root`: doing so
-/// needs the complete current leaf set, which nothing in this project
-/// maintains yet (no durable backend, ADR-0019).
+/// Applies every transaction in `transactions`, in order, against an
+/// [`OverlayReader`] layering each transaction's own writes over `reader`
+/// before the next transaction runs (ADR-0031, "Write-Set Value Bytes
+/// And Overlay State Reader") — a second same-sender transaction in one
+/// block now sees the first one's nonce/balance/etc. writes, exactly as
+/// it would across two separate blocks, closing the "Intra-block
+/// same-sender visibility" gap ADR-0030 named and deferred. Does not
+/// compute `BlockHeader.state_root`: doing so needs the complete current
+/// leaf set, which nothing in this project maintains yet (no durable
+/// backend, ADR-0019).
 pub fn apply_block(
     transactions: &[TransactionEnvelope],
     reader: &impl StateReader,
     current_height: BlockHeight,
 ) -> StateResult<BlockApplicationResult> {
+    let mut overlay = OverlayReader::new(reader);
     let mut applied = Vec::with_capacity(transactions.len());
     for envelope in transactions {
-        applied.push(apply_transaction(envelope, reader, current_height)?);
+        let entry = apply_transaction(envelope, &overlay, current_height)?;
+        overlay.fold(&entry.write_set);
+        applied.push(entry);
     }
 
     let tx_ids: Vec<Digest> = applied.iter().map(|entry| entry.tx_id).collect();
@@ -333,11 +342,11 @@ mod tests {
 
         let applied = apply_transaction(&envelope, &reader, BlockHeight::GENESIS)?;
 
-        let expected_bootstrap_leaf =
+        let expected_bootstrap_write =
             apply_identity_bootstrap(envelope.sender, &keypair.key_descriptor())?;
-        // bootstrap leaf, sender balance leaf, recipient balance leaf, nonce leaf.
+        // bootstrap write, sender balance write, recipient balance write, nonce write.
         assert_eq!(applied.write_set.len(), 4);
-        assert_eq!(applied.write_set[0], expected_bootstrap_leaf);
+        assert_eq!(applied.write_set[0], expected_bootstrap_write);
         assert_eq!(applied.receipt.status, ReceiptStatus::Success);
         assert_eq!(applied.tx_id, tx_id(&envelope.encode()?)?);
         Ok(())
@@ -454,6 +463,52 @@ mod tests {
             list_merkle_root(&expected_tx_ids)?
         );
         assert_eq!(result.receipts_root, list_merkle_root(&expected_receipts)?);
+        Ok(())
+    }
+
+    /// ADR-0031's own reason for existing: two transactions from the
+    /// *same* sender in one block, the second's nonce only valid after
+    /// the first applies. Against the plain `reader` alone (pre-ADR-0031
+    /// behavior), `apply_transaction` for the second would read the
+    /// stale pre-block nonce and reject it as a mismatch even though it
+    /// is exactly the nonce that should be expected once the first has
+    /// applied — `apply_block`'s `OverlayReader` is what makes this
+    /// sequence succeed.
+    #[test]
+    fn apply_block_gives_a_second_same_sender_transaction_the_first_ones_effects() -> StateResult<()>
+    {
+        let keypair = keypair(0x07);
+        let first = bootstrap_envelope(
+            &keypair,
+            0,
+            TxType::Transfer,
+            zero_transfer_payload()?,
+            no_window(),
+        )?;
+        // No `bootstrap_key` the second time: the account's Identity is
+        // already written by the first transaction's own bootstrap
+        // side effect, which only the overlay reader can see mid-block.
+        let mut second = bootstrap_envelope(
+            &keypair,
+            1,
+            TxType::Transfer,
+            zero_transfer_payload()?,
+            no_window(),
+        )?;
+        second.bootstrap_key = None;
+        let digest = second.signing_payload().signing_digest()?;
+        second.signatures = vec![SignatureEnvelope {
+            algorithm_id: keypair.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: keypair.sign(&digest).to_vec(),
+        }];
+
+        let reader = empty_reader();
+        let result = apply_block(&[first, second], &reader, BlockHeight::GENESIS)?;
+
+        assert_eq!(result.applied.len(), 2);
+        assert_eq!(result.applied[0].receipt.status, ReceiptStatus::Success);
+        assert_eq!(result.applied[1].receipt.status, ReceiptStatus::Success);
         Ok(())
     }
 }

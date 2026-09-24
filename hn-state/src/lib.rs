@@ -237,15 +237,15 @@
 //! `apply_identity_bootstrap` call to actually produce the
 //! `IdentityValueV1` leaf, since `verify` only takes a `StateReader`.
 //!
-//! [`nonce_transition`] adds `fetch_nonce`/`nonce_leaf` (mirrors
-//! `fetch_identity`/`identity_value_leaf`'s own shape for the Nonce
+//! [`nonce_transition`] adds `fetch_nonce`/`nonce_write` (mirrors
+//! `fetch_identity`/`identity_value_write`'s own shape for the Nonce
 //! section, absence maps to `AccountNonce::INITIAL`). [`block_transition`]
 //! adds `apply_transaction`/`apply_block` (ADR-0030, "Transaction And
 //! Block Application") — the composing call this crate's own
 //! documentation named as missing at every one of the last several
 //! passes ("no block-processing pipeline exists in this codebase yet"):
 //! `apply_transaction` calls `TransactionEnvelope::verify`, writes the
-//! bootstrap `IdentityValueV1` leaf when `bootstrap_key` was present
+//! bootstrap `IdentityValueV1` entry when `bootstrap_key` was present
 //! (the separate call `verify`'s own documentation says a caller must
 //! make), checks `nonce` against `fetch_nonce` exactly
 //! ([`StateError::NonceMismatch`]) and `validity_window` against the
@@ -253,20 +253,36 @@
 //! ([`StateError::TransactionOutsideValidityWindow`]), dispatches
 //! `transfer`/`stake`/`unstake`/`validator_update`/`permission_update` to
 //! their existing `apply_*_with_receipt` functions, and always appends
-//! the nonce-update leaf — ADR-0006's "nonce consumed on inclusion even
+//! the nonce-update write — ADR-0006's "nonce consumed on inclusion even
 //! on failure" rule, implemented here for the first time. Deducts no
 //! fee (still-undecided ADR-0023 parameter) and rejects `governance`
 //! outright ([`StateError::UndecidedTransactionPayload`]: no
 //! chamber-weight-total query exists yet). `apply_block` applies every
-//! transaction in a slice against the same pre-block `reader` and
-//! aggregates `tx_id`s/receipt digests into `transactions_root`/
-//! `receipts_root` via `list_merkle_root` — it does not compute
-//! `BlockHeader.state_root` (needs the complete current leaf set, no
-//! durable backend exists yet, ADR-0019) and does not give a second
-//! same-sender transaction in one block a view of the first one's
-//! effects (needs an overlay `StateReader` exposing value bytes from
-//! every `apply_*` function — a real, named, unresolved v1 limitation,
-//! see ADR-0030's own "Explicitly Not Resolved").
+//! transaction in a slice against an [`OverlayReader`] layering each
+//! transaction's own writes over the base `reader` before the next
+//! transaction runs, then aggregates `tx_id`s/receipt digests into
+//! `transactions_root`/`receipts_root` via `list_merkle_root` — it does
+//! not compute `BlockHeader.state_root` (needs the complete current leaf
+//! set, no durable backend exists yet, ADR-0019).
+//!
+//! [`state_store::Write`] and [`overlay_reader::OverlayReader`]
+//! (ADR-0031, "Write-Set Value Bytes And Overlay State Reader") are why
+//! `apply_block` can do that at all: every `apply_*` function in this
+//! crate (except `governance_transition`'s, deliberately unconverted —
+//! `governance` is not dispatched by `apply_transaction`, see ADR-0030)
+//! now returns `Write`/`[Write; N]`/`Vec<Write>` — real canonical value
+//! bytes, exactly what `StateReader::get` would return for that key
+//! after the write applies — rather than the earlier `Leaf`-only
+//! `(state_key, leaf_hash)` shape, which was built for
+//! `compute_state_root` and could never itself answer a `get` call.
+//! [`tree::leaf_for_write`] derives a `Leaf` from a `Write` on demand
+//! (used by `compute_state_root` once a caller has a complete leaf set
+//! to feed it, not by anything in this crate today); `OverlayReader`
+//! wraps a base `StateReader` plus a block's accumulated writes so far,
+//! consulted first on every `get`, so a second same-sender transaction
+//! in one block now sees the first one's nonce/balance/etc. writes
+//! exactly as it would across two separate blocks — the "Intra-block
+//! same-sender visibility" gap ADR-0030 named and deferred, now closed.
 
 mod access_list;
 mod account;
@@ -291,6 +307,7 @@ mod list_merkle;
 mod node;
 mod nonce_transition;
 mod nonce_value;
+mod overlay_reader;
 mod permission_transition;
 mod permission_update_payload;
 mod permission_value;
@@ -350,8 +367,9 @@ pub use key::{OBJECT_ID_MAX_LEN, SUBKEY_MAX_LEN, state_key_core, state_key_exten
 pub use lifecycle_value::{LIFECYCLE_VERSION_1, LifecycleState, LifecycleValueV1};
 pub use list_merkle::{LIST_TREE_PROFILE_ID, list_empty_root, list_merkle_root, list_node_hash};
 pub use node::{EmptyHashTable, TREE_DEPTH, TREE_PROFILE_ID, internal_hash, leaf_hash, value_hash};
-pub use nonce_transition::{fetch_nonce, nonce_leaf};
+pub use nonce_transition::{fetch_nonce, nonce_write};
 pub use nonce_value::{NONCE_VERSION_1, NonceValueV1};
+pub use overlay_reader::OverlayReader;
 pub use permission_transition::{
     apply_permission_update, apply_permission_update_with_receipt, verify_multisig_authorization,
 };
@@ -367,7 +385,7 @@ pub use proposal_record::{PROPOSAL_RECORD_VERSION_1, ProposalRecordV1, ProposalS
 pub use proposal_vote_record::{PROPOSAL_VOTE_RECORD_VERSION_1, ProposalVoteRecordV1};
 pub use receipt::{RECEIPT_VERSION_1, ReceiptStatus, ReceiptV1};
 pub use stake_payload::{STAKE_PAYLOAD_VERSION_1, StakePayloadV1};
-pub use state_store::{StateReader, StateWriter};
+pub use state_store::{StateReader, StateWriter, Write};
 pub use transaction_envelope::{
     MAX_SIGNATURES, MAX_TRANSACTION_SIZE, TX_VERSION_1, TransactionEnvelope, TransactionPayload,
     TransactionSigningPayload, TxType, decode_transaction_payload,
@@ -377,7 +395,7 @@ pub use transfer::{
     fetch_transfer_party,
 };
 pub use transfer_payload::{TRANSFER_PAYLOAD_VERSION_1, TransferPayloadV1};
-pub use tree::{Leaf, compute_state_root};
+pub use tree::{Leaf, compute_state_root, leaf_for_write};
 pub use tx_id::tx_id;
 pub use unstake_payload::{UNSTAKE_PAYLOAD_VERSION_1, UnstakePayloadV1};
 pub use validator::{DOMAIN_VALIDATORS, ValidatorSection, validator_section_state_key};
