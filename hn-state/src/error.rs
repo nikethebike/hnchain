@@ -301,6 +301,28 @@ pub enum StateError {
         /// The rejected byte.
         value: u8,
     },
+    /// A decoded `IdentityValueV1.identity_version` does not match
+    /// [`crate::identity_value::IDENTITY_VERSION_1`], the only shape
+    /// this implementation understands.
+    UnsupportedIdentityVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// [`crate::resolve_account_signing_key`] (ADR-0027) was given a
+    /// present `bootstrap_key` for a `sender` that already has a stored
+    /// `IdentityValueV1` — redundant once Identity State exists, not
+    /// tolerated as harmless.
+    UnexpectedBootstrapKey,
+    /// [`crate::resolve_account_signing_key`] (ADR-0027) was given no
+    /// `bootstrap_key` for a `sender` with no stored `IdentityValueV1`
+    /// yet — nothing to verify the transaction's signature against.
+    MissingBootstrapKey,
+    /// [`crate::resolve_account_signing_key`] (ADR-0027) was given a
+    /// `bootstrap_key` that does not derive `sender`'s own address
+    /// (`hn_crypto::account_address_body`) — the anti-spoofing check:
+    /// nobody may claim an address that is not the hash of the key they
+    /// are presenting.
+    BootstrapKeyAddressMismatch,
     /// [`crate::proposal_id`] was called with a `GovernancePayloadV1`
     /// whose operation is not `Propose` — `proposal_id` is only
     /// meaningful for a proposal's own creation content (ADR-0025,
@@ -591,6 +613,17 @@ impl core::fmt::Display for StateError {
             }
             Self::InvalidVoteChoice { value } => {
                 write!(formatter, "invalid vote choice: 0x{value:02x}")
+            }
+            Self::UnsupportedIdentityVersion { value } => {
+                write!(formatter, "unsupported identity_version: {value}")
+            }
+            Self::UnexpectedBootstrapKey => formatter
+                .write_str("bootstrap_key present but sender already has an IdentityValueV1"),
+            Self::MissingBootstrapKey => {
+                formatter.write_str("bootstrap_key absent but sender has no IdentityValueV1 yet")
+            }
+            Self::BootstrapKeyAddressMismatch => {
+                formatter.write_str("bootstrap_key does not derive sender's own address")
             }
             Self::ProposalIdRequiresProposeOperation => {
                 formatter.write_str("proposal_id can only be computed for a Propose payload")

@@ -178,10 +178,26 @@
 //! `decode_from` alongside their existing standalone `encode`/`decode`,
 //! the same flat-embedding convention `SignatureEnvelope` already
 //! established, so `TransactionEnvelope` can embed them without a
-//! redundant length-prefixed wrapper. No verification method exists
-//! yet (resolving `bootstrap_key`/`IdentityValueV1`/multisig against
-//! real state is separate follow-up work — no block-processing
-//! pipeline exists anywhere in this codebase to call it).
+//! redundant length-prefixed wrapper. No `verify()` method exists yet
+//! on `TransactionEnvelope` itself (composing `bootstrap_key`/
+//! `IdentityValueV1`/multisig resolution into one call — no block-
+//! processing pipeline exists anywhere in this codebase to call it —
+//! is separate follow-up work), but the underlying primitives it would
+//! call now do: [`identity_value`] adds `IdentityValueV1` (`SectionId
+//! 0x01`, ADR-0027) — the account's currently-active `account_signing`
+//! key, stored as a `KeyDescriptor` the same way `ValidatorRecordV1.
+//! consensus_key` already is. [`identity_transition`] adds
+//! `fetch_identity` (mirrors `fetch_validator_record`'s own shape for
+//! the `accounts` domain), `resolve_account_signing_key` (the first
+//! concrete resolution of ADR-0002's `active_key(identity, role,
+//! height)` for `account_signing` — pure, no state access itself,
+//! enforces ADR-0027's presence rule and address-derivation check), and
+//! `apply_identity_bootstrap` (the one write-set leaf a successful
+//! bootstrap produces, the same "implicit creation writes several
+//! leaves at once" pattern `transfer`'s own implicit account creation
+//! already established). Resolving a key and verifying a signature stay
+//! separate calls, mirroring `active_key`/`ConsensusVote::verify`'s own
+//! split — this crate resolves, callers verify.
 
 mod access_list;
 mod account;
@@ -196,6 +212,8 @@ mod evidence_digest;
 mod governance;
 mod governance_payload;
 mod governance_transition;
+mod identity_transition;
+mod identity_value;
 mod key;
 mod key_descriptor;
 mod lifecycle_value;
@@ -250,6 +268,10 @@ pub use governance_transition::{
     ProposeOutcome, apply_propose, apply_propose_with_receipt, apply_vote, apply_vote_with_receipt,
     finalize_proposal,
 };
+pub use identity_transition::{
+    apply_identity_bootstrap, fetch_identity, resolve_account_signing_key,
+};
+pub use identity_value::{IDENTITY_VERSION_1, IdentityValueV1};
 pub use key::{OBJECT_ID_MAX_LEN, SUBKEY_MAX_LEN, state_key_core, state_key_extension};
 pub use lifecycle_value::{LIFECYCLE_VERSION_1, LifecycleState, LifecycleValueV1};
 pub use list_merkle::{LIST_TREE_PROFILE_ID, list_empty_root, list_merkle_root, list_node_hash};

@@ -265,9 +265,17 @@ yet-implemented structure at the time this ADR was written.
 (`hn_state::transaction_envelope`, a direct follow-up to this ADR — see
 its own crate-level documentation), with `bootstrap_key` included from
 the start, so this was not a breaking change to any shipped wire bytes.
-`IdentityValueV1` itself remains unimplemented (below): it fills a
-previously-placeholder leaf (`SectionId 0x01`) with no prior
-consensus-relevant content to preserve, whenever it is built.
+`IdentityValueV1` and the bootstrap resolution procedure are now
+implemented too (`hn_state::identity_value`/`hn_state::
+identity_transition`): `IdentityValueV1` fills the previously-
+placeholder `SectionId 0x01` leaf with no prior consensus-relevant
+content to preserve, so this was not a breaking change there either.
+`resolve_account_signing_key`/`apply_identity_bootstrap` implement
+this ADR's own "Decided: verification/bootstrap procedure" (steps 1 and
+3 — the address-derivation check and the write-on-success side effect);
+step 2 (verifying the transaction's signature against the resolved key)
+reuses the already-implemented `SignatureEnvelope::verify` directly,
+needing no new code.
 
 ## Open Decisions
 
@@ -275,14 +283,14 @@ consensus-relevant content to preserve, whenever it is built.
   first written) — a distinct, separate decision this ADR does not
   make; ADR-0010's own "Key Rotation" (validator consensus keys) is
   unrelated and unaffected
-- `IdentityValueV1` itself, and the bootstrap verification procedure
-  (address-derivation check, signature verification, the write-on-
-  success side effect) — not yet implemented; `TransactionEnvelope`
-  now carries `bootstrap_key` structurally
-  (`hn_state::transaction_envelope`), but nothing yet resolves it
-  against real state, the same "no block-processing pipeline exists
-  yet" situation most of this crate's own state-transition primitives
-  are already in
+- a `TransactionEnvelope::verify()` composing `resolve_account_signing_key`
+  (this ADR) with `verify_multisig_authorization` (ADR-0026) and actual
+  signature verification into one call — not yet implemented; every
+  underlying primitive it would call now exists
+  (`hn_state::identity_transition`/`hn_state::permission_transition`),
+  but nothing yet composes them, the same "no block-processing pipeline
+  exists yet" situation most of this crate's own state-transition
+  primitives are already in
 - whether a future post-quantum or alternate algorithm profile changes
   `IdentityValueV1`'s bound `public_key` length assumptions (already
   algorithm-agile via `PUBLIC_KEY_MAX_LEN`, ADR-0002's own reserved
