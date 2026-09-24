@@ -445,6 +445,27 @@ pub enum StateError {
         /// How many distinct signatures actually verified.
         valid: usize,
     },
+    /// [`crate::apply_transaction`] (ADR-0030) found a
+    /// `TransactionEnvelope.nonce` that does not exactly match
+    /// `sender`'s current stored nonce — an inclusion precondition
+    /// failure (ADR-0006, "Nonce": strictly increasing, gap-free), not
+    /// a legitimate execution outcome.
+    NonceMismatch {
+        /// `sender`'s actual current nonce.
+        expected: u64,
+        /// The nonce the transaction carried.
+        found: u64,
+    },
+    /// [`crate::apply_transaction`] (ADR-0030) found a transaction
+    /// outside its own `validity_window` at `current_height` — an
+    /// inclusion precondition failure, not a legitimate execution
+    /// outcome.
+    TransactionOutsideValidityWindow,
+    /// [`crate::apply_transaction`] (ADR-0030) would overflow `u64`
+    /// incrementing `sender`'s nonce — practically unreachable given
+    /// realistic transaction counts, but not silently wrapped, the
+    /// same class as [`StateError::UnbondingMaturityHeightOverflow`].
+    NonceOverflow,
     /// A decoded `TransactionEnvelope.tx_version` does not match
     /// [`crate::transaction_envelope::TX_VERSION_1`], the only shape
     /// this implementation understands.
@@ -705,6 +726,16 @@ impl core::fmt::Display for StateError {
             }
             Self::GovernanceTallyOverflow => {
                 formatter.write_str("governance chamber tally would overflow u128")
+            }
+            Self::NonceMismatch { expected, found } => write!(
+                formatter,
+                "nonce mismatch: expected {expected}, found {found}"
+            ),
+            Self::TransactionOutsideValidityWindow => {
+                formatter.write_str("transaction is outside its own validity_window")
+            }
+            Self::NonceOverflow => {
+                formatter.write_str("incrementing sender's nonce would overflow u64")
             }
             Self::UnsupportedTxVersion { value } => {
                 write!(formatter, "unsupported tx_version: {value}")

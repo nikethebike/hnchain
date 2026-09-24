@@ -7,6 +7,7 @@ use crate::{
     error::{StateError, StateResult},
     node::{leaf_hash, value_hash},
     receipt::{ReceiptStatus, ReceiptV1},
+    state_store::StateReader,
     transfer_payload::TransferPayloadV1,
     tree::Leaf,
 };
@@ -23,6 +24,52 @@ pub struct TransferParty {
     pub balance: BalanceValueV1,
     /// The account's current non-native asset holdings.
     pub assets: AssetValueV1,
+}
+
+/// Fetches and decodes `account`'s current [`BalanceValueV1`] from
+/// `reader` — absence maps to `native_balance = 0`, the same "absence
+/// means the section's own already-decided default" convention
+/// [`fetch_asset`]/[`crate::fetch_identity`] already use, not a
+/// separate design choice.
+pub fn fetch_balance(reader: &impl StateReader, account: &Digest) -> StateResult<BalanceValueV1> {
+    let key = account_section_state_key(account, AccountSection::Balance)?;
+    match reader.get(&key)? {
+        Some(bytes) => BalanceValueV1::decode(&bytes),
+        None => Ok(BalanceValueV1 { native_balance: 0 }),
+    }
+}
+
+/// Fetches and decodes `account`'s current [`AssetValueV1`] from
+/// `reader` — absence maps to empty `holdings`, matching
+/// [`AssetValueV1`]'s own already-documented "absence means zero"
+/// invariant.
+pub fn fetch_asset(reader: &impl StateReader, account: &Digest) -> StateResult<AssetValueV1> {
+    let key = account_section_state_key(account, AccountSection::Asset)?;
+    match reader.get(&key)? {
+        Some(bytes) => AssetValueV1::decode(&bytes),
+        None => Ok(AssetValueV1 {
+            holdings: Vec::new(),
+        }),
+    }
+}
+
+/// Fetches `account`'s current [`TransferParty`] from `reader` — the
+/// combination [`fetch_balance`]/[`fetch_asset`] `apply_transfer`
+/// already expects, for either side of a transfer. Absence of either
+/// section maps to its own zero default, so a never-before-seen
+/// recipient address is a valid, ordinary input here (implicit
+/// creation, ADR-0006, "Decided: implicit account creation") — this
+/// function does not itself write anything to establish that account;
+/// it only reads whatever is or is not already there.
+pub fn fetch_transfer_party(
+    reader: &impl StateReader,
+    account: Digest,
+) -> StateResult<TransferParty> {
+    Ok(TransferParty {
+        address: account,
+        balance: fetch_balance(reader, &account)?,
+        assets: fetch_asset(reader, &account)?,
+    })
 }
 
 /// Computes the two updated write-set leaves a `transfer` produces
@@ -179,14 +226,95 @@ fn asset_leaf(address: &Digest, holdings: Vec<(u16, u128)>) -> StateResult<Leaf>
 
 #[cfg(test)]
 mod tests {
-    use super::{TransferParty, apply_transfer, apply_transfer_with_receipt};
+    use super::{
+        TransferParty, apply_transfer, apply_transfer_with_receipt, fetch_asset, fetch_balance,
+        fetch_transfer_party,
+    };
     use crate::{
-        AssetValueV1, BalanceValueV1, ReceiptStatus, StateError, TransferPayloadV1,
+        AssetValueV1, BalanceValueV1, ReceiptStatus, StateError, StateReader, TransferPayloadV1,
         error::StateResult,
     };
 
     const SENDER_ADDRESS: [u8; 32] = [0x11; 32];
     const RECIPIENT_ADDRESS: [u8; 32] = [0x22; 32];
+
+    struct MapReader(std::collections::BTreeMap<[u8; 32], Vec<u8>>);
+
+    impl StateReader for MapReader {
+        fn get(&self, state_key: &[u8; 32]) -> StateResult<Option<Vec<u8>>> {
+            Ok(self.0.get(state_key).cloned())
+        }
+    }
+
+    #[test]
+    fn fetch_balance_defaults_to_zero_when_absent() -> StateResult<()> {
+        let reader = MapReader(std::collections::BTreeMap::new());
+        assert_eq!(
+            fetch_balance(&reader, &SENDER_ADDRESS)?,
+            BalanceValueV1 { native_balance: 0 }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_balance_reads_a_stored_value() -> StateResult<()> {
+        let key =
+            crate::account_section_state_key(&SENDER_ADDRESS, crate::AccountSection::Balance)?;
+        let stored = BalanceValueV1 {
+            native_balance: 500,
+        };
+        let reader = MapReader(std::collections::BTreeMap::from([(key, stored.encode())]));
+        assert_eq!(fetch_balance(&reader, &SENDER_ADDRESS)?, stored);
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_asset_defaults_to_empty_holdings_when_absent() -> StateResult<()> {
+        let reader = MapReader(std::collections::BTreeMap::new());
+        assert_eq!(
+            fetch_asset(&reader, &SENDER_ADDRESS)?,
+            AssetValueV1 { holdings: vec![] }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_asset_reads_a_stored_value() -> StateResult<()> {
+        let key = crate::account_section_state_key(&SENDER_ADDRESS, crate::AccountSection::Asset)?;
+        let stored = AssetValueV1 {
+            holdings: vec![(3, 42)],
+        };
+        let reader = MapReader(std::collections::BTreeMap::from([(key, stored.encode()?)]));
+        assert_eq!(fetch_asset(&reader, &SENDER_ADDRESS)?, stored);
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_transfer_party_combines_balance_and_asset() -> StateResult<()> {
+        let balance_key =
+            crate::account_section_state_key(&SENDER_ADDRESS, crate::AccountSection::Balance)?;
+        let asset_key =
+            crate::account_section_state_key(&SENDER_ADDRESS, crate::AccountSection::Asset)?;
+        let balance = BalanceValueV1 { native_balance: 10 };
+        let assets = AssetValueV1 {
+            holdings: vec![(1, 2)],
+        };
+        let reader = MapReader(std::collections::BTreeMap::from([
+            (balance_key, balance.encode()),
+            (asset_key, assets.encode()?),
+        ]));
+
+        let party = fetch_transfer_party(&reader, SENDER_ADDRESS)?;
+        assert_eq!(
+            party,
+            TransferParty {
+                address: SENDER_ADDRESS,
+                balance,
+                assets,
+            }
+        );
+        Ok(())
+    }
 
     fn party(address: [u8; 32], native_balance: u128, holdings: Vec<(u16, u128)>) -> TransferParty {
         TransferParty {
