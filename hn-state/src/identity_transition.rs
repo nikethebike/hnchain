@@ -102,6 +102,25 @@ pub fn apply_identity_bootstrap(
     identity_value_leaf(&sender, &value)
 }
 
+/// Computes the one write-set leaf a `permission_update`
+/// [`crate::permission_update_payload::PermissionUpdatePayloadV1::RotateIdentityKey`]
+/// operation produces (ADR-0028, "Account-Level Key Rotation"):
+/// `sender`'s Identity-section leaf, replaced with `new_key`.
+///
+/// Structurally identical to [`apply_identity_bootstrap`] — both just
+/// write an [`IdentityValueV1`] to the same leaf — but kept as its own,
+/// intent-revealing name rather than merged into one generic function:
+/// a reader at either call site should immediately know which flow they
+/// are in. Preconditions (an existing `IdentityValueV1` to rotate away
+/// from, and no active multisig configuration, ADR-0028) are a
+/// transaction-validation concern checked before this function runs,
+/// the same boundary [`apply_identity_bootstrap`] already draws for its
+/// own address-derivation check.
+pub fn apply_identity_rotation(sender: Digest, new_key: &KeyDescriptor) -> StateResult<Leaf> {
+    let value = IdentityValueV1 { key: *new_key };
+    identity_value_leaf(&sender, &value)
+}
+
 fn identity_value_leaf(sender: &Digest, value: &IdentityValueV1) -> StateResult<Leaf> {
     let key = account_section_state_key(sender, AccountSection::Identity)?;
     let value_bytes = value.encode()?;
@@ -190,6 +209,25 @@ mod tests {
         assert_eq!(leaf.0, expected_key);
 
         let expected_value = IdentityValueV1 { key: descriptor };
+        assert_eq!(
+            leaf.1,
+            super::identity_value_leaf(&SENDER, &expected_value)?.1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn apply_identity_rotation_produces_the_identity_leaf() -> StateResult<()> {
+        let new_key = keypair(0x06).key_descriptor();
+        let leaf = super::apply_identity_rotation(SENDER, &new_key)?;
+
+        let expected_key = crate::account::account_section_state_key(
+            &SENDER,
+            crate::account::AccountSection::Identity,
+        )?;
+        assert_eq!(leaf.0, expected_key);
+
+        let expected_value = IdentityValueV1 { key: new_key };
         assert_eq!(
             leaf.1,
             super::identity_value_leaf(&SENDER, &expected_value)?.1

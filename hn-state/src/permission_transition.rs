@@ -2,6 +2,7 @@ use hn_crypto::{Digest, SignatureEnvelope};
 
 use crate::account::{AccountSection, account_section_state_key};
 use crate::error::{StateError, StateResult};
+use crate::identity_transition::apply_identity_rotation;
 use crate::node::{leaf_hash, value_hash};
 use crate::permission_update_payload::PermissionUpdatePayloadV1;
 use crate::permission_value::{MultisigConfigV1, PermissionValueV1};
@@ -9,33 +10,45 @@ use crate::receipt::{ReceiptStatus, ReceiptV1};
 use crate::tree::Leaf;
 
 /// Computes the one updated write-set leaf a `permission_update`
-/// produces (ADR-0026, "Decided: `permission_update` payload"):
-/// `sender`'s Permission-section leaf, set to
-/// `payload.new_account_signing_multisig`.
+/// produces — `sender`'s Permission-section leaf for
+/// [`PermissionUpdatePayloadV1::SetAccountSigningMultisig`] (ADR-0026),
+/// or `sender`'s Identity-section leaf for
+/// [`PermissionUpdatePayloadV1::RotateIdentityKey`] (ADR-0028) —
+/// mirroring [`crate::apply_validator_update`]'s own "one entry point
+/// per `tx_type`, internal match over operations" shape.
 ///
 /// This is the state-transition half only. Which authorization rule a
-/// given `permission_update` must satisfy (today's single-key default
-/// for a first activation, or [`verify_multisig_authorization`] against
-/// the sender's pre-transaction configuration for a reconfiguration) is
-/// a transaction-validation concern checked before this function runs,
-/// not by it — the same boundary [`crate::apply_stake`]/
-/// [`crate::apply_transfer`] already draw between "is this transaction
-/// authorized" and "what state does applying it produce." There is no
-/// domain-specific rejection at this layer: `payload.
-/// new_account_signing_multisig` was already structurally validated by
-/// [`crate::permission_update_payload::PermissionUpdatePayloadV1::decode`]
-/// (threshold bounds, canonical key order, no duplicates), so this
-/// function cannot fail for a domain reason — only the generic
+/// given operation must satisfy is a transaction-validation concern
+/// checked before this function runs, not by it — the same boundary
+/// [`crate::apply_stake`]/[`crate::apply_transfer`] already draw between
+/// "is this transaction authorized" and "what state does applying it
+/// produce": `SetAccountSigningMultisig`'s own rule (today's single-key
+/// default for a first activation, or [`verify_multisig_authorization`]
+/// against the sender's pre-transaction configuration for a
+/// reconfiguration) and `RotateIdentityKey`'s own precondition (an
+/// existing `IdentityValueV1` and no active multisig configuration,
+/// ADR-0028) are both left to that not-yet-built layer. There is no
+/// domain-specific rejection at this layer: both payload variants were
+/// already structurally validated by
+/// [`crate::permission_update_payload::PermissionUpdatePayloadV1::decode`],
+/// so this function cannot fail for a domain reason — only the generic
 /// leaf-construction `Hash`/`Encoding` errors every `*_leaf` helper in
 /// this crate can already produce.
 pub fn apply_permission_update(
     sender: Digest,
     payload: &PermissionUpdatePayloadV1,
 ) -> StateResult<[Leaf; 1]> {
-    let value = PermissionValueV1 {
-        account_signing_multisig: Some(payload.new_account_signing_multisig.clone()),
-    };
-    Ok([permission_value_leaf(&sender, &value)?])
+    match payload {
+        PermissionUpdatePayloadV1::SetAccountSigningMultisig(config) => {
+            let value = PermissionValueV1 {
+                account_signing_multisig: Some(config.clone()),
+            };
+            Ok([permission_value_leaf(&sender, &value)?])
+        }
+        PermissionUpdatePayloadV1::RotateIdentityKey(new_key) => {
+            Ok([apply_identity_rotation(sender, new_key)?])
+        }
+    }
 }
 
 /// Applies a `permission_update` and produces its [`ReceiptV1`] in one
@@ -197,9 +210,7 @@ mod tests {
     #[test]
     fn apply_sets_the_permission_leaf() -> StateResult<()> {
         let (config, _keypairs) = two_of_three_config();
-        let payload = PermissionUpdatePayloadV1 {
-            new_account_signing_multisig: config,
-        };
+        let payload = PermissionUpdatePayloadV1::SetAccountSigningMultisig(config);
         let [_leaf] = apply_permission_update(SENDER, &payload)?;
         Ok(())
     }
@@ -207,11 +218,18 @@ mod tests {
     #[test]
     fn apply_with_receipt_always_yields_success() -> StateResult<()> {
         let (config, _keypairs) = two_of_three_config();
-        let payload = PermissionUpdatePayloadV1 {
-            new_account_signing_multisig: config,
-        };
+        let payload = PermissionUpdatePayloadV1::SetAccountSigningMultisig(config);
         let (_leaves, receipt) = apply_permission_update_with_receipt(SENDER, &payload, TX_ID)?;
         assert_eq!(receipt.status, ReceiptStatus::Success);
+        Ok(())
+    }
+
+    #[test]
+    fn apply_rotates_the_identity_key() -> StateResult<()> {
+        let new_key =
+            Ed25519KeyPair::from_seed(KeyRole::AccountSigning, [0x09; 32]).key_descriptor();
+        let payload = PermissionUpdatePayloadV1::RotateIdentityKey(new_key);
+        let [_leaf] = apply_permission_update(SENDER, &payload)?;
         Ok(())
     }
 

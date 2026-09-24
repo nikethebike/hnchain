@@ -249,17 +249,22 @@ An account cannot use `permission_update` to remove its
 `account_signing_multisig` configuration and revert to plain single-key
 mode. This is a deliberate scope cut, not an oversight: reverting would
 require designating which one key becomes "the" account's active
-identity key afterward — writing a new `IdentityValueV1`
-(ADR-0027, Identity State And Account Key Bootstrap, resolved after this
-ADR was first written) — which is exactly the shape of an
-account-level key *rotation*, a distinct question ADR-0027 itself
-deliberately leaves open (its own Open Decisions) even though it
-resolves Identity State's schema and initial-population bootstrap.
-Inventing an answer here, ahead of that being decided on its own terms,
-would risk contradicting whatever account-level rotation semantics
-eventually get decided. Once that item is resolved, adding a
-deactivation path is natural, narrow follow-up work — not blocked on
-anything this ADR introduces.
+identity key afterward — writing a new `IdentityValueV1` (ADR-0027,
+Identity State And Account Key Bootstrap). Account-level key *rotation*
+itself is now decided (ADR-0028, Account-Level Key Rotation,
+`RotateIdentityKey`) — but deliberately scoped to single-key mode only:
+its authorization model is "the account's one current key signs its own
+replacement," which is not the right shape for deactivation, where the
+*group* under the current multisig threshold — not any single member —
+must be the one to agree on a successor key. ADR-0028 states this
+explicitly in its own Open Decisions rather than silently leaving the
+question to look more resolved than it is. Deactivation therefore still
+needs its own mechanism (a third `permission_update` operation,
+multisig-threshold-authorized, that both clears
+`account_signing_multisig` and writes the chosen successor
+`IdentityValueV1` together) — natural, narrow follow-up work, not
+blocked on anything this ADR introduces, but not automatically granted
+by ADR-0028 either.
 
 The other 7 Permission State capabilities (administration, operation,
 viewing/read-only access, voting delegation, spending limits, session
@@ -386,12 +391,13 @@ them into this mechanism instead.
 
 ## Open Decisions
 
-- account-level key rotation (changing an already-populated
-  `IdentityValueV1` after ADR-0027's bootstrap-only pass) — **not**
-  resolved by ADR-0027 either, deliberately left for its own decision;
-  the reason deactivation (below) is still out of scope here despite
-  Identity State's schema itself now being resolved (ADR-0027)
-- deactivation back to single-key mode (blocked on the item above)
+- account-level key rotation — **resolved, ADR-0028**, but scoped to
+  single-key mode only (rejected while multisig is active); does not by
+  itself resolve deactivation, below
+- deactivation back to single-key mode — still open: needs its own
+  multisig-threshold-authorized operation (a distinct authorization
+  shape from ADR-0028's single-key-signs-its-own-replacement model),
+  not granted by ADR-0028 despite the surface similarity
 - the 7 remaining Permission State capabilities this ADR does not touch:
   administration, operation, viewing/read-only access, voting delegation,
   spending limits, session authorization, emergency lock or recovery
@@ -410,6 +416,7 @@ them into this mechanism instead.
 - `docs/adr/ADR-0006-transaction-format.md`
 - `docs/adr/ADR-0007-state-tree.md`
 - `docs/adr/ADR-0027-identity-state-and-account-key-bootstrap.md`
+- `docs/adr/ADR-0028-account-level-key-rotation.md`
 - `docs/specs/core/account-state.md`
 - `docs/specs/core/genesis-security.md`
 - `docs/whitepaper/HNChain-Whitepaper-v0.1-draft.md` (§17.10,

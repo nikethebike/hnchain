@@ -280,9 +280,13 @@ needing no new code.
 ## Open Decisions
 
 - account-level key rotation (changing `IdentityValueV1` after it is
-  first written) — a distinct, separate decision this ADR does not
-  make; ADR-0010's own "Key Rotation" (validator consensus keys) is
-  unrelated and unaffected
+  first written) — **resolved, ADR-0028 (Account-Level Key Rotation)**:
+  immediate effect, no delay (unlike ADR-0010's validator consensus
+  key rotation, unrelated and unaffected by either decision), rejected
+  while a multisig configuration is active. Multisig *deactivation*
+  (picking a successor key when `account_signing_multisig` is removed)
+  remains separately open — ADR-0028's own Open Decisions, not resolved
+  by it despite the surface similarity
 - a `TransactionEnvelope::verify()` composing `resolve_account_signing_key`
   (this ADR) with `verify_multisig_authorization` (ADR-0026) and actual
   signature verification into one call — not yet implemented; every

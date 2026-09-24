@@ -157,9 +157,26 @@
 //! verification rule itself — a pure function taking an
 //! already-fetched `MultisigConfigV1`, mirroring every other `apply_*`
 //! function's "caller already resolved state" boundary; deactivating
-//! back to single-key mode is deliberately not supported (blocked on
-//! Identity State/`active_key(...)`, ADR-0002's own separately open
-//! item, surfaced but not resolved by ADR-0026).
+//! back to single-key mode is deliberately still not supported (needs
+//! its own multisig-threshold-authorized operation — a different
+//! authorization shape from ADR-0028's rotation, below, not granted by
+//! it despite the surface similarity).
+//!
+//! [`identity_transition`]'s `apply_identity_rotation` and a third
+//! `PermissionUpdatePayloadV1` shape (ADR-0028, "Account-Level Key
+//! Rotation") add single-key-mode rotation: `PermissionUpdatePayloadV1`
+//! is now `SetAccountSigningMultisig(MultisigConfigV1)` (`payload_version
+//! = 1`, ADR-0026, wire-unchanged) or `RotateIdentityKey(KeyDescriptor)`
+//! (`payload_version = 2`, new) — `payload_version` itself is the
+//! discriminant, mirroring `SignatureEnvelope`'s own `envelope_version`
+//! 1-vs-2 split, so no separate operation byte was added on top of it.
+//! `apply_permission_update` dispatches on the payload variant the same
+//! "one entry point per `tx_type`, internal match" shape
+//! `apply_validator_update` already uses. Rotation activates
+//! immediately (no epoch-boundary-style delay like ADR-0010's validator
+//! case — nonce ordering already serializes same-sender transactions,
+//! so there is no concurrency hazard for a delay to guard against) and
+//! is rejected while a multisig configuration is active.
 //!
 //! [`transaction_envelope`] adds `TransactionEnvelope`/
 //! `TransactionSigningPayload` themselves as concrete Rust types
@@ -269,7 +286,7 @@ pub use governance_transition::{
     finalize_proposal,
 };
 pub use identity_transition::{
-    apply_identity_bootstrap, fetch_identity, resolve_account_signing_key,
+    apply_identity_bootstrap, apply_identity_rotation, fetch_identity, resolve_account_signing_key,
 };
 pub use identity_value::{IDENTITY_VERSION_1, IdentityValueV1};
 pub use key::{OBJECT_ID_MAX_LEN, SUBKEY_MAX_LEN, state_key_core, state_key_extension};
@@ -281,7 +298,8 @@ pub use permission_transition::{
     apply_permission_update, apply_permission_update_with_receipt, verify_multisig_authorization,
 };
 pub use permission_update_payload::{
-    PERMISSION_UPDATE_PAYLOAD_VERSION_1, PermissionUpdatePayloadV1,
+    PERMISSION_UPDATE_PAYLOAD_VERSION_1, PERMISSION_UPDATE_PAYLOAD_VERSION_2,
+    PermissionUpdatePayloadV1,
 };
 pub use permission_value::{
     MAX_AUTHORIZED_KEYS, MultisigConfigV1, PERMISSION_VERSION_1, PermissionValueV1,
