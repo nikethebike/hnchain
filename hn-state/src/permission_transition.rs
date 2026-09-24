@@ -7,7 +7,23 @@ use crate::node::{leaf_hash, value_hash};
 use crate::permission_update_payload::PermissionUpdatePayloadV1;
 use crate::permission_value::{MultisigConfigV1, PermissionValueV1};
 use crate::receipt::{ReceiptStatus, ReceiptV1};
+use crate::state_store::StateReader;
 use crate::tree::Leaf;
+
+/// Fetches and decodes `account`'s current [`PermissionValueV1`] from
+/// `reader`, or `None` if nothing is stored at its Permission-section
+/// leaf — mirrors [`crate::fetch_identity`]'s own shape for the
+/// `accounts` domain's Permission section.
+pub fn fetch_permission(
+    reader: &impl StateReader,
+    account: &Digest,
+) -> StateResult<Option<PermissionValueV1>> {
+    let key = account_section_state_key(account, AccountSection::Permission)?;
+    match reader.get(&key)? {
+        Some(bytes) => Ok(Some(PermissionValueV1::decode(&bytes)?)),
+        None => Ok(None),
+    }
+}
 
 /// Computes the one updated write-set leaf a `permission_update`
 /// produces — `sender`'s Permission-section leaf for

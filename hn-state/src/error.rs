@@ -419,6 +419,22 @@ pub enum StateError {
     /// `key_reference` once an account is in multisig mode; an entry
     /// shaped for single-key mode has no defined meaning there.
     MissingKeyReference,
+    /// [`crate::TransactionEnvelope::verify`] (ADR-0027/ADR-0028) found
+    /// a signer in single-key mode (no active `account_signing_multisig`)
+    /// whose `signatures` list does not contain exactly one entry — the
+    /// single-key model has exactly one active signature, unlike
+    /// multisig mode's "at least `threshold`, extras tolerated" rule.
+    ExpectedExactlyOneSignature {
+        /// How many entries `signatures` actually had.
+        count: usize,
+    },
+    /// [`crate::TransactionEnvelope::verify`] found a single-key-mode
+    /// signature with a present `key_reference` — meaningless outside
+    /// an active multisig configuration, the same "exactly one
+    /// canonical encoding per semantic state" rejection
+    /// [`StateError::MissingKeyReference`] enforces from the other
+    /// direction.
+    UnexpectedKeyReference,
     /// [`crate::verify_multisig_authorization`] (ADR-0026) found fewer
     /// distinct, in-bounds, successfully-verified `key_reference`s among
     /// the supplied `signatures` than `MultisigConfigV1.threshold`
@@ -666,6 +682,13 @@ impl core::fmt::Display for StateError {
             ),
             Self::MissingKeyReference => {
                 formatter.write_str("signature envelope has no key_reference in multisig mode")
+            }
+            Self::ExpectedExactlyOneSignature { count } => write!(
+                formatter,
+                "expected exactly one signature in single-key mode, got {count}"
+            ),
+            Self::UnexpectedKeyReference => {
+                formatter.write_str("key_reference present on a single-key-mode signature")
             }
             Self::InsufficientMultisigSignatures { required, valid } => write!(
                 formatter,

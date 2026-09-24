@@ -195,26 +195,34 @@
 //! `decode_from` alongside their existing standalone `encode`/`decode`,
 //! the same flat-embedding convention `SignatureEnvelope` already
 //! established, so `TransactionEnvelope` can embed them without a
-//! redundant length-prefixed wrapper. No `verify()` method exists yet
-//! on `TransactionEnvelope` itself (composing `bootstrap_key`/
-//! `IdentityValueV1`/multisig resolution into one call — no block-
-//! processing pipeline exists anywhere in this codebase to call it —
-//! is separate follow-up work), but the underlying primitives it would
-//! call now do: [`identity_value`] adds `IdentityValueV1` (`SectionId
-//! 0x01`, ADR-0027) — the account's currently-active `account_signing`
-//! key, stored as a `KeyDescriptor` the same way `ValidatorRecordV1.
-//! consensus_key` already is. [`identity_transition`] adds
-//! `fetch_identity` (mirrors `fetch_validator_record`'s own shape for
-//! the `accounts` domain), `resolve_account_signing_key` (the first
-//! concrete resolution of ADR-0002's `active_key(identity, role,
-//! height)` for `account_signing` — pure, no state access itself,
-//! enforces ADR-0027's presence rule and address-derivation check), and
-//! `apply_identity_bootstrap` (the one write-set leaf a successful
-//! bootstrap produces, the same "implicit creation writes several
-//! leaves at once" pattern `transfer`'s own implicit account creation
-//! already established). Resolving a key and verifying a signature stay
-//! separate calls, mirroring `active_key`/`ConsensusVote::verify`'s own
-//! split — this crate resolves, callers verify.
+//! redundant length-prefixed wrapper. [`identity_value`] adds
+//! `IdentityValueV1` (`SectionId 0x01`, ADR-0027) — the account's
+//! currently-active `account_signing` key, stored as a `KeyDescriptor`
+//! the same way `ValidatorRecordV1.consensus_key` already is.
+//! [`identity_transition`] adds `fetch_identity` (mirrors
+//! `fetch_validator_record`'s own shape for the `accounts` domain),
+//! `resolve_account_signing_key` (the first concrete resolution of
+//! ADR-0002's `active_key(identity, role, height)` for
+//! `account_signing` — pure, no state access itself, enforces
+//! ADR-0027's presence rule and address-derivation check),
+//! `apply_identity_bootstrap`, and `apply_identity_rotation` (ADR-0028
+//! — structurally identical leaf writes, kept as separate
+//! intent-revealing names).
+//!
+//! `TransactionEnvelope::verify(&self, reader: &impl StateReader)`
+//! (ADR-0026/ADR-0027/ADR-0028) is the composing call every one of
+//! those primitives was built for: fetches `PermissionValueV1`, and
+//! dispatches to `verify_multisig_authorization` when
+//! `account_signing_multisig` is active or to
+//! `resolve_account_signing_key` + an ordinary
+//! `SignatureEnvelope::verify` otherwise (enforcing single-key mode's
+//! own "exactly one signature, no `key_reference`" rule along the way).
+//! Scoped the same way `ConsensusVote::verify` already is —
+//! cryptographic authorization only, not `payload` execution or the
+//! other envelope fields' own validity — and it never writes: a
+//! successful bootstrap still needs a separate
+//! `apply_identity_bootstrap` call to actually produce the
+//! `IdentityValueV1` leaf, since `verify` only takes a `StateReader`.
 
 mod access_list;
 mod account;

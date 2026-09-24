@@ -8,9 +8,12 @@ use hn_hncs::{
 use crate::access_list::AccessListV1;
 use crate::error::{StateError, StateResult};
 use crate::governance_payload::GovernancePayloadV1;
+use crate::identity_transition::{fetch_identity, resolve_account_signing_key};
 use crate::key_descriptor::{decode_key_descriptor, encode_key_descriptor};
+use crate::permission_transition::{fetch_permission, verify_multisig_authorization};
 use crate::permission_update_payload::PermissionUpdatePayloadV1;
 use crate::stake_payload::StakePayloadV1;
+use crate::state_store::StateReader;
 use crate::transfer_payload::TransferPayloadV1;
 use crate::unstake_payload::UnstakePayloadV1;
 use crate::validator_update_payload::ValidatorUpdatePayloadV1;
@@ -301,6 +304,92 @@ impl TransactionEnvelope {
             payload: self.payload.clone(),
         }
     }
+
+    /// Verifies that `signatures` authorize this transaction — the one
+    /// composing call every underlying primitive
+    /// (`resolve_account_signing_key`/`verify_multisig_authorization`/
+    /// `SignatureEnvelope::verify`) was already built for but nothing
+    /// yet tied together (ADR-0026/ADR-0027/ADR-0028).
+    ///
+    /// Scope matches [`crate::vote::ConsensusVote::verify`]'s own: only
+    /// the cryptographic authorization question. It does **not** check
+    /// `nonce`/`fee_limit`/`validity_window`/`access_list`/`payload`
+    /// validity, does not execute `payload`, and — for a bootstrap
+    /// transaction (`bootstrap_key: Some`) — does **not** write the new
+    /// `IdentityValueV1` itself: a successful `Ok(())` here means the
+    /// caller should separately call
+    /// [`crate::apply_identity_bootstrap`] (using `self.bootstrap_key`)
+    /// to obtain that leaf, mirroring how [`crate::apply_permission_update`]
+    /// is already a separate step from authorization everywhere else in
+    /// this crate — `verify` only ever reads (`reader: &impl
+    /// StateReader`), it cannot write.
+    ///
+    /// Dispatches on `sender`'s current `PermissionValueV1` exactly as
+    /// ADR-0026 decided:
+    ///
+    /// - `account_signing_multisig: Some(config)` — `bootstrap_key` must
+    ///   be absent ([`StateError::UnexpectedBootstrapKey`]: an account
+    ///   with an active multisig configuration already has a populated
+    ///   `IdentityValueV1` from when that configuration was first
+    ///   activated, ADR-0027's own "Decided: interaction with ADR-0026",
+    ///   so there is never a bootstrap case here), then
+    ///   [`verify_multisig_authorization`].
+    /// - `account_signing_multisig: None` (or no `PermissionValueV1` at
+    ///   all) — single-key mode: [`fetch_identity`] +
+    ///   [`resolve_account_signing_key`] resolve the one key to check
+    ///   against (handling both the ordinary and the bootstrap case,
+    ///   ADR-0027), then `signatures` must contain **exactly one** entry
+    ///   ([`StateError::ExpectedExactlyOneSignature`] otherwise — unlike
+    ///   multisig mode, single-key mode has no "extras tolerated" rule)
+    ///   with no `key_reference`
+    ///   ([`StateError::UnexpectedKeyReference`] otherwise), verified
+    ///   with an ordinary [`hn_crypto::SignatureEnvelope::verify`] call.
+    pub fn verify(&self, reader: &impl StateReader) -> StateResult<()> {
+        let message = self.signing_payload().signing_digest()?;
+        let multisig = fetch_permission(reader, &self.sender)?
+            .and_then(|permission| permission.account_signing_multisig);
+
+        match multisig {
+            Some(config) => {
+                if self.bootstrap_key.is_some() {
+                    return Err(StateError::UnexpectedBootstrapKey);
+                }
+                verify_multisig_authorization(&config, &self.signatures, &message)
+            }
+            None => {
+                let identity = fetch_identity(reader, &self.sender)?;
+                let key = resolve_account_signing_key(
+                    identity.as_ref(),
+                    self.bootstrap_key.as_ref(),
+                    &self.sender,
+                    self.network_id,
+                )?;
+                verify_single_signature(&self.signatures, &key, &message)
+            }
+        }
+    }
+}
+
+/// Verifies `signatures` under single-key mode: exactly one entry, no
+/// `key_reference`, checked against `key`. The counterpart
+/// [`verify_multisig_authorization`] handles the multisig case.
+fn verify_single_signature(
+    signatures: &[SignatureEnvelope],
+    key: &KeyDescriptor,
+    message: &Digest,
+) -> StateResult<()> {
+    if signatures.len() != 1 {
+        return Err(StateError::ExpectedExactlyOneSignature {
+            count: signatures.len(),
+        });
+    }
+    let envelope = &signatures[0];
+    if envelope.key_reference.is_some() {
+        return Err(StateError::UnexpectedKeyReference);
+    }
+    envelope
+        .verify(key, message)
+        .map_err(StateError::SignatureVerificationFailed)
 }
 
 /// The canonical subset of a [`TransactionEnvelope`] that `sender`'s
@@ -568,5 +657,250 @@ mod tests {
                 tx_type: TxType::System.as_u8()
             })
         );
+    }
+
+    mod verify {
+        use hn_crypto::{KeyDescriptor, account_address_body};
+
+        use super::{Ed25519KeyPair, KeyRole, SENDER, SignatureEnvelope, StateError, StateResult};
+        use crate::account::{AccountSection, account_section_state_key};
+        use crate::identity_value::IdentityValueV1;
+        use crate::permission_value::{MultisigConfigV1, PermissionValueV1};
+        use crate::state_store::StateReader;
+        use crate::transaction_envelope::TransactionEnvelope;
+
+        const NETWORK_ID: u16 = 1;
+
+        /// In-memory [`StateReader`], the same test-only pattern
+        /// `vote::tests::MapReader` already uses.
+        struct MapReader(std::collections::BTreeMap<[u8; 32], Vec<u8>>);
+
+        impl StateReader for MapReader {
+            fn get(&self, state_key: &[u8; 32]) -> StateResult<Option<Vec<u8>>> {
+                Ok(self.0.get(state_key).cloned())
+            }
+        }
+
+        fn keypair(seed: u8) -> Ed25519KeyPair {
+            Ed25519KeyPair::from_seed(KeyRole::AccountSigning, [seed; 32])
+        }
+
+        fn address_of(descriptor: &KeyDescriptor) -> StateResult<[u8; 32]> {
+            Ok(account_address_body(
+                NETWORK_ID,
+                descriptor.algorithm_id(),
+                &descriptor.public_key_bytes(),
+            )?)
+        }
+
+        fn signed(
+            mut envelope: TransactionEnvelope,
+            keypair: &Ed25519KeyPair,
+        ) -> StateResult<TransactionEnvelope> {
+            let digest = envelope.signing_payload().signing_digest()?;
+            envelope.signatures = vec![SignatureEnvelope {
+                algorithm_id: keypair.key_descriptor().algorithm_id(),
+                key_reference: None,
+                signature: keypair.sign(&digest).to_vec(),
+            }];
+            Ok(envelope)
+        }
+
+        fn bare_envelope(sender: [u8; 32]) -> StateResult<TransactionEnvelope> {
+            let mut envelope = super::sample()?;
+            envelope.sender = sender;
+            envelope.network_id = NETWORK_ID;
+            envelope.bootstrap_key = None;
+            Ok(envelope)
+        }
+
+        #[test]
+        fn bootstrap_succeeds_and_needs_no_stored_state() -> StateResult<()> {
+            let keypair = keypair(0x01);
+            let descriptor = keypair.key_descriptor();
+            let sender = address_of(&descriptor)?;
+            let mut envelope = bare_envelope(sender)?;
+            envelope.bootstrap_key = Some(descriptor);
+            let envelope = signed(envelope, &keypair)?;
+
+            let reader = MapReader(std::collections::BTreeMap::new());
+            envelope.verify(&reader)
+        }
+
+        #[test]
+        fn bootstrap_rejects_a_key_that_does_not_derive_the_sender_address() -> StateResult<()> {
+            let keypair = keypair(0x02);
+            let mut envelope = bare_envelope(SENDER)?; // SENDER is unrelated to `keypair`
+            envelope.bootstrap_key = Some(keypair.key_descriptor());
+            let envelope = signed(envelope, &keypair)?;
+
+            let reader = MapReader(std::collections::BTreeMap::new());
+            assert_eq!(
+                envelope.verify(&reader),
+                Err(StateError::BootstrapKeyAddressMismatch)
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn ordinary_single_key_transaction_succeeds_against_stored_identity() -> StateResult<()> {
+            let keypair = keypair(0x03);
+            let descriptor = keypair.key_descriptor();
+            let sender = address_of(&descriptor)?;
+            let envelope = signed(bare_envelope(sender)?, &keypair)?;
+
+            let identity_key = account_section_state_key(&sender, AccountSection::Identity)?;
+            let identity = IdentityValueV1 { key: descriptor };
+            let reader = MapReader(std::collections::BTreeMap::from([(
+                identity_key,
+                identity.encode()?,
+            )]));
+
+            envelope.verify(&reader)
+        }
+
+        #[test]
+        fn rejects_a_bootstrap_key_when_identity_already_exists() -> StateResult<()> {
+            let keypair = keypair(0x04);
+            let descriptor = keypair.key_descriptor();
+            let sender = address_of(&descriptor)?;
+            let mut envelope = bare_envelope(sender)?;
+            envelope.bootstrap_key = Some(descriptor);
+            let envelope = signed(envelope, &keypair)?;
+
+            let identity_key = account_section_state_key(&sender, AccountSection::Identity)?;
+            let identity = IdentityValueV1 { key: descriptor };
+            let reader = MapReader(std::collections::BTreeMap::from([(
+                identity_key,
+                identity.encode()?,
+            )]));
+
+            assert_eq!(
+                envelope.verify(&reader),
+                Err(StateError::UnexpectedBootstrapKey)
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn rejects_a_wrong_signature_in_single_key_mode() -> StateResult<()> {
+            let signer = keypair(0x05);
+            let stored = keypair(0x06);
+            let sender = address_of(&stored.key_descriptor())?;
+            // Signed by a *different* key than the one on file.
+            let envelope = signed(bare_envelope(sender)?, &signer)?;
+
+            let identity_key = account_section_state_key(&sender, AccountSection::Identity)?;
+            let identity = IdentityValueV1 {
+                key: stored.key_descriptor(),
+            };
+            let reader = MapReader(std::collections::BTreeMap::from([(
+                identity_key,
+                identity.encode()?,
+            )]));
+
+            assert!(matches!(
+                envelope.verify(&reader),
+                Err(StateError::SignatureVerificationFailed(_))
+            ));
+            Ok(())
+        }
+
+        #[test]
+        fn rejects_more_than_one_signature_in_single_key_mode() -> StateResult<()> {
+            let keypair = keypair(0x07);
+            let descriptor = keypair.key_descriptor();
+            let sender = address_of(&descriptor)?;
+            let mut envelope = signed(bare_envelope(sender)?, &keypair)?;
+            let extra = envelope.signatures[0].clone();
+            envelope.signatures.push(extra);
+
+            let identity_key = account_section_state_key(&sender, AccountSection::Identity)?;
+            let identity = IdentityValueV1 { key: descriptor };
+            let reader = MapReader(std::collections::BTreeMap::from([(
+                identity_key,
+                identity.encode()?,
+            )]));
+
+            assert_eq!(
+                envelope.verify(&reader),
+                Err(StateError::ExpectedExactlyOneSignature { count: 2 })
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn multisig_transaction_succeeds_against_stored_configuration() -> StateResult<()> {
+            let keypairs = [keypair(0x08), keypair(0x09)];
+            let mut authorized_keys: Vec<_> = keypairs
+                .iter()
+                .map(Ed25519KeyPair::key_descriptor)
+                .collect();
+            authorized_keys.sort_by_key(KeyDescriptor::public_key_bytes);
+            let config = MultisigConfigV1 {
+                threshold: 2,
+                authorized_keys,
+            };
+
+            let mut envelope = bare_envelope(SENDER)?;
+            let digest = envelope.signing_payload().signing_digest()?;
+            envelope.signatures = keypairs
+                .iter()
+                .map(|keypair| -> StateResult<SignatureEnvelope> {
+                    let descriptor = keypair.key_descriptor();
+                    let key_reference = config
+                        .authorized_keys
+                        .iter()
+                        .position(|candidate| {
+                            candidate.public_key_bytes() == descriptor.public_key_bytes()
+                        })
+                        .ok_or(StateError::MissingKeyReference)?
+                        as u8;
+                    Ok(SignatureEnvelope {
+                        algorithm_id: descriptor.algorithm_id(),
+                        key_reference: Some(key_reference),
+                        signature: keypair.sign(&digest).to_vec(),
+                    })
+                })
+                .collect::<StateResult<Vec<_>>>()?;
+
+            let permission_key = account_section_state_key(&SENDER, AccountSection::Permission)?;
+            let permission = PermissionValueV1 {
+                account_signing_multisig: Some(config),
+            };
+            let reader = MapReader(std::collections::BTreeMap::from([(
+                permission_key,
+                permission.encode()?,
+            )]));
+
+            envelope.verify(&reader)
+        }
+
+        #[test]
+        fn multisig_rejects_a_bootstrap_key() -> StateResult<()> {
+            let keypair = keypair(0x0a);
+            let config = MultisigConfigV1 {
+                threshold: 1,
+                authorized_keys: vec![keypair.key_descriptor()],
+            };
+            let mut envelope = bare_envelope(SENDER)?;
+            envelope.bootstrap_key = Some(keypair.key_descriptor());
+            let envelope = signed(envelope, &keypair)?;
+
+            let permission_key = account_section_state_key(&SENDER, AccountSection::Permission)?;
+            let permission = PermissionValueV1 {
+                account_signing_multisig: Some(config),
+            };
+            let reader = MapReader(std::collections::BTreeMap::from([(
+                permission_key,
+                permission.encode()?,
+            )]));
+
+            assert_eq!(
+                envelope.verify(&reader),
+                Err(StateError::UnexpectedBootstrapKey)
+            );
+            Ok(())
+        }
     }
 }

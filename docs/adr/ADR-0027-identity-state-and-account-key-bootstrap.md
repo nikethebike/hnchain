@@ -287,14 +287,15 @@ needing no new code.
   (picking a successor key when `account_signing_multisig` is removed)
   remains separately open — ADR-0028's own Open Decisions, not resolved
   by it despite the surface similarity
-- a `TransactionEnvelope::verify()` composing `resolve_account_signing_key`
-  (this ADR) with `verify_multisig_authorization` (ADR-0026) and actual
-  signature verification into one call — not yet implemented; every
-  underlying primitive it would call now exists
-  (`hn_state::identity_transition`/`hn_state::permission_transition`),
-  but nothing yet composes them, the same "no block-processing pipeline
-  exists yet" situation most of this crate's own state-transition
-  primitives are already in
+- `TransactionEnvelope::verify()` — **implemented**
+  (`hn_state::transaction_envelope`): composes `resolve_account_signing_key`
+  (this ADR) with `verify_multisig_authorization` (ADR-0026) and
+  `SignatureEnvelope::verify` into one `&impl StateReader`-taking call,
+  scoped the same way `ConsensusVote::verify` is — cryptographic
+  authorization only, not payload execution or the other envelope
+  fields' own validity, and it does not itself write the bootstrapped
+  `IdentityValueV1` (a separate step, `apply_identity_bootstrap`, since
+  `verify` only reads)
 - whether a future post-quantum or alternate algorithm profile changes
   `IdentityValueV1`'s bound `public_key` length assumptions (already
   algorithm-agile via `PUBLIC_KEY_MAX_LEN`, ADR-0002's own reserved
