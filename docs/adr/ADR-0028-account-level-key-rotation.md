@@ -207,9 +207,9 @@ is new. Not a breaking change to any already-shipped encoding.
 
 - multisig deactivation (designating a successor key when
   `account_signing_multisig` is cleared) — explicitly **not** resolved
-  by this ADR despite the surface similarity; needs its own
-  multisig-threshold-authorized operation, ADR-0026's own still-open
-  item
+  by this ADR despite the surface similarity; **resolved separately,
+  ADR-0029 (Multisig Deactivation)**, via its own
+  multisig-threshold-authorized operation
 - rotating a `validator_consensus` key is ADR-0010's own, separately
   decided mechanism — unrelated, unaffected by this ADR
 - whether a rotated-to key may collide with another account's key (key
@@ -226,3 +226,5 @@ is new. Not a breaking change to any already-shipped encoding.
   rotation — a distinct, separately-decided mechanism)
 - `docs/adr/ADR-0026-threshold-and-multisignature-authorization.md`
 - `docs/adr/ADR-0027-identity-state-and-account-key-bootstrap.md`
+- `docs/adr/ADR-0029-multisig-deactivation.md` (resolves multisig
+  deactivation, which this ADR names but does not resolve)

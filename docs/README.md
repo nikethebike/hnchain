@@ -44,6 +44,7 @@ docs/
     ADR-0026-threshold-and-multisignature-authorization.md
     ADR-0027-identity-state-and-account-key-bootstrap.md
     ADR-0028-account-level-key-rotation.md
+    ADR-0029-multisig-deactivation.md
 
   specs/
     core/

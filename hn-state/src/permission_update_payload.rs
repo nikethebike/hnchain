@@ -14,35 +14,46 @@ pub const PERMISSION_UPDATE_PAYLOAD_VERSION_1: u16 = 1;
 /// `payload_version = 2` (ADR-0028, "Account-Level Key Rotation"):
 /// [`PermissionUpdatePayloadV1::RotateIdentityKey`] — a bare
 /// `KeyDescriptorV1`, no discriminant prefix. `payload_version` itself
-/// is what distinguishes the two operations (see the type's own
+/// is what distinguishes the operations (see the type's own
 /// documentation for why a separate operation byte would be redundant
 /// on top of it); a version, not a field, is this payload's
 /// discriminant.
 pub const PERMISSION_UPDATE_PAYLOAD_VERSION_2: u16 = 2;
 
-/// `permission_update` (`tx_type = 0x08`) payload: two operations,
+/// `payload_version = 3` (ADR-0029, "Multisig Deactivation"):
+/// [`PermissionUpdatePayloadV1::DeactivateMultisig`] — a bare
+/// `KeyDescriptorV1` (the group-chosen successor key), the same wire
+/// shape as `RotateIdentityKey` but a genuinely distinct version: see
+/// the type's own documentation for why the two are not collapsed into
+/// one encoding.
+pub const PERMISSION_UPDATE_PAYLOAD_VERSION_3: u16 = 3;
+
+/// `permission_update` (`tx_type = 0x08`) payload: three operations,
 /// distinguished by `payload_version` rather than a discriminant field
-/// (ADR-0026 for the first, ADR-0028 for the second) — mirrors
-/// `hn_crypto::SignatureEnvelope`'s own `envelope_version` 1-vs-2 split
-/// exactly. A version, not a byte alongside it, is the discriminant
-/// because the two operations have completely disjoint wire shapes and
-/// there is no case where knowing the version still leaves the
-/// operation ambiguous — unlike `ValidatorUpdatePayloadV1`/
+/// (ADR-0026 for the first, ADR-0028 for the second, ADR-0029 for the
+/// third) — mirrors `hn_crypto::SignatureEnvelope`'s own
+/// `envelope_version` 1-vs-2 split. A version, not a byte alongside it,
+/// is the discriminant because every operation has a wire shape fully
+/// determined by its version alone — unlike `ValidatorUpdatePayloadV1`/
 /// `GovernancePayloadV1`, whose several operations all share one fixed
 /// `payload_version` and genuinely need a separate byte to disambiguate.
 ///
-/// Whether a given `SetAccountSigningMultisig` is a first activation or
-/// a reconfiguration, and whether a `RotateIdentityKey` is even valid
-/// (requires an existing `IdentityValueV1` and no active multisig
-/// configuration, ADR-0028) are transaction-validation concerns this
-/// payload's own decode/encode does not enforce — see ADR-0026's/
-/// ADR-0028's own "Decided" text for the full authorization rules.
+/// `RotateIdentityKey` and `DeactivateMultisig` share the exact same
+/// wire shape (a bare `KeyDescriptorV1`) but are deliberately **not**
+/// collapsed into one `payload_version` with state deciding which
+/// applies: every `apply_*` function in this crate determines its
+/// transition purely from its own payload, never by reading state
+/// first, and collapsing these two would be the first exception
+/// (ADR-0029, "Rejected Options").
 ///
-/// Deactivating an active multisig configuration back to single-key
-/// mode is still not representable by either operation — ADR-0028's own
-/// "Open Decisions" names why: it needs multisig-threshold
-/// authorization for a successor key, a distinct mechanism from either
-/// operation here.
+/// Whether a given `SetAccountSigningMultisig` is a first activation or
+/// a reconfiguration, whether a `RotateIdentityKey` is even valid
+/// (requires an existing `IdentityValueV1` and no active multisig
+/// configuration, ADR-0028), and whether a `DeactivateMultisig` is valid
+/// (requires an active multisig configuration, ADR-0029) are
+/// transaction-validation concerns this payload's own decode/encode
+/// does not enforce — see each operation's own owning ADR for the full
+/// authorization rules.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PermissionUpdatePayloadV1 {
     /// Sets the sender's `account_signing_multisig` configuration
@@ -51,6 +62,13 @@ pub enum PermissionUpdatePayloadV1 {
     /// Replaces the sender's `IdentityValueV1.key` (ADR-0028) — valid
     /// only for an account with no active multisig configuration.
     RotateIdentityKey(KeyDescriptor),
+    /// Clears the sender's `account_signing_multisig` configuration and
+    /// sets `IdentityValueV1.key` to the enclosed successor key
+    /// (ADR-0029) — valid only for an account with an active multisig
+    /// configuration, authorized by that configuration's own threshold
+    /// (`verify_multisig_authorization`, ADR-0026), not by any single
+    /// signer.
+    DeactivateMultisig(KeyDescriptor),
 }
 
 impl PermissionUpdatePayloadV1 {
@@ -65,6 +83,10 @@ impl PermissionUpdatePayloadV1 {
             Self::RotateIdentityKey(key) => {
                 write_u16(&mut out, PERMISSION_UPDATE_PAYLOAD_VERSION_2);
                 encode_key_descriptor(&mut out, key).map_err(StateError::Encoding)?;
+            }
+            Self::DeactivateMultisig(successor) => {
+                write_u16(&mut out, PERMISSION_UPDATE_PAYLOAD_VERSION_3);
+                encode_key_descriptor(&mut out, successor).map_err(StateError::Encoding)?;
             }
         }
         Ok(out)
@@ -85,6 +107,10 @@ impl PermissionUpdatePayloadV1 {
                 let key = decode_key_descriptor(&mut decoder, KeyRole::AccountSigning)?;
                 Self::RotateIdentityKey(key)
             }
+            PERMISSION_UPDATE_PAYLOAD_VERSION_3 => {
+                let key = decode_key_descriptor(&mut decoder, KeyRole::AccountSigning)?;
+                Self::DeactivateMultisig(key)
+            }
             value => {
                 return Err(StateError::UnsupportedPermissionUpdatePayloadVersion { value });
             }
@@ -101,7 +127,7 @@ mod tests {
 
     use super::{
         PERMISSION_UPDATE_PAYLOAD_VERSION_1, PERMISSION_UPDATE_PAYLOAD_VERSION_2,
-        PermissionUpdatePayloadV1, StateError,
+        PERMISSION_UPDATE_PAYLOAD_VERSION_3, PermissionUpdatePayloadV1, StateError,
     };
     use crate::error::StateResult;
     use crate::permission_value::MultisigConfigV1;
@@ -119,9 +145,18 @@ mod tests {
         PermissionUpdatePayloadV1::RotateIdentityKey(keypair.key_descriptor())
     }
 
+    fn deactivate_payload() -> PermissionUpdatePayloadV1 {
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::AccountSigning, [0x03; 32]);
+        PermissionUpdatePayloadV1::DeactivateMultisig(keypair.key_descriptor())
+    }
+
     #[test]
     fn round_trips_through_decode() -> StateResult<()> {
-        for value in [set_multisig_payload(), rotate_key_payload()] {
+        for value in [
+            set_multisig_payload(),
+            rotate_key_payload(),
+            deactivate_payload(),
+        ] {
             let decoded = PermissionUpdatePayloadV1::decode(&value.encode()?)?;
             assert_eq!(decoded, value);
         }
@@ -149,19 +184,33 @@ mod tests {
     }
 
     #[test]
+    fn deactivate_encodes_as_version_3() -> StateResult<()> {
+        let encoded = deactivate_payload().encode()?;
+        assert_eq!(
+            &encoded[0..2],
+            &PERMISSION_UPDATE_PAYLOAD_VERSION_3.to_le_bytes()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn rejects_unsupported_payload_version() -> StateResult<()> {
         let mut encoded = set_multisig_payload().encode()?;
-        encoded[0] = 0x03; // payload_version low byte, little-endian
+        encoded[0] = 0x04; // payload_version low byte, little-endian
         assert_eq!(
             PermissionUpdatePayloadV1::decode(&encoded),
-            Err(StateError::UnsupportedPermissionUpdatePayloadVersion { value: 3 })
+            Err(StateError::UnsupportedPermissionUpdatePayloadVersion { value: 4 })
         );
         Ok(())
     }
 
     #[test]
     fn rejects_trailing_bytes() -> StateResult<()> {
-        for value in [set_multisig_payload(), rotate_key_payload()] {
+        for value in [
+            set_multisig_payload(),
+            rotate_key_payload(),
+            deactivate_payload(),
+        ] {
             let mut encoded = value.encode()?;
             encoded.push(0x00);
             assert!(matches!(

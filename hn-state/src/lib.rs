@@ -156,27 +156,40 @@
 //! directly. `verify_multisig_authorization` is the multi-signature
 //! verification rule itself — a pure function taking an
 //! already-fetched `MultisigConfigV1`, mirroring every other `apply_*`
-//! function's "caller already resolved state" boundary; deactivating
-//! back to single-key mode is deliberately still not supported (needs
-//! its own multisig-threshold-authorized operation — a different
-//! authorization shape from ADR-0028's rotation, below, not granted by
-//! it despite the surface similarity).
+//! function's "caller already resolved state" boundary.
 //!
 //! [`identity_transition`]'s `apply_identity_rotation` and a third
 //! `PermissionUpdatePayloadV1` shape (ADR-0028, "Account-Level Key
 //! Rotation") add single-key-mode rotation: `PermissionUpdatePayloadV1`
-//! is now `SetAccountSigningMultisig(MultisigConfigV1)` (`payload_version
-//! = 1`, ADR-0026, wire-unchanged) or `RotateIdentityKey(KeyDescriptor)`
-//! (`payload_version = 2`, new) — `payload_version` itself is the
-//! discriminant, mirroring `SignatureEnvelope`'s own `envelope_version`
-//! 1-vs-2 split, so no separate operation byte was added on top of it.
-//! `apply_permission_update` dispatches on the payload variant the same
-//! "one entry point per `tx_type`, internal match" shape
-//! `apply_validator_update` already uses. Rotation activates
-//! immediately (no epoch-boundary-style delay like ADR-0010's validator
-//! case — nonce ordering already serializes same-sender transactions,
-//! so there is no concurrency hazard for a delay to guard against) and
-//! is rejected while a multisig configuration is active.
+//! is `SetAccountSigningMultisig(MultisigConfigV1)` (`payload_version =
+//! 1`, ADR-0026, wire-unchanged), `RotateIdentityKey(KeyDescriptor)`
+//! (`payload_version = 2`, ADR-0028), or `DeactivateMultisig(KeyDescriptor)`
+//! (`payload_version = 3`, ADR-0029, "Multisig Deactivation") —
+//! `payload_version` itself is the discriminant for all three, mirroring
+//! `SignatureEnvelope`'s own `envelope_version` 1-vs-2 split, so no
+//! separate operation byte was added on top of it (`RotateIdentityKey`/
+//! `DeactivateMultisig` share one wire shape but stay two distinct
+//! versions rather than being told apart by state, the first exception
+//! every other `apply_*` function's "payload alone determines the
+//! transition" boundary would otherwise have needed). `apply_permission_update`
+//! dispatches on the payload variant the same "one entry point per
+//! `tx_type`, internal match" shape `apply_validator_update` already
+//! uses, and now returns `Vec<Leaf>` rather than a fixed-size array —
+//! `DeactivateMultisig` is the first `permission_update` operation that
+//! touches two sections (Permission cleared, Identity set to the
+//! group-chosen successor) in one transaction, so the other two
+//! operations' shared `[Leaf; 1]` shape no longer fits every case.
+//! Rotation activates immediately (no epoch-boundary-style delay like
+//! ADR-0010's validator case — nonce ordering already serializes
+//! same-sender transactions, so there is no concurrency hazard for a
+//! delay to guard against) and is rejected while a multisig
+//! configuration is active; deactivation is authorized by
+//! `verify_multisig_authorization` against the pre-transaction
+//! configuration, the same rule an ordinary reconfiguration already
+//! uses — `TransactionEnvelope::verify` (below) needed no changes at
+//! all to support it, since it already dispatches to multisig
+//! verification for any `permission_update` payload whenever
+//! `account_signing_multisig` is active.
 //!
 //! [`transaction_envelope`] adds `TransactionEnvelope`/
 //! `TransactionSigningPayload` themselves as concrete Rust types

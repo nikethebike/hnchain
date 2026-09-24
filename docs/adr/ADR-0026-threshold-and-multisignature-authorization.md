@@ -244,27 +244,20 @@ the payload itself:
 
 ## Explicitly Not Resolved
 
-**Deactivating back to single-key mode is not supported by this ADR.**
-An account cannot use `permission_update` to remove its
-`account_signing_multisig` configuration and revert to plain single-key
-mode. This is a deliberate scope cut, not an oversight: reverting would
-require designating which one key becomes "the" account's active
-identity key afterward — writing a new `IdentityValueV1` (ADR-0027,
-Identity State And Account Key Bootstrap). Account-level key *rotation*
-itself is now decided (ADR-0028, Account-Level Key Rotation,
-`RotateIdentityKey`) — but deliberately scoped to single-key mode only:
-its authorization model is "the account's one current key signs its own
-replacement," which is not the right shape for deactivation, where the
-*group* under the current multisig threshold — not any single member —
-must be the one to agree on a successor key. ADR-0028 states this
-explicitly in its own Open Decisions rather than silently leaving the
-question to look more resolved than it is. Deactivation therefore still
-needs its own mechanism (a third `permission_update` operation,
-multisig-threshold-authorized, that both clears
-`account_signing_multisig` and writes the chosen successor
-`IdentityValueV1` together) — natural, narrow follow-up work, not
-blocked on anything this ADR introduces, but not automatically granted
-by ADR-0028 either.
+**Deactivating back to single-key mode was not supported by this ADR —
+resolved, ADR-0029 (Multisig Deactivation).** This ADR itself could not
+support it: reverting requires designating which one key becomes "the"
+account's active identity key afterward, and doing so needs
+*multisig-threshold* authorization (the current signer group agreeing
+on a successor), a different authorization shape from ADR-0028's own
+"one current key signs its own replacement" rotation model — ADR-0028
+deliberately left this open rather than silently overclaiming it.
+ADR-0029 is that third `permission_update` operation
+(`DeactivateMultisig`, `payload_version = 3`): authorized by
+`verify_multisig_authorization` against the pre-transaction
+configuration (the same rule an ordinary reconfiguration already uses),
+it clears `account_signing_multisig` and sets `IdentityValueV1` to the
+group-chosen successor key together, in one transaction.
 
 The other 7 Permission State capabilities (administration, operation,
 viewing/read-only access, voting delegation, spending limits, session
@@ -391,13 +384,12 @@ them into this mechanism instead.
 
 ## Open Decisions
 
-- account-level key rotation — **resolved, ADR-0028**, but scoped to
-  single-key mode only (rejected while multisig is active); does not by
-  itself resolve deactivation, below
-- deactivation back to single-key mode — still open: needs its own
-  multisig-threshold-authorized operation (a distinct authorization
-  shape from ADR-0028's single-key-signs-its-own-replacement model),
-  not granted by ADR-0028 despite the surface similarity
+- account-level key rotation — **resolved, ADR-0028**, scoped to
+  single-key mode only (rejected while multisig is active)
+- deactivation back to single-key mode — **resolved, ADR-0029**
+  (Multisig Deactivation): a third `permission_update` operation,
+  multisig-threshold-authorized (a distinct authorization shape from
+  ADR-0028's single-key-signs-its-own-replacement rotation model)
 - the 7 remaining Permission State capabilities this ADR does not touch:
   administration, operation, viewing/read-only access, voting delegation,
   spending limits, session authorization, emergency lock or recovery
@@ -417,6 +409,7 @@ them into this mechanism instead.
 - `docs/adr/ADR-0007-state-tree.md`
 - `docs/adr/ADR-0027-identity-state-and-account-key-bootstrap.md`
 - `docs/adr/ADR-0028-account-level-key-rotation.md`
+- `docs/adr/ADR-0029-multisig-deactivation.md`
 - `docs/specs/core/account-state.md`
 - `docs/specs/core/genesis-security.md`
 - `docs/whitepaper/HNChain-Whitepaper-v0.1-draft.md` (§17.10,

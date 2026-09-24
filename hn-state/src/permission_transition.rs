@@ -25,13 +25,25 @@ pub fn fetch_permission(
     }
 }
 
-/// Computes the one updated write-set leaf a `permission_update`
+/// Computes the updated write-set leaves a `permission_update`
 /// produces — `sender`'s Permission-section leaf for
 /// [`PermissionUpdatePayloadV1::SetAccountSigningMultisig`] (ADR-0026),
-/// or `sender`'s Identity-section leaf for
-/// [`PermissionUpdatePayloadV1::RotateIdentityKey`] (ADR-0028) —
+/// `sender`'s Identity-section leaf for
+/// [`PermissionUpdatePayloadV1::RotateIdentityKey`] (ADR-0028), or
+/// *both* — Permission cleared, Identity set to the successor — for
+/// [`PermissionUpdatePayloadV1::DeactivateMultisig`] (ADR-0029) —
 /// mirroring [`crate::apply_validator_update`]'s own "one entry point
 /// per `tx_type`, internal match over operations" shape.
+///
+/// Returns `Vec<Leaf>`, not a fixed-size array like every other
+/// `apply_*` function in this crate (`apply_transfer -> [Leaf; 2]`,
+/// `apply_stake -> [Leaf; 1]`, ...): `permission_update`'s three
+/// operations are not uniform in how many sections they touch —
+/// `SetAccountSigningMultisig`/`RotateIdentityKey` touch exactly one,
+/// `DeactivateMultisig` touches two — and a fixed array would force
+/// either an artificial padding write or a second entry-point function
+/// for just one operation (ADR-0029, "Rejected Options": both
+/// considered and rejected as worse than an honest variable count).
 ///
 /// This is the state-transition half only. Which authorization rule a
 /// given operation must satisfy is a transaction-validation concern
@@ -41,28 +53,44 @@ pub fn fetch_permission(
 /// produce": `SetAccountSigningMultisig`'s own rule (today's single-key
 /// default for a first activation, or [`verify_multisig_authorization`]
 /// against the sender's pre-transaction configuration for a
-/// reconfiguration) and `RotateIdentityKey`'s own precondition (an
+/// reconfiguration), `RotateIdentityKey`'s own precondition (an
 /// existing `IdentityValueV1` and no active multisig configuration,
-/// ADR-0028) are both left to that not-yet-built layer. There is no
-/// domain-specific rejection at this layer: both payload variants were
-/// already structurally validated by
+/// ADR-0028), and `DeactivateMultisig`'s own precondition (an active
+/// multisig configuration, authorized via
+/// [`verify_multisig_authorization`] against it — the same rule a
+/// reconfiguration already uses, ADR-0029) are all left to that
+/// not-yet-built layer. There is no domain-specific rejection at this
+/// layer: every payload variant was already structurally validated by
 /// [`crate::permission_update_payload::PermissionUpdatePayloadV1::decode`],
 /// so this function cannot fail for a domain reason — only the generic
 /// leaf-construction `Hash`/`Encoding` errors every `*_leaf` helper in
-/// this crate can already produce.
+/// this crate can already produce. `DeactivateMultisig` clears the
+/// Permission leaf unconditionally (an overwrite to `None`, not a
+/// read-then-clear) — it does not need `sender`'s pre-transaction
+/// configuration to know what to write, only that overwriting it is
+/// what this operation means.
 pub fn apply_permission_update(
     sender: Digest,
     payload: &PermissionUpdatePayloadV1,
-) -> StateResult<[Leaf; 1]> {
+) -> StateResult<Vec<Leaf>> {
     match payload {
         PermissionUpdatePayloadV1::SetAccountSigningMultisig(config) => {
             let value = PermissionValueV1 {
                 account_signing_multisig: Some(config.clone()),
             };
-            Ok([permission_value_leaf(&sender, &value)?])
+            Ok(vec![permission_value_leaf(&sender, &value)?])
         }
         PermissionUpdatePayloadV1::RotateIdentityKey(new_key) => {
-            Ok([apply_identity_rotation(sender, new_key)?])
+            Ok(vec![apply_identity_rotation(sender, new_key)?])
+        }
+        PermissionUpdatePayloadV1::DeactivateMultisig(successor) => {
+            let cleared = PermissionValueV1 {
+                account_signing_multisig: None,
+            };
+            Ok(vec![
+                permission_value_leaf(&sender, &cleared)?,
+                apply_identity_rotation(sender, successor)?,
+            ])
         }
     }
 }
@@ -77,14 +105,14 @@ pub fn apply_permission_update(
 /// `permission_update` (insufficient/invalid signatures) lives in
 /// [`verify_multisig_authorization`] and today's single-key default,
 /// both checked by a transaction-validation pipeline before this
-/// function is ever called, not inside it. Returns `[Leaf; 1]` directly
-/// rather than `Option<[Leaf; 1]>` for the same reason: there is no case
-/// here that produces zero leaves.
+/// function is ever called, not inside it. Returns `Vec<Leaf>` directly
+/// rather than `Option<Vec<Leaf>>` for the same reason: there is no
+/// case here that produces zero leaves.
 pub fn apply_permission_update_with_receipt(
     sender: Digest,
     payload: &PermissionUpdatePayloadV1,
     tx_id: Digest,
-) -> StateResult<([Leaf; 1], ReceiptV1)> {
+) -> StateResult<(Vec<Leaf>, ReceiptV1)> {
     let leaves = apply_permission_update(sender, payload)?;
     Ok((
         leaves,
@@ -169,6 +197,7 @@ mod tests {
         StateError, apply_permission_update, apply_permission_update_with_receipt,
         verify_multisig_authorization,
     };
+    use crate::account::{AccountSection, account_section_state_key};
     use crate::error::StateResult;
     use crate::permission_update_payload::PermissionUpdatePayloadV1;
     use crate::permission_value::MultisigConfigV1;
@@ -227,7 +256,8 @@ mod tests {
     fn apply_sets_the_permission_leaf() -> StateResult<()> {
         let (config, _keypairs) = two_of_three_config();
         let payload = PermissionUpdatePayloadV1::SetAccountSigningMultisig(config);
-        let [_leaf] = apply_permission_update(SENDER, &payload)?;
+        let leaves = apply_permission_update(SENDER, &payload)?;
+        assert_eq!(leaves.len(), 1);
         Ok(())
     }
 
@@ -245,7 +275,24 @@ mod tests {
         let new_key =
             Ed25519KeyPair::from_seed(KeyRole::AccountSigning, [0x09; 32]).key_descriptor();
         let payload = PermissionUpdatePayloadV1::RotateIdentityKey(new_key);
-        let [_leaf] = apply_permission_update(SENDER, &payload)?;
+        let leaves = apply_permission_update(SENDER, &payload)?;
+        assert_eq!(leaves.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn apply_deactivates_multisig_and_sets_the_successor_identity() -> StateResult<()> {
+        let successor =
+            Ed25519KeyPair::from_seed(KeyRole::AccountSigning, [0x0b; 32]).key_descriptor();
+        let payload = PermissionUpdatePayloadV1::DeactivateMultisig(successor);
+        let leaves = apply_permission_update(SENDER, &payload)?;
+        assert_eq!(leaves.len(), 2);
+
+        let permission_key = account_section_state_key(&SENDER, AccountSection::Permission)?;
+        let identity_key = account_section_state_key(&SENDER, AccountSection::Identity)?;
+        let leaf_keys: Vec<_> = leaves.iter().map(|leaf| leaf.0).collect();
+        assert!(leaf_keys.contains(&permission_key));
+        assert!(leaf_keys.contains(&identity_key));
         Ok(())
     }
 
