@@ -34,6 +34,10 @@ Referenced By:
   — and passive height-observation catch-up; both found missing only
   by actually killing and restarting a previously-connected node,
   which none of this ADR's own tests did)
+- ADR-0040: Real Block Hash In `hn-node` (replaces this ADR's own
+  `synthetic_block_hash` — an explicitly non-cryptographic per-round
+  placeholder at the time — with a real `hn_state::BlockHeader::
+  block_hash` computation)
 
 ## Context
 

@@ -25,6 +25,10 @@ Referenced By:
   `docs/specs/core/genesis.md`'s own format, explicitly without
   integrating it into this ADR's `BlockHeader` — see "Open Decisions,"
   below)
+- ADR-0040: Real Block Hash In `hn-node` (first real consumer of
+  `hn_state::BlockHeader::block_hash` outside this ADR's own tests —
+  replaces `hn-node`'s earlier synthetic, non-cryptographic per-round
+  identifier)
 
 ## Context
 

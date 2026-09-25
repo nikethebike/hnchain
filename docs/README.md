@@ -55,6 +55,7 @@ docs/
     ADR-0037-multi-node-consensus-wiring.md
     ADR-0038-genesis-format-and-node-daemon-bootstrap.md
     ADR-0039-devnet-restart-recovery.md
+    ADR-0040-real-block-hash-in-hn-node.md
 
   specs/
     core/

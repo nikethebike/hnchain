@@ -33,15 +33,28 @@
 //! `SIGINT` needs either `unsafe` FFI (forbidden here outright) or a new
 //! dependency for a purely cosmetic benefit.
 //!
+//! [`node::run`]'s proposer now builds a real `hn_state::BlockHeader`
+//! and computes its own real `block_hash` (ADR-0040, "Real Block Hash
+//! In `hn-node`") — replacing the earlier synthetic, non-cryptographic
+//! per-round identifier. A connection this node itself dialed is
+//! automatically redialed if it later drops (ADR-0039, "Decided:
+//! Connection-Drop Reconnection"), and a rejoining node passively
+//! catches up to the network's real current height by observing
+//! ordinary gossiped vote/certificate/proposal traffic (ADR-0039,
+//! "Decided: Passive Height-Observation Catch-Up") — no dedicated sync
+//! protocol.
+//!
 //! Explicitly out of scope, named rather than guessed at: any RPC/CLI
 //! surface, real (non-devnet) validator onboarding and real custody for
 //! the three genesis allocation accounts (`docs/specs/core/genesis-
 //! security.md`'s own open items), non-validating "full node" mode,
-//! connection retry after an established link drops, and ADR-0011's
-//! real leader-election formula (this crate uses
-//! `hn_consensus::round_proposer`, its own explicitly-sanctioned devnet
-//! placeholder) — see ADR-0037/ADR-0038's own "Explicitly Not
-//! Resolved."
+//! receiver-side `BlockHeader` reconstruction/verification (a proposer's
+//! claimed `block_hash` is still trusted as given, ADR-0040), real
+//! block/state sync for a future network with non-empty blocks
+//! (ADR-0016, unchanged), and ADR-0011's real leader-election formula
+//! (this crate uses `hn_consensus::round_proposer`, its own
+//! explicitly-sanctioned devnet placeholder) — see ADR-0037/ADR-0038/
+//! ADR-0039/ADR-0040's own "Explicitly Not Resolved."
 
 mod config;
 mod error;

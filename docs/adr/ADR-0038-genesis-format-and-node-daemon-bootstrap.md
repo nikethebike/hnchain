@@ -29,6 +29,10 @@ Referenced By:
   explicit stdout flushing to `hn-node`'s log lines, since this ADR's
   own "no custom signal handler" decision means a killed process's
   last unflushed line could otherwise be lost)
+- ADR-0040: Real Block Hash In `hn-node` (reuses this ADR's own
+  `GenesisManifest::initial_state_root` directly as `BlockHeader.
+  state_root` for every block, genuinely correct for as long as this
+  devnet's blocks carry zero transactions)
 
 ## Context
 

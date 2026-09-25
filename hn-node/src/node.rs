@@ -7,15 +7,16 @@ use std::thread;
 use std::time::Duration;
 
 use hn_consensus::{ConsensusAction, ConsensusEngine, ConsensusTarget, round_proposer};
-use hn_core::{BlockHeight, Epoch, ProtocolVersion, Round};
+use hn_core::{BlockHeight, Epoch, ProtocolEpoch, ProtocolVersion, Round, UnixTimeMillis};
 use hn_crypto::{Digest, Ed25519KeyPair, KeyRole, SignatureEnvelope, hash_profile_0x0001};
 use hn_network::{
     Channel, ConsensusProposalMessageV1, HandshakeAction, HandshakeEvent, HandshakeParams,
     HandshakeState, Hello, MessageType, P2PMessageEnvelopeV1, PeerLink, spawn_peer_link,
 };
 use hn_state::{
-    ConsensusVote, QuorumCertificate, StateCommitter, StateReader, ValidatorRecordV1,
-    ValidatorStatus, VoteSigningPayloadV1, VoteTargetType, VoteType, Write, active_set,
+    BlockHeader, ConsensusVote, HEADER_VERSION_1, QuorumCertificate, StateCommitter, StateReader,
+    ValidatorRecordV1, ValidatorStatus, VoteSigningPayloadV1, VoteTargetType, VoteType, Write,
+    active_set, extra_data_hash, list_empty_root, protocol_parameters_placeholder_hash,
 };
 use hn_storage::RedbStateStore;
 
@@ -104,6 +105,23 @@ struct Ctx {
     /// `NodeEvent::ConnectionClosed` to decide whether to redial.
     dialed_peers: HashMap<u64, SocketAddr>,
     round_started: bool,
+    /// The current real `hn_state::BlockHeader.state_root` (ADR-0038's
+    /// own `initial_state_root`, computed once at startup and never
+    /// recomputed — ADR-0040, "Decided: Real `block_hash` In `hn-node`":
+    /// every block this devnet finalizes still carries zero
+    /// transactions (ADR-0037's own deliberate scope), so the write-set
+    /// `commit_finalized_block` ever applies is always empty and the
+    /// real state root genuinely never changes block to block — this
+    /// is the actual correct value for every block, not a
+    /// simplification standing in for one.
+    state_root: Digest,
+    /// The previous block's own real `block_hash`, chained forward
+    /// every time a block finalizes — `[0; 32]` before the first block
+    /// (genesis's own `parent_block_hash` semantics remain an open
+    /// decision, ADR-0008; this sentinel is this devnet's own
+    /// unambiguous "no real parent yet" value, not a claim about what
+    /// a real genesis block's `parent_block_hash` should be).
+    last_block_hash: Digest,
 }
 
 /// Runs this validator's node process until killed (ADR-0038,
@@ -121,6 +139,7 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
     std::fs::create_dir_all(&config.data_dir)?;
     let mut store = RedbStateStore::open(config.data_dir.join("state.redb"))?;
     init_genesis(&mut store, &manifest)?;
+    let state_root = manifest.initial_state_root()?;
 
     let records: Vec<ValidatorRecordV1> = manifest
         .validators
@@ -241,6 +260,8 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         established: HashSet::new(),
         dialed_peers: HashMap::new(),
         round_started: false,
+        state_root,
+        last_block_hash: [0_u8; 32],
     };
 
     drive(&mut ctx, event_rx, config.peers.len())
@@ -674,6 +695,7 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
                 hex(&block_hash),
                 result.applied.len()
             ));
+            ctx.last_block_hash = block_hash;
             let action = ctx.engine.begin_new_height()?;
             act_on(ctx, action)?;
         }
@@ -698,7 +720,7 @@ fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<()> {
     );
 
     if round_proposer(&ctx.ordered_ids, height, round) == Some(ctx.own_validator_id) {
-        let block_hash = synthetic_block_hash(height, round, ctx.own_validator_id);
+        let block_hash = build_block_header(ctx, height, round)?.block_hash()?;
         broadcast(
             ctx,
             Channel::Consensus,
@@ -788,19 +810,68 @@ fn cast_vote(ctx: &mut Ctx, vote_type: VoteType, target: ConsensusTarget) -> Nod
     Ok(())
 }
 
-fn synthetic_block_hash(height: BlockHeight, round: Round, proposer: Digest) -> Digest {
-    // Not ADR-0008's real block hash (which hashes a block's actual
-    // transactions/header) -- this pass's blocks always carry zero
-    // transactions (proving liveness/view change is the goal, not state
-    // transitions), so a per-round-unique opaque identifier is all a
-    // real proposal object needs to exist. Plain concatenation, not a
-    // domain-separated hash: this identifier carries no cryptographic
-    // meaning to verify, so it does not belong in ADR-0005's registry.
-    let mut bytes = [0_u8; 32];
-    bytes[0..8].copy_from_slice(&height.get().to_le_bytes());
-    bytes[8..16].copy_from_slice(&round.get().to_le_bytes());
-    bytes[16..32].copy_from_slice(&proposer[0..16]);
-    bytes
+/// Builds this round's real `hn_state::BlockHeader` (ADR-0040, "Decided:
+/// Real `block_hash` In `hn-node`") — replaces the earlier synthetic,
+/// non-cryptographic per-round identifier ADR-0037's own devnet
+/// scaffolding used. Every field is either real local state, an
+/// already-decided placeholder this codebase already established
+/// elsewhere, or a value that is genuinely, currently correct for this
+/// devnet's own always-empty blocks — see each field's own comment
+/// below for which.
+fn build_block_header(ctx: &Ctx, height: BlockHeight, round: Round) -> NodeResult<BlockHeader> {
+    let now_millis = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
+
+    Ok(BlockHeader {
+        header_version: HEADER_VERSION_1,
+        chain_id: ctx.chain_id,
+        network_id: ctx.network_id,
+        height,
+        round,
+        // No real consensus-protocol epoch rotation exists in this
+        // devnet yet -- matches the fixed `Epoch::new(0)` already used
+        // for every vote this node casts (`cast_vote`, below).
+        epoch: Epoch::new(0),
+        // No hard-fork/activation signaling exists in this devnet yet.
+        protocol_epoch: ProtocolEpoch::GENESIS,
+        parent_block_hash: ctx.last_block_hash,
+        // No `validator_address_body` derivation is established for
+        // `validator_id` anywhere in this project (ADR-0010 never
+        // defines one, and this devnet's own `validator_id` is itself
+        // "taken as given," ADR-0038) -- this validator's own already-
+        // established identity bytes are the most correct value
+        // available, not a placeholder standing in for a real
+        // derivation this codebase doesn't have.
+        proposer: ctx.own_validator_id,
+        timestamp: UnixTimeMillis::from_millis(now_millis),
+        // This devnet's blocks always carry zero transactions
+        // (ADR-0037's own deliberate scope), so transactions/receipts/
+        // events/evidence are all genuinely empty, not simplified.
+        transactions_root: list_empty_root()?,
+        // Genuinely correct, not a placeholder: with an always-empty
+        // transaction list, `commit_finalized_block`'s own write-set is
+        // always empty too, so the real state root never changes after
+        // genesis -- `ctx.state_root` already is that one real,
+        // unchanging value (computed once at startup,
+        // `GenesisManifest::initial_state_root`).
+        state_root: ctx.state_root,
+        receipts_root: list_empty_root()?,
+        events_root: list_empty_root()?,
+        // The same fixed `DEVNET_VSC` this node's own votes/QCs already
+        // use as `validator_set_commitment` -- `consensus_root` and
+        // `validator_set_commitment` are decided to be the exact same
+        // value (ADR-0010), so reusing this constant here keeps that
+        // equality genuinely true, not coincidentally matching.
+        consensus_root: DEVNET_VSC,
+        evidence_root: list_empty_root()?,
+        protocol_parameters_hash: protocol_parameters_placeholder_hash()?,
+        extra_data_hash: extra_data_hash(&[])?,
+    })
 }
 
 fn hex(bytes: &[u8]) -> String {
