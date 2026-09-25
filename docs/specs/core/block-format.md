@@ -294,6 +294,16 @@ body.
 
 Unspecified extra data is invalid.
 
+**Decided** (ADR-0008, "Decided: Extra Data Format"):
+`HASH_PROFILE_0x0001("hnchain.block.extradata.v1", extra_data)` — the
+raw `extra_data` bytes hashed directly, not re-encoded, since
+`extra_data` is already opaque bytes with no further canonical
+structure. `MAX_EXTRA_DATA_LEN = 256` bytes bounds the body-side field
+itself (§6). No special-cased "empty" value, unlike
+`hn-list-merkle-v1`'s `empty_root`: `extra_data` is one blob, not an
+ordered list, so a zero-length value hashes with the same formula as
+any other length.
+
 ## 6. Block Body
 
 Conceptual structure:
@@ -313,6 +323,13 @@ BlockBodyV1
 
 The body contains data required to verify header commitments and execute the
 block.
+
+**Decided** (ADR-0008, "Decided: Extra Data Format"): `extra_data` is
+bounded, opaque `bytes`, `<= MAX_EXTRA_DATA_LEN = 256` bytes. It
+carries no separate internal version field of its own — `body_version`
+above already covers it, and no content is specified for it anywhere
+in this project yet for there to be an interior to version. See §5.16
+for `extra_data_hash`'s own commitment formula.
 
 ## 7. Transactions
 
@@ -461,10 +478,12 @@ future protocol-version decision. Whether size limits become
 profile is a question for "protocol parameter commitment format"
 (still open), not assumed here.
 
-Receipt count, event count, evidence count, extra data size,
-justification size, and per-section decode/verification budgets remain
-open, gated on the schemas and specifications each depends on
-(event/evidence/justification schemas, HNVM, consensus protocol).
+Extra data size — **resolved**: `MAX_EXTRA_DATA_LEN = 256` bytes
+(§6, ADR-0008 "Decided: Extra Data Format"). Receipt count, event
+count, evidence count, justification size, and per-section decode/
+verification budgets remain open, gated on the schemas and
+specifications each depends on (event/evidence/justification schemas,
+HNVM, consensus protocol).
 
 Limits are consensus parameters and must be committed by
 `protocol_parameters_hash` where applicable.
@@ -520,8 +539,16 @@ Test vectors are mandatory before production implementation.
 - final block envelope schema
 - final header schema
 - final body schema
-- genesis mapping — blocked on `docs/specs/core/genesis.md` reaching
-  Accepted (currently Draft)
+- extra data format — **resolved** (§6/§5.16, ADR-0008 "Decided: Extra
+  Data Format")
+- genesis mapping — `docs/specs/core/genesis.md` is now Accepted
+  (ADR-0038) for its own `GenesisManifest` format, but mapping genesis
+  into a real `BlockEnvelopeV1`/dedicated genesis envelope still needs
+  a concrete `BlockHeader` type to exist first, which it does not yet
+  (ADR-0008's own "genesis block compatibility rules" item); several
+  header fields are already resolved for genesis specifically —
+  `state_root`, `events_root`, `timestamp`, `protocol_parameters_hash`
+  (ADR-0008/ADR-0038) — narrowing, not closing, this item
 - receipt schema (`ReceiptV1` core shape decided, ADR-0006 "Receipts" —
   `fee_charged`/`resource_usage`/`emitted_event_references` still open)
 - event schema (not decided — gated on HNVM; `hn-list-merkle-v1` root
@@ -533,4 +560,3 @@ Test vectors are mandatory before production implementation.
   Model) decides on-chain signaling votes only, no automatic protocol
   effect; no adjustable parameter has been named anywhere yet to give
   this a partial shape
-

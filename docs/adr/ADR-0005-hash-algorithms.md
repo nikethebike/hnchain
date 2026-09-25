@@ -149,6 +149,7 @@ Initial conceptual domain tags:
 - `hnchain.genesis.v1`
 - `hnchain.node.genesismarker.v1`
 - `hnchain.protocol.parameters.v1`
+- `hnchain.block.extradata.v1`
 
 `hnchain.vote.signing.v1` (ADR-0012), `hnchain.consensus.root.v1` and
 `hnchain.validator.record.v1` (ADR-0010), and `hnchain.evidence.v1`
@@ -196,6 +197,12 @@ parameter-commitment format is eventually decided, would need a new
 domain tag of its own rather than reusing this one, the same
 "different content needs its own tag" discipline this whole registry
 already follows.
+
+`hnchain.block.extradata.v1` (ADR-0008, "Decided: Extra Data Format")
+is `BlockHeader.extra_data_hash`'s own domain tag — hashed directly
+over `BlockBody.extra_data`'s raw bytes (already opaque, with no
+further canonical structure to impose), bounded to
+`MAX_EXTRA_DATA_LEN = 256` bytes.
 
 `hnchain.list.node.v1` and `hnchain.list.empty.v1` are added by
 ADR-0008 ("Ordered List Commitment"): the internal-node and

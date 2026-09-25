@@ -332,6 +332,7 @@ mod consensus_root;
 mod envelope_value;
 mod error;
 mod evidence_digest;
+mod extra_data;
 mod governance;
 mod governance_payload;
 mod governance_transition;
@@ -388,6 +389,7 @@ pub use consensus_root::{consensus_root, validator_set_commitment};
 pub use envelope_value::{AccountType, ENVELOPE_VERSION_1, EnvelopeValueV1, SectionVersionsV1};
 pub use error::{StateError, StateResult};
 pub use evidence_digest::evidence_digest;
+pub use extra_data::{MAX_EXTRA_DATA_LEN, extra_data_hash};
 pub use governance::{
     DOMAIN_GOVERNANCE, GovernanceSection, proposal_record_state_key, proposal_vote_record_state_key,
 };

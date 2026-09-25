@@ -471,6 +471,58 @@ either, just a well-defined value to use until they exist.
 It may be used only for explicitly specified data. It must not become an
 unbounded escape hatch for consensus behavior.
 
+**Decided: Extra Data Format.**
+
+```text
+MAX_EXTRA_DATA_LEN = 256 bytes
+
+extra_data_hash = HASH_PROFILE_0x0001("hnchain.block.extradata.v1", extra_data)
+```
+
+`extra_data` (in `BlockBody`) is a bounded, opaque byte string —
+`bytes <= MAX_EXTRA_DATA_LEN`, HNCS-encoded with the same
+`u32_length || bytes` convention every other bounded-bytes field in
+this codebase already uses (`write_bytes`). `256` bytes matches
+`hn_state::MAX_VOTE_METADATA_LEN`'s own class of decision: an
+implementation resource bound, not derived, picked for a field that is
+explicitly *not* meant to carry bulk data — this section's own existing
+text already requires it "must not become an unbounded escape hatch,"
+and this bound is what actually enforces that rather than just stating
+it.
+
+"Versioned," this section's own existing requirement, is satisfied by
+`BlockBody.body_version` (already decided, "Versioned Block Envelope")
+— `extra_data` does not carry a second, separate version field of its
+own at this layer. This is a deliberate choice, not an oversight: no
+content for `extra_data` is specified anywhere in this project yet
+("may be used only for explicitly specified data," this section's own
+existing text), so there is nothing here to version the *interior* of.
+Whatever future specification eventually defines real content for
+`extra_data` would version that content itself, inside the bytes — the
+same layering `TransactionEnvelope.payload` already uses (dispatched
+and versioned per `tx_type`, not by the envelope itself carrying a
+redundant payload-level version).
+
+`extra_data_hash` (in `BlockHeader`) hashes `extra_data`'s own raw
+bytes directly — not a re-encoding, since `extra_data` is already
+opaque bytes with no further canonical structure to impose. New
+ADR-0005 domain tag, following this project's established
+registration discipline. Unlike `hn-list-merkle-v1`'s dedicated
+`empty_root` formula for an empty ordered list, `extra_data` needs no
+special-cased "empty" value: it is one blob, not a list, so
+`extra_data_hash` for a zero-length `extra_data` (for example, at
+genesis — nothing has a real use for this field yet) is simply
+`HASH_PROFILE_0x0001("hnchain.block.extradata.v1", <empty bytes>)`,
+the same formula applied to any other length.
+
+Implemented in [`hn_state::extra_data_hash`]/
+[`hn_state::MAX_EXTRA_DATA_LEN`], independently verified against a
+Python oracle — the same class of standalone, currently-callerless
+primitive `hn_state::block_hash`/`consensus_root`/`evidence_digest`/
+`protocol_parameters_placeholder_hash` already are, decided and coded
+ahead of any real `BlockHeader`/`BlockBody` type existing to consume
+them.
+
 ### Justification
 
 `justification` contains finality proof data or commit certificates required by
@@ -513,6 +565,11 @@ Both are fixed protocol constants for this profile, not (yet) a live
 future profile makes size limits governance-adjustable is a question
 for "protocol parameter commitment format" (still open), not assumed
 here, matching how ADR-0006 treats `MAX_TRANSACTION_SIZE`.
+
+`extra_data`'s own size bound (`MAX_EXTRA_DATA_LEN = 256` bytes) is
+decided separately, in "Extra Data," above — a distinct field with its
+own distinct bound, not folded into this section's two block-wide
+limits.
 
 ## Validation Pipeline
 
@@ -674,6 +731,11 @@ New body sections may be backward-compatible only if:
   transactions by construction); commitment mechanism for a non-empty
   case — `hn-list-merkle-v1` — is also decided; real *content* stays
   open, gated on an event schema, itself gated on HNVM
+- extra data format — **resolved** ("Decided: Extra Data Format,"
+  above: `MAX_EXTRA_DATA_LEN = 256` bytes, bounded opaque bytes, no
+  separate version field, `extra_data_hash` over the raw bytes
+  directly) — not a genesis-scoped resolution like the three items
+  below, since nothing about this decision depended on genesis at all
 - consensus root format (decided above — ADR-0010, "Validator Set
   Commitment": the active validator set's `validator_set_commitment`)
 - evidence root format (decided above — ADR-0015, "Versioned
