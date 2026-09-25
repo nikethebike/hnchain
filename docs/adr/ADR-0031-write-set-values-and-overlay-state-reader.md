@@ -19,6 +19,7 @@ Supersedes: None
 Referenced By:
 
 - ADR-0032: Governance Chamber-Weight Query And Propose/Vote Wiring
+- ADR-0033: Atomic Write-Set Commit (`StateCommitter`)
 
 ## Context
 
@@ -143,11 +144,15 @@ ever took `&impl StateReader`, so it works unchanged against an
 
 ## Explicitly Not Resolved
 
-**`StateWriter` still has no caller.** `Write` now carries exactly what
+**`StateWriter` still has no caller from real protocol output —
+resolved separately, ADR-0033.** `Write` now carries exactly what
 `StateWriter::set(state_key, value)` needs, but nothing in this
-codebase calls `set` — persisting a block's final write-set to a real
-backend once one exists (ADR-0019's own still-open "initial storage
-backend") is a distinct future step, not attempted here.
+codebase called `set` from an `apply_*` function's own output. A naive
+loop of `set` calls would not have been enough anyway — ADR-0019's own
+"Atomic State Commit" rule requires a whole write-set to apply
+all-or-nothing, which `StateWriter`'s single-key-at-a-time scope cannot
+provide. ADR-0033 ("Atomic Write-Set Commit") added `StateCommitter`
+and `apply_and_commit_block` for exactly this.
 
 **`compute_state_root` still cannot be fed a block's write-set alone.**
 Unchanged from ADR-0030's own reasoning: it needs the complete current
@@ -235,17 +240,19 @@ after hashing.
 
 ## Open Decisions
 
-- `StateWriter` persistence of a block's final write-set (needs a real
-  backend, ADR-0019's own still-open item)
+- `StateWriter`/`StateCommitter` persistence of a block's final
+  write-set — resolved, ADR-0033
 - `compute_state_root` integration once a real backend can produce a
-  complete leaf set
+  complete leaf set (still open, see ADR-0033's own "Explicitly Not
+  Resolved")
 - governance's own `Leaf` → `Write` conversion, whenever `governance`
   gets wired into `apply_transaction` — resolved, ADR-0032
-- cross-block (not just intra-block) write visibility, gated on the
-  same real-backend dependency as `StateWriter` above
+- cross-block (not just intra-block) write visibility (still open, see
+  ADR-0033's own "Explicitly Not Resolved")
 
 ## Related Specifications
 
 - `docs/adr/ADR-0007-state-tree.md`
 - `docs/adr/ADR-0019-storage-state-interfaces.md`
 - `docs/adr/ADR-0030-transaction-and-block-application.md`
+- `docs/adr/ADR-0033-atomic-write-set-commit.md`

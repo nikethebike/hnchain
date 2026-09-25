@@ -23,6 +23,7 @@ Referenced By:
 
 - ADR-0031: Write-Set Value Bytes And Overlay State Reader
 - ADR-0032: Governance Chamber-Weight Query And Propose/Vote Wiring
+- ADR-0033: Atomic Write-Set Commit (`StateCommitter`)
 
 ## Context
 
@@ -175,11 +176,15 @@ function over an already-fetched validator-candidate slice (mirroring
 enumerate "every validator"), plus real dispatch for both `propose` and
 `vote` in `apply_transaction`.
 
-**`StateWriter` stays uncalled.** Nothing in this codebase implements
-it yet (no durable backend, ADR-0019), and `apply_transaction`/
-`apply_block` do not need it given they return a write-set rather than
-persisting one. Wiring an actual persistence step is a distinct future
-decision, gated on a real backend existing at all.
+**`StateWriter` stays uncalled by anything in this ADR — resolved
+separately, ADR-0033.** `hn-storage` already implements `StateWriter`
+(`InMemoryStateStore`/`RedbStateStore`), but nothing had ever called it
+from `apply_transaction`/`apply_block`'s own output; both return a
+write-set rather than persisting one, and a naive per-key loop over
+`StateWriter::set` would not commit that write-set atomically. ADR-0033
+("Atomic Write-Set Commit") is that follow-up: a new `StateCommitter`
+trait plus `apply_and_commit_block`, the first real connection between
+this crate's state transitions and a durable backend.
 
 **Real `BlockHeader`/block validation** (previous block hash linkage,
 proposer/signature checks, `consensus_root` agreement, timestamp rules)
@@ -242,8 +247,10 @@ signature.
 - intra-block overlay reader / value-byte-exposing `apply_*` return
   shape — resolved, ADR-0031
 - governance chamber-weight-total query — resolved, ADR-0032
-- real backend-integrated `StateWriter` persistence and `state_root`
-  computation (ADR-0019's own still-open "initial storage backend")
+- real backend-integrated `StateWriter`/`StateCommitter` persistence —
+  resolved for write-sets, ADR-0033; `state_root` computation still
+  open (needs a storage-enumeration capability this crate still does
+  not have)
 - real block/header validation (proposer, signatures, `consensus_root`
   agreement, timestamp) — the actual consensus layer's job, not this
   ADR's
@@ -257,3 +264,4 @@ signature.
 - `docs/adr/ADR-0025-governance-model.md`
 - `docs/adr/ADR-0031-write-set-values-and-overlay-state-reader.md`
 - `docs/adr/ADR-0032-governance-chamber-weight-query-and-propose-vote-wiring.md`
+- `docs/adr/ADR-0033-atomic-write-set-commit.md`

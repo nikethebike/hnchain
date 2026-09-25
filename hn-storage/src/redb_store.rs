@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use hn_crypto::Digest;
-use hn_state::{StateError, StateReader, StateResult, StateWriter};
+use hn_state::{StateCommitter, StateError, StateReader, StateResult, StateWriter, Write};
 use redb::{ReadableDatabase, TableDefinition};
 
 /// The one table this store keeps: `state_key -> canonical HNCS value
@@ -13,23 +13,25 @@ use redb::{ReadableDatabase, TableDefinition};
 /// exactly 32 bytes (ADR-0007).
 const STATE_TABLE: TableDefinition<'_, &[u8], &[u8]> = TableDefinition::new("state");
 
-/// A `redb`-backed durable [`StateReader`]/[`StateWriter`] implementation
-/// (ADR-0019, "Decided: initial storage backend" — `redb`, a pure-Rust
-/// embedded ACID key-value store, chosen over RocksDB specifically to
-/// avoid requiring a C++/cmake toolchain for every contributor, and over
-/// deferring the choice since ADR-0019's own phase ordering places
-/// storage ahead of node/RPC/CLI work).
+/// A `redb`-backed durable [`StateReader`]/[`StateWriter`]/
+/// [`StateCommitter`] implementation (ADR-0019, "Decided: initial
+/// storage backend" — `redb`, a pure-Rust embedded ACID key-value store,
+/// chosen over RocksDB specifically to avoid requiring a C++/cmake
+/// toolchain for every contributor, and over deferring the choice since
+/// ADR-0019's own phase ordering places storage ahead of node/RPC/CLI
+/// work).
 ///
-/// Every read and write goes through its own `redb` transaction —
-/// matching [`StateWriter::set`]'s own single-key-at-a-time scope, not a
-/// claim that a whole write set commits atomically together. ADR-0019's
-/// "Atomic State Commit" rule (block header + state root + state tree
-/// nodes + ... all consistent in one commit) is a [`StateCommitter`]-
-/// level guarantee (ADR-0019's own boundary diagram) this crate does not
-/// implement yet — the same scope limit [`crate::InMemoryStateStore`]
-/// already has, not a new gap this type introduces.
-///
-/// [`StateCommitter`]: https://github.com/nikethebike/hnchain/blob/main/docs/adr/ADR-0019-storage-state-interfaces.md
+/// [`StateWriter::set`] goes through its own `redb` transaction per
+/// call — a single-key-at-a-time operation, not a claim that several
+/// `set` calls in a row commit atomically together.
+/// [`StateCommitter::commit`] (ADR-0033, "Atomic Write-Set Commit") is
+/// the real all-or-nothing path: one `redb` transaction for the whole
+/// write set, relying on `redb`'s own transactional guarantee that an
+/// uncommitted (errored or dropped) write transaction has no observable
+/// effect at all. Still narrower than ADR-0019's full "Atomic State
+/// Commit" scope (block header + state root + state tree nodes + ...
+/// all consistent in one commit) — see `StateCommitter`'s own
+/// documentation for exactly what remains out of scope.
 pub struct RedbStateStore {
     database: redb::Database,
 }
@@ -73,6 +75,29 @@ impl StateWriter for RedbStateStore {
     }
 }
 
+impl StateCommitter for RedbStateStore {
+    /// One `redb` transaction for the whole slice: every entry is
+    /// inserted into the same open `write_txn` before it commits once,
+    /// so a failure anywhere in the loop (an `Err` returned before
+    /// `commit()` is ever reached) leaves `write_txn` dropped without
+    /// committing — `redb`'s own guarantee is that such a transaction
+    /// has no effect on the database at all, matching
+    /// [`StateCommitter`]'s all-or-nothing contract exactly.
+    fn commit(&mut self, writes: &[Write]) -> StateResult<()> {
+        let write_txn = self.database.begin_write().map_err(storage_error)?;
+        {
+            let mut table = write_txn.open_table(STATE_TABLE).map_err(storage_error)?;
+            for write in writes {
+                table
+                    .insert(write.state_key.as_slice(), write.value.as_slice())
+                    .map_err(storage_error)?;
+            }
+        }
+        write_txn.commit().map_err(storage_error)?;
+        Ok(())
+    }
+}
+
 /// Converts any `redb` error into [`StateError::Storage`] via its own
 /// `Display` output. Backend-agnostic by construction: this crate's
 /// callers see only "a storage operation failed", never a `redb`-typed
@@ -83,8 +108,10 @@ fn storage_error(error: impl Into<redb::Error>) -> StateError {
 
 #[cfg(test)]
 mod tests {
-    use hn_state::{StateReader, StateResult, StateWriter};
+    use hn_state::{StateCommitter, StateReader, StateResult, StateWriter, Write};
     use tempfile::tempdir;
+
+    use super::{STATE_TABLE, storage_error};
 
     use super::RedbStateStore;
 
@@ -129,6 +156,52 @@ mod tests {
 
         let reopened = RedbStateStore::open(&path)?;
         assert_eq!(reopened.get(&key)?, Some(b"durable".to_vec()));
+        Ok(())
+    }
+
+    #[test]
+    fn commit_applies_every_write_in_one_transaction() -> StateResult<()> {
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let mut store = RedbStateStore::open(dir.path().join("state.redb"))?;
+        let writes = vec![
+            Write {
+                state_key: [0x55; 32],
+                value: b"one".to_vec(),
+            },
+            Write {
+                state_key: [0x66; 32],
+                value: b"two".to_vec(),
+            },
+        ];
+        store.commit(&writes)?;
+        assert_eq!(store.get(&[0x55; 32])?, Some(b"one".to_vec()));
+        assert_eq!(store.get(&[0x66; 32])?, Some(b"two".to_vec()));
+        Ok(())
+    }
+
+    #[test]
+    fn an_uncommitted_write_transaction_has_no_effect() -> StateResult<()> {
+        // Demonstrates the exact `redb` guarantee `RedbStateStore::commit`'s
+        // atomicity relies on: inserting into an open write transaction
+        // and dropping it without calling `commit()` leaves the database
+        // exactly as it was before, the same outcome as `commit()`
+        // returning `Err` partway through a real `StateCommitter::commit`
+        // call (ADR-0033).
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let store = RedbStateStore::open(dir.path().join("state.redb"))?;
+
+        {
+            let write_txn = store.database.begin_write().map_err(storage_error)?;
+            {
+                let mut table = write_txn.open_table(STATE_TABLE).map_err(storage_error)?;
+                table
+                    .insert([0x77_u8; 32].as_slice(), b"never-committed".as_slice())
+                    .map_err(storage_error)?;
+            }
+            // `write_txn` dropped here without `.commit()`.
+        }
+
+        assert_eq!(store.get(&[0x77; 32])?, None);
         Ok(())
     }
 }

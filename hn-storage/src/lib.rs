@@ -28,6 +28,17 @@
 //! `hn-state` or its callers — matching ADR-0019's own "Backend
 //! Independence" rule that changing backends must not change anything
 //! observable above the storage interface.
+//!
+//! Both types now also implement `hn_state::StateCommitter` (ADR-0033,
+//! "Atomic Write-Set Commit"): `InMemoryStateStore`'s is a plain loop
+//! (a `BTreeMap` insert cannot itself fail); `RedbStateStore`'s opens
+//! exactly one `redb` transaction for a whole write-set rather than one
+//! per key, so a failure partway through leaves the database completely
+//! unchanged rather than partially written — the real fix
+//! `StateWriter::set`'s own single-key-at-a-time scope could never
+//! provide, and the reason nothing in this codebase called `StateWriter`
+//! from real protocol output until now
+//! (`hn-state::apply_and_commit_block` is the first caller).
 
 mod in_memory;
 mod redb_store;

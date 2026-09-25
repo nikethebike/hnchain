@@ -19,6 +19,10 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0033: Atomic Write-Set Commit (`StateCommitter`)
+
 ## Context
 
 HNChain needs persistent storage for blocks, state tree nodes, canonical state
@@ -351,3 +355,6 @@ and is governed by the state tree specification.
 ## Related Specifications
 
 - `docs/rfc/storage/storage-state-interfaces.md`
+- `docs/adr/ADR-0033-atomic-write-set-commit.md` (`StateCommitter`,
+  scoped narrowly to write-set atomicity — block store schema, receipt/
+  event retention, and the other items above remain open here)

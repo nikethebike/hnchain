@@ -15,7 +15,7 @@ use crate::overlay_reader::OverlayReader;
 use crate::permission_transition::apply_permission_update_with_receipt;
 use crate::permission_update_payload::PermissionUpdatePayloadV1;
 use crate::receipt::ReceiptV1;
-use crate::state_store::{StateReader, Write};
+use crate::state_store::{StateCommitter, StateReader, Write};
 use crate::transaction_envelope::{
     TransactionEnvelope, TransactionPayload, decode_transaction_payload,
 };
@@ -291,6 +291,37 @@ pub fn apply_block(
         transactions_root,
         receipts_root,
     })
+}
+
+/// Runs [`apply_block`] against `store` and persists its resulting
+/// write-set through [`StateCommitter::commit`] (ADR-0033, "Atomic
+/// Write-Set Commit") — the first real connection between this crate's
+/// state-transition primitives and an actual backend: `store`'s own
+/// [`StateReader::get`] answers every `apply_*` fetch during
+/// application, then every entry `apply_block` produced (across every
+/// transaction, in block order) is committed as one atomic unit.
+///
+/// `apply_block` itself stays usable on its own, against a plain
+/// `&impl StateReader` with no commit step — a caller that only wants
+/// to simulate or inspect a block without persisting it (mempool
+/// validation, once it exists) is not forced to supply a committer it
+/// does not want.
+pub fn apply_and_commit_block<S: StateReader + StateCommitter>(
+    transactions: &[TransactionEnvelope],
+    store: &mut S,
+    current_height: BlockHeight,
+    validator_candidates: &[ValidatorRecordV1],
+) -> StateResult<BlockApplicationResult> {
+    let result = apply_block(transactions, &*store, current_height, validator_candidates)?;
+
+    let writes: Vec<Write> = result
+        .applied
+        .iter()
+        .flat_map(|applied| applied.write_set.clone())
+        .collect();
+    store.commit(&writes)?;
+
+    Ok(result)
 }
 
 #[cfg(test)]

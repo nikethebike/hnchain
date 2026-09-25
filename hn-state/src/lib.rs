@@ -302,6 +302,24 @@
 //! in one block now sees the first one's nonce/balance/etc. writes
 //! exactly as it would across two separate blocks — the "Intra-block
 //! same-sender visibility" gap ADR-0030 named and deferred, now closed.
+//!
+//! [`state_store::StateCommitter`] (ADR-0033, "Atomic Write-Set
+//! Commit") is the interface `StateWriter` itself was missing to be
+//! callable safely from real protocol code: `StateWriter::set` is
+//! single-key-at-a-time, so a naive loop over a block's write-set could
+//! durably apply some entries and not others on a mid-block backend
+//! failure — exactly the "partially committed state" ADR-0019's own
+//! "Atomic State Commit" rule forbids. `StateCommitter::commit(writes:
+//! &[Write])` is all-or-nothing by contract, deliberately narrower than
+//! ADR-0019's full atomic-commit scope (block header/body/receipts/
+//! events/consensus metadata all still have no concrete stored
+//! representation in this codebase). [`block_transition::apply_and_commit_block`]
+//! is its first real caller: runs `apply_block` against a store, then
+//! commits every transaction's write-set as one unit — the first time
+//! anywhere in this codebase that `StateWriter`/`StateCommitter` are
+//! reached from actual `apply_transaction` output rather than
+//! test-hand-seeded bytes. `apply_block` itself is unchanged and still
+//! usable standalone (no commit) for pure simulation/inspection.
 
 mod access_list;
 mod account;
@@ -361,7 +379,8 @@ pub use asset_value::{ASSET_VERSION_1, AssetValueV1, MAX_ASSET_HOLDINGS};
 pub use balance_value::{BALANCE_VERSION_1, BalanceValueV1};
 pub use block_hash::block_hash;
 pub use block_transition::{
-    AppliedTransaction, BlockApplicationResult, apply_block, apply_transaction,
+    AppliedTransaction, BlockApplicationResult, apply_and_commit_block, apply_block,
+    apply_transaction,
 };
 pub use consensus_root::{consensus_root, validator_set_commitment};
 pub use envelope_value::{AccountType, ENVELOPE_VERSION_1, EnvelopeValueV1, SectionVersionsV1};
@@ -406,7 +425,7 @@ pub use proposal_record::{PROPOSAL_RECORD_VERSION_1, ProposalRecordV1, ProposalS
 pub use proposal_vote_record::{PROPOSAL_VOTE_RECORD_VERSION_1, ProposalVoteRecordV1};
 pub use receipt::{RECEIPT_VERSION_1, ReceiptStatus, ReceiptV1};
 pub use stake_payload::{STAKE_PAYLOAD_VERSION_1, StakePayloadV1};
-pub use state_store::{StateReader, StateWriter, Write};
+pub use state_store::{StateCommitter, StateReader, StateWriter, Write};
 pub use transaction_envelope::{
     MAX_SIGNATURES, MAX_TRANSACTION_SIZE, TX_VERSION_1, TransactionEnvelope, TransactionPayload,
     TransactionSigningPayload, TxType, decode_transaction_payload,

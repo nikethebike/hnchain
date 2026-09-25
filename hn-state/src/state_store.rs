@@ -18,16 +18,17 @@ use crate::error::StateResult;
 /// once against `impl StateReader` and run unchanged against any backend
 /// that implements it later.
 ///
-/// Deliberately covers only `StateReader`/`StateWriter` of ADR-0019's
+/// Covers `StateReader`/`StateWriter`/`StateCommitter` of ADR-0019's
 /// nine named conceptual interfaces (`StateReader`, `StateWriter`,
 /// `StateTransaction`, `StateCommitter`, `BlockStore`, `ProofStore`,
-/// `SnapshotStore`, `PruningController`, `ArchiveStore`) — these two are
-/// the ones with a real caller today ([`crate::active_key`],
-/// [`crate::fetch_validator_record`]); the rest have no consumer
-/// anywhere in this codebase yet, and defining them now would be
-/// speculative architecture ahead of actual need, the same discipline
-/// already applied when [`crate::active_set`]/[`crate::is_eligible_signer`]
-/// were built without inventing a storage trait at all.
+/// `SnapshotStore`, `PruningController`, `ArchiveStore`) — these three
+/// are the ones with a real caller today ([`crate::active_key`],
+/// [`crate::fetch_validator_record`], [`crate::apply_and_commit_block`]
+/// as of ADR-0033); the rest have no consumer anywhere in this codebase
+/// yet, and defining them now would be speculative architecture ahead
+/// of actual need, the same discipline already applied when
+/// [`crate::active_set`]/[`crate::is_eligible_signer`] were built
+/// without inventing a storage trait at all.
 ///
 /// `StateResult`-wrapped, not the bare `Option`/`()` this trait carried
 /// before a durable backend existed: an in-memory backend genuinely
@@ -53,6 +54,31 @@ pub trait StateWriter {
     /// Stores `value` (already-canonical HNCS bytes) at `state_key`,
     /// replacing whatever was stored there before.
     fn set(&mut self, state_key: Digest, value: Vec<u8>) -> StateResult<()>;
+}
+
+/// Atomically applies a whole write set (ADR-0019, "Decided:
+/// Atomic State Commit" / "Write Set Boundary" — the `StateCommitter`
+/// role of its own nine-interface boundary diagram; ADR-0033, "Atomic
+/// Write-Set Commit"). Deliberately narrower than ADR-0019's full
+/// "Atomic State Commit" scope, which also lists block header, block
+/// body, receipts, events, and consensus metadata as needing to land in
+/// the same atomic commit — none of those exist as concrete stored
+/// objects anywhere in this codebase yet, so this trait covers exactly
+/// what [`Write`] already gives it: a deterministic write set (see
+/// ADR-0033's own "Explicitly Not Resolved").
+///
+/// Contract: all-or-nothing. If `commit` returns `Err`, none of
+/// `writes` may be observable afterward via [`StateReader::get`]; if it
+/// returns `Ok`, every one of them must be. This is a real,
+/// backend-specific guarantee a naive loop of [`StateWriter::set`]
+/// calls does not provide (an error partway through would leave the
+/// earlier entries applied and the rest not) — the entire reason this
+/// is its own trait, with no default implementation: every implementor
+/// must consciously decide how it achieves atomicity, not silently
+/// inherit a non-atomic one.
+pub trait StateCommitter {
+    /// Applies every entry in `writes`, atomically.
+    fn commit(&mut self, writes: &[Write]) -> StateResult<()>;
 }
 
 /// One `(state_key, value)` write-set entry — every `apply_*` function
