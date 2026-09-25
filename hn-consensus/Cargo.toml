@@ -15,3 +15,6 @@ hn-state = { path = "../hn-state" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+hn-storage = { path = "../hn-storage" }

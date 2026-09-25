@@ -50,6 +50,7 @@ docs/
     ADR-0032-governance-chamber-weight-query-and-propose-vote-wiring.md
     ADR-0033-atomic-write-set-commit.md
     ADR-0034-consensus-state-machine-skeleton.md
+    ADR-0035-wiring-the-consensus-engine-to-hn-state.md
 
   specs/
     core/

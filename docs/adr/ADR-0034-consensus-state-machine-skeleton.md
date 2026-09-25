@@ -16,6 +16,10 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0035: Wiring The Consensus Engine To `hn-state`
+
 ## Context
 
 `hn-consensus` has been a pure stub since this project's crate skeleton
