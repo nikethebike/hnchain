@@ -21,7 +21,14 @@ Depends On:
 
 Supersedes: None
 
-Referenced By: None
+Referenced By:
+
+- ADR-0039: Devnet Restart Recovery (adds `hn-node`'s missing
+  connection-drop reconnection and passive height-observation
+  catch-up, closing this ADR's own restart-recovery gap; also adds
+  explicit stdout flushing to `hn-node`'s log lines, since this ADR's
+  own "no custom signal handler" decision means a killed process's
+  last unflushed line could otherwise be lost)
 
 ## Context
 

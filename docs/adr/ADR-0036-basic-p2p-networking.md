@@ -23,6 +23,10 @@ Referenced By:
 
 - ADR-0037: Multi-Node Consensus Wiring (adds the real `std::net` TCP
   transport this ADR's own protocol types deliberately did not include)
+- ADR-0039: Devnet Restart Recovery (adds `spawn_peer_link`'s
+  `on_close` parameter, and `ConsensusProposalMessageV1`'s `height`/
+  `round` fields — both closing real gaps found while testing restart
+  recovery, not part of this ADR's own original decision)
 
 ## Context
 

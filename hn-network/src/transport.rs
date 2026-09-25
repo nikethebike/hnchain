@@ -85,12 +85,19 @@ impl PeerLink {
 /// malformed bytes is an ordinary, expected event, not a condition
 /// worth panicking or logging an error from this deliberately
 /// transport-only crate) on the first read/decode failure or once
-/// `inbound`'s receiver is gone; the writer thread exits once its
-/// channel is closed or a write fails.
+/// `inbound`'s receiver is gone, sending `label` to `on_close` first
+/// (ADR-0039, "Decided: Connection-Drop Reconnection") so a caller that
+/// wants to reconnect a dropped link has an explicit signal to act on
+/// rather than needing to notice a connection's silence itself; the
+/// writer thread exits once its own channel is closed or a write
+/// fails, without a separate `on_close` signal of its own — a dead
+/// connection's read side failing is the reliable, single source of
+/// truth this function reports from.
 pub fn spawn_peer_link<L>(
     stream: TcpStream,
     label: L,
     inbound: Sender<(L, P2PMessageEnvelopeV1)>,
+    on_close: Sender<L>,
 ) -> NetworkResult<PeerLink>
 where
     L: Clone + Send + 'static,
@@ -105,6 +112,7 @@ where
                 break;
             }
         }
+        let _ = on_close.send(label);
     });
 
     thread::spawn(move || {
@@ -146,11 +154,15 @@ mod tests {
 
         let (client_inbound_tx, client_inbound_rx) = mpsc::channel();
         let (server_inbound_tx, server_inbound_rx) = mpsc::channel();
+        let (client_closed_tx, _client_closed_rx) = mpsc::channel();
+        let (server_closed_tx, _server_closed_rx) = mpsc::channel();
         // The label identifies which remote peer a stream talks to, not
         // the local side spawning it: the client's own stream connects
         // to "server," and vice versa.
-        let client_link = spawn_peer_link(client_stream, "server", client_inbound_tx)?;
-        let _server_link = spawn_peer_link(server_stream, "client", server_inbound_tx)?;
+        let client_link =
+            spawn_peer_link(client_stream, "server", client_inbound_tx, client_closed_tx)?;
+        let _server_link =
+            spawn_peer_link(server_stream, "client", server_inbound_tx, server_closed_tx)?;
 
         let envelope = P2PMessageEnvelopeV1::new(
             ProtocolVersion::new(0, 1, 0),
@@ -168,6 +180,30 @@ mod tests {
 
         // Nothing sent the other way yet.
         assert!(client_inbound_rx.try_recv().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn on_close_fires_when_the_peer_disconnects() -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let addr = listener.local_addr()?;
+        let accept_thread = std::thread::spawn(move || listener.accept().map(|(stream, _)| stream));
+        let client_stream = TcpStream::connect(addr)?;
+        let server_stream = accept_thread
+            .join()
+            .map_err(|_| "accept thread panicked")??;
+
+        let (server_inbound_tx, _server_inbound_rx) = mpsc::channel();
+        let (server_closed_tx, server_closed_rx) = mpsc::channel();
+        let _server_link =
+            spawn_peer_link(server_stream, "client", server_inbound_tx, server_closed_tx)?;
+
+        drop(client_stream);
+
+        assert_eq!(
+            server_closed_rx.recv_timeout(Duration::from_secs(5))?,
+            "client"
+        );
         Ok(())
     }
 

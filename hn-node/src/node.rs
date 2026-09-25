@@ -42,15 +42,27 @@ fn genesis_marker_key() -> NodeResult<Digest> {
 }
 
 /// What the driving loop reacts to (ADR-0037, "Decided: Round Timer /
-/// Driving Loop").
+/// Driving Loop"; ADR-0039, "Decided: Connection-Drop Reconnection").
 enum NodeEvent {
     NewConnection {
         conn_id: u64,
         link: PeerLink,
+        /// `Some(addr)` if this node dialed `addr` to establish this
+        /// connection — the address to redial if it later drops.
+        /// `None` for an accepted (inbound) connection: reconnecting a
+        /// dropped inbound link is the dialing side's own
+        /// responsibility (ADR-0037's own directed-dial ordering),
+        /// mirrored symmetrically at every peer.
+        dial_target: Option<SocketAddr>,
     },
     PeerMessage {
         conn_id: u64,
         envelope: P2PMessageEnvelopeV1,
+    },
+    /// A connection's reader thread exited — the peer disconnected, or
+    /// sent malformed bytes (ADR-0039).
+    ConnectionClosed {
+        conn_id: u64,
     },
     ProposeTimeout {
         height: u64,
@@ -80,9 +92,17 @@ struct Ctx {
     base_timeout_ms: u64,
     handshake_params: HandshakeParams,
     event_tx: Sender<NodeEvent>,
+    raw_tx: Sender<(u64, P2PMessageEnvelopeV1)>,
+    closed_tx: Sender<u64>,
+    conn_id_counter: Arc<AtomicU64>,
     links: HashMap<u64, PeerLink>,
     handshakes: HashMap<u64, HandshakeState>,
     established: HashSet<u64>,
+    /// `conn_id -> the address this node dialed to establish it`, for
+    /// connections this node itself initiated only (ADR-0039, "Decided:
+    /// Connection-Drop Reconnection") — consulted on
+    /// `NodeEvent::ConnectionClosed` to decide whether to redial.
+    dialed_peers: HashMap<u64, SocketAddr>,
     round_started: bool,
 }
 
@@ -144,6 +164,7 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
 
     let (event_tx, event_rx) = mpsc::channel::<NodeEvent>();
     let (raw_tx, raw_rx) = mpsc::channel::<(u64, P2PMessageEnvelopeV1)>();
+    let (closed_tx, closed_rx) = mpsc::channel::<u64>();
     {
         let event_tx = event_tx.clone();
         thread::spawn(move || {
@@ -157,12 +178,26 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
             }
         });
     }
+    {
+        let event_tx = event_tx.clone();
+        thread::spawn(move || {
+            for conn_id in closed_rx {
+                if event_tx
+                    .send(NodeEvent::ConnectionClosed { conn_id })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+    }
 
     let conn_id_counter = Arc::new(AtomicU64::new(0));
     let listener = std::net::TcpListener::bind(config.listen)?;
     spawn_listener(
         listener,
         raw_tx.clone(),
+        closed_tx.clone(),
         event_tx.clone(),
         Arc::clone(&conn_id_counter),
     );
@@ -172,6 +207,7 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
             spawn_dialer(
                 peer,
                 raw_tx.clone(),
+                closed_tx.clone(),
                 event_tx.clone(),
                 Arc::clone(&conn_id_counter),
             );
@@ -197,9 +233,13 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         base_timeout_ms: config.base_timeout_ms,
         handshake_params,
         event_tx,
+        raw_tx,
+        closed_tx,
+        conn_id_counter,
         links: HashMap::new(),
         handshakes: HashMap::new(),
         established: HashSet::new(),
+        dialed_peers: HashMap::new(),
         round_started: false,
     };
 
@@ -236,6 +276,7 @@ fn init_genesis(store: &mut RedbStateStore, manifest: &GenesisManifest) -> NodeR
 fn spawn_listener(
     listener: std::net::TcpListener,
     raw_tx: Sender<(u64, P2PMessageEnvelopeV1)>,
+    closed_tx: Sender<u64>,
     event_tx: Sender<NodeEvent>,
     counter: Arc<AtomicU64>,
 ) {
@@ -243,11 +284,16 @@ fn spawn_listener(
         for accepted in listener.incoming() {
             let Ok(stream) = accepted else { continue };
             let conn_id = counter.fetch_add(1, Ordering::Relaxed);
-            let Ok(link) = spawn_peer_link(stream, conn_id, raw_tx.clone()) else {
+            let Ok(link) = spawn_peer_link(stream, conn_id, raw_tx.clone(), closed_tx.clone())
+            else {
                 continue;
             };
             if event_tx
-                .send(NodeEvent::NewConnection { conn_id, link })
+                .send(NodeEvent::NewConnection {
+                    conn_id,
+                    link,
+                    dial_target: None,
+                })
                 .is_err()
             {
                 break;
@@ -256,9 +302,16 @@ fn spawn_listener(
     });
 }
 
+/// Dials `addr` once (retrying every 100ms until it succeeds), reports
+/// the resulting connection, then exits. Reconnection after a
+/// *later* drop is not this thread's own job — the driving loop calls
+/// this function again from scratch on `NodeEvent::ConnectionClosed`
+/// (ADR-0039, "Decided: Connection-Drop Reconnection"), rather than
+/// this thread looping forever and monitoring the link itself.
 fn spawn_dialer(
     addr: SocketAddr,
     raw_tx: Sender<(u64, P2PMessageEnvelopeV1)>,
+    closed_tx: Sender<u64>,
     event_tx: Sender<NodeEvent>,
     counter: Arc<AtomicU64>,
 ) {
@@ -267,10 +320,14 @@ fn spawn_dialer(
             match TcpStream::connect(addr) {
                 Ok(stream) => {
                     let conn_id = counter.fetch_add(1, Ordering::Relaxed);
-                    let Ok(link) = spawn_peer_link(stream, conn_id, raw_tx) else {
+                    let Ok(link) = spawn_peer_link(stream, conn_id, raw_tx, closed_tx) else {
                         return;
                     };
-                    let _ = event_tx.send(NodeEvent::NewConnection { conn_id, link });
+                    let _ = event_tx.send(NodeEvent::NewConnection {
+                        conn_id,
+                        link,
+                        dial_target: Some(addr),
+                    });
                     return;
                 }
                 Err(_) => thread::sleep(Duration::from_millis(100)),
@@ -293,8 +350,15 @@ fn stage_timeout(base_timeout_ms: u64, round: Round) -> Duration {
 fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) -> NodeResult<()> {
     for event in event_rx {
         match event {
-            NodeEvent::NewConnection { conn_id, link } => {
+            NodeEvent::NewConnection {
+                conn_id,
+                link,
+                dial_target,
+            } => {
                 ctx.links.insert(conn_id, link);
+                if let Some(addr) = dial_target {
+                    ctx.dialed_peers.insert(conn_id, addr);
+                }
                 let mut handshake = HandshakeState::new(
                     ctx.handshake_params.clone(),
                     keypair_from_seed(KeyRole::ValidatorNetwork, ctx.network_key_seed),
@@ -311,6 +375,27 @@ fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) ->
                     ctx.round_started = true;
                     let action = ctx.engine.begin_round()?;
                     act_on(ctx, action)?;
+                }
+            }
+            NodeEvent::ConnectionClosed { conn_id } => {
+                ctx.links.remove(&conn_id);
+                ctx.handshakes.remove(&conn_id);
+                ctx.established.remove(&conn_id);
+                if let Some(addr) = ctx.dialed_peers.remove(&conn_id) {
+                    // This node was responsible for this link (it
+                    // dialed `addr`) -- redial, exactly as at startup,
+                    // so this node keeps trying to reach `addr` again
+                    // once it comes back (ADR-0039, "Decided:
+                    // Connection-Drop Reconnection"). A dropped
+                    // *inbound* connection needs no action here: the
+                    // peer that dialed *us* owns its own reconnection.
+                    spawn_dialer(
+                        addr,
+                        ctx.raw_tx.clone(),
+                        ctx.closed_tx.clone(),
+                        ctx.event_tx.clone(),
+                        Arc::clone(&ctx.conn_id_counter),
+                    );
                 }
             }
             NodeEvent::ProposeTimeout { height, round } => {
@@ -425,6 +510,7 @@ fn handle_peer_message(
     match (envelope.channel, envelope.message_type) {
         (Channel::Consensus, MessageType::ConsensusVote) => {
             let vote = ConsensusVote::decode(&envelope.payload)?;
+            maybe_sync_forward(ctx, vote.payload.height.get())?;
             if let Some(qc) = ctx.engine.record_vote(&vote, &ctx.store, &ctx.records)? {
                 broadcast(
                     ctx,
@@ -442,6 +528,7 @@ fn handle_peer_message(
         }
         (Channel::Consensus, MessageType::QuorumCertificateMessage) => {
             let qc = QuorumCertificate::decode(&envelope.payload)?;
+            maybe_sync_forward(ctx, qc.height.get())?;
             if expects_qc(ctx, &qc) {
                 let action =
                     ctx.engine
@@ -449,28 +536,78 @@ fn handle_peer_message(
                 act_on(ctx, action)?;
             }
         }
-        // A late proposal for a round already left behind (this node
-        // moved on to `Prevote`/`Precommit`/beyond by the time it
-        // arrived) has no defined transition from the current step --
-        // the same "stale event" filtering `expects_qc` applies to
-        // certificates, needed here too since `ConsensusEvent::Proposal`
-        // carries no height/round of its own to check against (it
-        // always targets whatever round `ConsensusState` is currently
-        // attempting).
-        (Channel::Consensus, MessageType::ConsensusProposal)
-            if ctx.engine.state().step == hn_consensus::ConsensusStep::Propose =>
-        {
+        (Channel::Consensus, MessageType::ConsensusProposal) => {
             let message = ConsensusProposalMessageV1::decode(&envelope.payload)?;
-            let action = ctx.engine.handle_proposal(
-                message.block_hash,
-                message.transactions,
-                message.justification,
-            )?;
-            act_on(ctx, action)?;
+            maybe_sync_forward(ctx, message.height.get())?;
+            // A proposal that does not target this engine's own exact
+            // current (height, round, step) is either stale (a round
+            // already left behind) or ahead of what
+            // `maybe_sync_forward` just caught up to (round > 0 at the
+            // new height) -- either way it has no defined transition
+            // from wherever the engine actually is right now, so it is
+            // silently dropped rather than fed to
+            // `ConsensusEngine::handle_proposal` (ADR-0034's own closed,
+            // total `apply` would reject it as `UnexpectedEvent`).
+            // `ConsensusProposalMessageV1.height`/`.round` (ADR-0039)
+            // make this an exact check now, not the weaker
+            // step-only guard this branch used before.
+            if message.height.get() == ctx.engine.state().height.get()
+                && message.round.get() == ctx.engine.state().round.get()
+                && ctx.engine.state().step == hn_consensus::ConsensusStep::Propose
+            {
+                let action = ctx.engine.handle_proposal(
+                    message.block_hash,
+                    message.transactions,
+                    message.justification,
+                )?;
+                act_on(ctx, action)?;
+            }
         }
         _ => {}
     }
     Ok(())
+}
+
+/// If `observed_height` is strictly ahead of this engine's own current
+/// height, this node has fallen behind the network's actual progress —
+/// most realistically after restarting while its peers kept finalizing
+/// without it (ADR-0039, "Decided: Passive Height-Observation
+/// Catch-Up"). No dedicated sync request/response message exists (or
+/// is needed): `ConsensusVote`/`QuorumCertificate` already self-report
+/// their own `height`, and a rejoining node starts observing them as
+/// soon as any connection's handshake completes and the network's
+/// already-constant vote gossip reaches it. Jumps straight to
+/// `observed_height` at round 0 (no lock — exactly what
+/// `ConsensusEngine::new_height` already gives a fresh height) rather
+/// than replaying every intermediate height's content: this pass's own
+/// blocks are always empty (proving liveness/view-change/restart-
+/// recovery is the goal, not state transitions), so there is no actual
+/// application state to reconstruct height-by-height — a real future
+/// pass with real transactions would need real block/state sync
+/// (ADR-0016's own still-entirely-open territory), not this shortcut.
+/// If the jump lands mid-round relative to what peers have actually
+/// reached (they are past round 0 by the time this node catches up),
+/// this node's own round-0 attempt simply times out through the normal
+/// propose/prevote/precommit cycle like any other failed round,
+/// catching up the rest of the way a round at a time — slower than
+/// jumping straight to the right round, but reuses every existing
+/// mechanism with no new one needed.
+///
+/// Never triggered by an already-caught-up or genuinely stale (at or
+/// behind current) observation — `observed_height` must be strictly
+/// greater, so every jump this function performs is monotonically
+/// forward.
+fn maybe_sync_forward(ctx: &mut Ctx, observed_height: u64) -> NodeResult<()> {
+    if observed_height <= ctx.engine.state().height.get() {
+        return Ok(());
+    }
+    log_line(&format!(
+        "SYNCED to height={observed_height} (observed from a peer)"
+    ));
+    ctx.engine = ConsensusEngine::new_height(BlockHeight::new(observed_height));
+    ctx.round_started = true;
+    let action = ctx.engine.begin_round()?;
+    act_on(ctx, action)
 }
 
 /// Whether `qc` still has a defined transition from the engine's
@@ -530,13 +667,13 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
             let result =
                 ctx.engine
                     .commit_finalized_block(block_hash, &mut ctx.store, &ctx.records)?;
-            println!(
+            log_line(&format!(
                 "FINALIZED height={} round={} block={} applied={}",
                 height.get(),
                 round.get(),
                 hex(&block_hash),
                 result.applied.len()
-            );
+            ));
             let action = ctx.engine.begin_new_height()?;
             act_on(ctx, action)?;
         }
@@ -567,6 +704,8 @@ fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<()> {
             Channel::Consensus,
             MessageType::ConsensusProposal,
             ConsensusProposalMessageV1 {
+                height,
+                round,
                 block_hash,
                 transactions: Vec::new(),
                 justification: None,
@@ -666,4 +805,17 @@ fn synthetic_block_hash(height: BlockHeight, round: Round, proposer: Digest) -> 
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Prints `line` to stdout and flushes immediately. `std::io::Stdout`
+/// is not guaranteed to reach a redirected file/pipe promptly on its
+/// own, and this crate deliberately installs no shutdown signal handler
+/// (ADR-0038, "Decided: No Custom Signal Handling") — without an
+/// explicit flush, a process killed shortly after logging a line (a
+/// real, expected event for a "stop" this crate treats as ordinary OS
+/// termination) could lose that line entirely, undermining the only
+/// operational visibility this daemon has.
+fn log_line(line: &str) {
+    println!("{line}");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
 }

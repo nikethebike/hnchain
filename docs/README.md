@@ -54,6 +54,7 @@ docs/
     ADR-0036-basic-p2p-networking.md
     ADR-0037-multi-node-consensus-wiring.md
     ADR-0038-genesis-format-and-node-daemon-bootstrap.md
+    ADR-0039-devnet-restart-recovery.md
 
   specs/
     core/

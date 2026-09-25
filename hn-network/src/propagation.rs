@@ -1,5 +1,6 @@
+use hn_core::{BlockHeight, Round};
 use hn_crypto::Digest;
-use hn_hncs::{Decoder, validate_count, write_bool, write_fixed_bytes, write_u32};
+use hn_hncs::{Decoder, validate_count, write_bool, write_fixed_bytes, write_u32, write_u64};
 use hn_state::{QuorumCertificate, TransactionEnvelope};
 
 use crate::error::NetworkResult;
@@ -193,11 +194,27 @@ impl BlockResponseV1 {
 }
 
 /// A consensus round proposal (ADR-0036, "Decided:
-/// Block/Transaction/Vote Propagation") — deliberately the exact same
-/// shape `hn_consensus::ConsensusEngine::handle_proposal`'s own three
-/// parameters already take.
+/// Block/Transaction/Vote Propagation"; ADR-0039, "Decided: Proposals
+/// Self-Describe Their Height/Round") — the block/transactions/
+/// justification fields deliberately the exact same shape
+/// `hn_consensus::ConsensusEngine::handle_proposal`'s own three
+/// parameters already take, plus `height`/`round` so a receiver can
+/// verify a proposal actually targets its own current round before
+/// acting on it — `hn_consensus::ConsensusEvent::Proposal` itself
+/// carries no height/round (it always targets whichever round the
+/// local `ConsensusState` is already attempting), which is exactly
+/// right for that trusted-input layer but left a real gap at the
+/// network boundary: nothing stopped a stale or out-of-order proposal
+/// from a *different* height being misapplied to whatever round a
+/// receiver's own engine happened to be in. `ConsensusVote`/
+/// `QuorumCertificate` never had this gap — both already self-describe
+/// their own `height`/`round`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConsensusProposalMessageV1 {
+    /// The height this proposal targets.
+    pub height: BlockHeight,
+    /// The round, within `height`, this proposal targets.
+    pub round: Round,
     /// The proposed block's hash.
     pub block_hash: Digest,
     /// The proposed block's transactions, in order.
@@ -212,6 +229,8 @@ impl ConsensusProposalMessageV1 {
     /// Encodes this value as canonical HNCS bytes.
     pub fn encode(&self) -> NetworkResult<Vec<u8>> {
         let mut out = Vec::new();
+        write_u64(&mut out, self.height.get());
+        write_u64(&mut out, self.round.get());
         write_fixed_bytes(&mut out, &self.block_hash);
         write_transaction_list(&mut out, &self.transactions)?;
         write_optional_qc(&mut out, self.justification.as_ref())?;
@@ -222,11 +241,15 @@ impl ConsensusProposalMessageV1 {
     /// [`ConsensusProposalMessageV1::encode`].
     pub fn decode(bytes: &[u8]) -> NetworkResult<Self> {
         let mut decoder = Decoder::new(bytes);
+        let height = BlockHeight::new(decoder.read_u64()?);
+        let round = Round::new(decoder.read_u64()?);
         let block_hash = decoder.read_fixed_bytes::<32>()?;
         let transactions = read_transaction_list(&mut decoder)?;
         let justification = read_optional_qc(&mut decoder)?;
         decoder.finish()?;
         Ok(Self {
+            height,
+            round,
             block_hash,
             transactions,
             justification,
@@ -285,7 +308,7 @@ fn read_optional_qc(decoder: &mut Decoder<'_>) -> NetworkResult<Option<QuorumCer
 
 #[cfg(test)]
 mod tests {
-    use hn_core::AccountNonce;
+    use hn_core::{AccountNonce, BlockHeight, Round};
     use hn_crypto::{Ed25519KeyPair, KeyRole, SignatureEnvelope};
     use hn_state::{
         AccessListV1, QuorumCertificate, TX_VERSION_1, TransactionEnvelope, TransferPayloadV1,
@@ -344,8 +367,8 @@ mod tests {
             chain_id: 1,
             network_id: 1,
             epoch: hn_core::Epoch::new(0),
-            height: hn_core::BlockHeight::new(1),
-            round: hn_core::Round::new(round),
+            height: BlockHeight::new(1),
+            round: Round::new(round),
             validator_set_commitment: [0x66; 32],
             target_type: VoteTargetType::Block,
             target_hash: BLOCK_HASH,
@@ -431,6 +454,8 @@ mod tests {
     #[test]
     fn consensus_proposal_round_trips_without_justification() -> NetworkResult<()> {
         let message = ConsensusProposalMessageV1 {
+            height: BlockHeight::new(7),
+            round: Round::new(2),
             block_hash: BLOCK_HASH,
             transactions: vec![sample_envelope(0)?],
             justification: None,
@@ -443,6 +468,8 @@ mod tests {
     #[test]
     fn consensus_proposal_round_trips_with_justification() -> NetworkResult<()> {
         let message = ConsensusProposalMessageV1 {
+            height: BlockHeight::new(7),
+            round: Round::new(2),
             block_hash: BLOCK_HASH,
             transactions: vec![sample_envelope(0)?],
             justification: Some(sample_qc(0)),

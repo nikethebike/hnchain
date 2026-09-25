@@ -20,6 +20,14 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0039: Devnet Restart Recovery (explicitly does not implement
+  real block/state sync — uses a passive, height-observation-only
+  shortcut valid only because this devnet's own blocks are always
+  empty; this ADR's own real checkpoint/snapshot/replay design remains
+  entirely open)
+
 ## Context
 
 New and recovering nodes need a safe way to synchronize with the network.

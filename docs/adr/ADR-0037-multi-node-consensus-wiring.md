@@ -29,6 +29,11 @@ Referenced By:
   peer/config flag set; also drops the `resolve_validator_index`/
   `conn_by_validator` connection-layer bookkeeping this ADR built,
   found not to be load-bearing for correctness)
+- ADR-0039: Devnet Restart Recovery (adds connection-drop reconnection
+  — this ADR's own dialer threads never retried a link once it dropped
+  — and passive height-observation catch-up; both found missing only
+  by actually killing and restarting a previously-connected node,
+  which none of this ADR's own tests did)
 
 ## Context
 
