@@ -13,6 +13,7 @@ use crate::error::{ConsensusError, ConsensusResult};
 use crate::event::ConsensusEvent;
 use crate::state::ConsensusState;
 use crate::step::ConsensusStep;
+use crate::vote_pool::VotePool;
 
 /// Wraps [`ConsensusState`]'s pure transitions with real calls into
 /// `hn-state` (ADR-0035, "Wiring The Consensus Engine To `hn-state`"):
@@ -37,6 +38,7 @@ use crate::step::ConsensusStep;
 pub struct ConsensusEngine {
     state: ConsensusState,
     proposed_blocks: HashMap<Digest, Vec<TransactionEnvelope>>,
+    vote_pool: VotePool,
 }
 
 impl ConsensusEngine {
@@ -47,6 +49,7 @@ impl ConsensusEngine {
         Self {
             state: ConsensusState::new_height(height),
             proposed_blocks: HashMap::new(),
+            vote_pool: VotePool::new(),
         }
     }
 
@@ -162,6 +165,57 @@ impl ConsensusEngine {
         } else {
             Err(ConsensusError::IneligibleSigner { validator_id })
         }
+    }
+
+    /// Verifies `vote` ([`ConsensusEngine::verify_vote`]) and, if valid,
+    /// records it in this engine's [`VotePool`] (ADR-0037, "Decided:
+    /// Vote Aggregation") — the caller's real, network-sourced vote,
+    /// not an in-process shortcut. Returns a freshly-built
+    /// [`QuorumCertificate`] the moment `vote`'s target crosses quorum
+    /// among `ordered_active_set`'s total voting power, ready to hand
+    /// straight to [`ConsensusEngine::handle_quorum_certificate`] —
+    /// `None` otherwise, including every later call for a target that
+    /// already crossed it.
+    ///
+    /// `ordered_active_set` is the same [`hn_state::active_set`] output
+    /// every other method here takes, now carrying voting power too
+    /// (not just identity) since aggregation needs it. The `validator_id
+    /// -> bit position` lookup this method performs is guaranteed to
+    /// succeed whenever `verify_vote` itself succeeds (eligibility
+    /// already requires membership in this exact set) — the
+    /// `UnknownValidator` error path exists only as this workspace's
+    /// standard defensive-typed-error discipline, not a reachable one
+    /// from here.
+    pub fn record_vote(
+        &mut self,
+        vote: &ConsensusVote,
+        reader: &impl StateReader,
+        ordered_active_set: &[ValidatorRecordV1],
+    ) -> ConsensusResult<Option<QuorumCertificate>> {
+        let ids: Vec<Digest> = ordered_active_set
+            .iter()
+            .map(|record| record.validator_id)
+            .collect();
+        self.verify_vote(vote, reader, &ids)?;
+
+        let validator_id = vote.payload.validator_id;
+        let bit_position = ordered_active_set
+            .iter()
+            .position(|record| record.validator_id == validator_id)
+            .ok_or(ConsensusError::UnknownValidator { validator_id })?;
+        let voting_power = ordered_active_set[bit_position].voting_power;
+        let total_voting_power: u128 = ordered_active_set
+            .iter()
+            .map(|record| record.voting_power)
+            .sum();
+
+        Ok(self.vote_pool.insert(
+            vote,
+            bit_position,
+            voting_power,
+            total_voting_power,
+            ordered_active_set.len(),
+        ))
     }
 
     /// Once a `PrecommitQuorum` event has produced
@@ -581,6 +635,116 @@ mod tests {
             Err(ConsensusError::VoteInvalid(
                 hn_state::StateError::UnknownValidator { .. }
             ))
+        ));
+        Ok(())
+    }
+
+    type ThreeValidatorFixture = (
+        Vec<(Ed25519KeyPair, [u8; 32])>,
+        Vec<ValidatorRecordV1>,
+        MapStore,
+    );
+
+    fn three_validator_records() -> StateResult<ThreeValidatorFixture> {
+        let mut signers = Vec::new();
+        let mut records = Vec::new();
+        let mut store = std::collections::BTreeMap::new();
+        for seed in [0x10_u8, 0x20, 0x30] {
+            let keypair = keypair(seed);
+            let validator_id = [seed; 32];
+            let record = ValidatorRecordV1 {
+                validator_id,
+                consensus_key: keypair.key_descriptor(),
+                bonded_stake: 100,
+                voting_power: 100,
+                status: ValidatorStatus::Active,
+                pending_unbonding: None,
+            };
+            let key = validator_section_state_key(&validator_id, ValidatorSection::Record)?;
+            store.insert(key, record.encode()?);
+            records.push(record);
+            signers.push((keypair, validator_id));
+        }
+        Ok((signers, records, MapStore(store)))
+    }
+
+    fn cast_vote(
+        validator_id: [u8; 32],
+        keypair: &Ed25519KeyPair,
+        target_hash: [u8; 32],
+    ) -> StateResult<ConsensusVote> {
+        let payload = VoteSigningPayloadV1 {
+            vote_type: VoteType::Prevote,
+            chain_id: 1,
+            network_id: 1,
+            epoch: Epoch::new(0),
+            height: BlockHeight::new(1),
+            round: Round::new(0),
+            validator_set_commitment: VSC,
+            validator_id,
+            target_type: VoteTargetType::Block,
+            target_hash,
+            vote_metadata: Vec::new(),
+        };
+        let digest = payload.signing_digest()?;
+        Ok(ConsensusVote {
+            payload,
+            signature: SignatureEnvelope {
+                algorithm_id: keypair.key_descriptor().algorithm_id(),
+                key_reference: None,
+                signature: keypair.sign(&digest).to_vec(),
+            },
+        })
+    }
+
+    #[test]
+    fn record_vote_builds_a_quorum_certificate_from_real_network_sourced_votes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (signers, records, store) = three_validator_records()?;
+
+        let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
+        engine.begin_round()?;
+        engine.handle_proposal(BLOCK_A, vec![], None)?;
+
+        for (index, (keypair, validator_id)) in signers.iter().enumerate() {
+            let vote = cast_vote(*validator_id, keypair, BLOCK_A)?;
+            let result = engine.record_vote(&vote, &store, &records)?;
+            if index < 2 {
+                assert_eq!(result, None, "not yet 2f+1 of 300");
+            } else {
+                let qc = result.ok_or("3rd of 3 equal-power signers should cross quorum")?;
+                assert_eq!(qc.signed_voting_power, 300);
+                let action = engine.handle_quorum_certificate(
+                    qc,
+                    &store,
+                    &records
+                        .iter()
+                        .map(|record| record.validator_id)
+                        .collect::<Vec<_>>(),
+                )?;
+                assert_eq!(
+                    action,
+                    ConsensusAction::Precommit(ConsensusTarget::Block(BLOCK_A))
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn record_vote_rejects_an_invalid_vote_before_touching_the_pool()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (signers, records, store) = three_validator_records()?;
+        let (keypair, validator_id) = &signers[0];
+        let mut bad_vote = cast_vote(*validator_id, keypair, BLOCK_A)?;
+        bad_vote.signature.signature[0] ^= 0xff;
+
+        let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
+        engine.begin_round()?;
+        engine.handle_proposal(BLOCK_A, vec![], None)?;
+        assert!(matches!(
+            engine.record_vote(&bad_vote, &store, &records),
+            Err(ConsensusError::VoteInvalid(_))
         ));
         Ok(())
     }

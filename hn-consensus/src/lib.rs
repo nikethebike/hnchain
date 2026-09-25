@@ -51,25 +51,35 @@
 //! map, populated by `handle_proposal` — is deliberately not
 //! ADR-0019's `BlockStore`: real block/header/receipts storage remains
 //! undecided, named explicitly in ADR-0035's own "Explicitly Not
-//! Resolved" rather than guessed at ahead of a real need. Vote
-//! aggregation (collecting individual votes into a new
-//! `QuorumCertificate`) also remains unbuilt — `verify_vote` checks one
-//! vote at a time, the input a future aggregator would consume, not an
-//! aggregator itself.
+//! Resolved" rather than guessed at ahead of a real need.
+//!
+//! [`VotePool`] (ADR-0037, "Decided: Vote Aggregation") closes the gap
+//! ADR-0035 left open: `ConsensusEngine::record_vote` calls
+//! `verify_vote` and then feeds the now-trusted vote into the pool,
+//! returning a freshly-built `hn_state::QuorumCertificate` the moment
+//! one target's signed voting power crosses quorum — ready to hand
+//! straight to `handle_quorum_certificate`. [`round_proposer`]
+//! (ADR-0037, "Decided: Leader Election Scaffold") picks who proposes a
+//! given height/round — ADR-0011's own explicitly-sanctioned devnet
+//! baseline, not its still-open real formula.
 
 mod action;
 mod engine;
 mod error;
 mod event;
+mod leader;
 mod state;
 mod step;
+mod vote_pool;
 
 pub use action::ConsensusAction;
 pub use engine::ConsensusEngine;
 pub use error::{ConsensusError, ConsensusResult};
 pub use event::{ConsensusEvent, ConsensusTarget};
+pub use leader::round_proposer;
 pub use state::ConsensusState;
 pub use step::ConsensusStep;
+pub use vote_pool::VotePool;
 
 #[cfg(test)]
 mod tests {

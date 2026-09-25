@@ -20,6 +20,12 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0037: Multi-Node Consensus Wiring (adds `VotePool`/
+  `ConsensusEngine::record_vote`, closing "vote aggregation... also
+  remains unbuilt" from this ADR's own "Explicitly Not Resolved")
+
 ## Context
 
 ADR-0034's `ConsensusState` is deliberately pure: `apply` trusts every

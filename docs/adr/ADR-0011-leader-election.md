@@ -17,6 +17,13 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0037: Multi-Node Consensus Wiring (adds `round_proposer`, the
+  static-rotation devnet/testing baseline this ADR's own "Rejected
+  Options" section explicitly permits — not this ADR's own still-open
+  weighted-priority formula)
+
 ## Context
 
 Leader election selects the validator that may propose a block for a consensus
@@ -369,7 +376,9 @@ requires migration analysis.
 ## Open Decisions
 
 - exact proposer priority update formula (mechanism decided above —
-  weighted round-robin, no randomness; the precise arithmetic is not)
+  weighted round-robin, no randomness; the precise arithmetic is not —
+  ADR-0037's own `round_proposer` is an explicitly-sanctioned devnet/
+  testing placeholder, not a step toward this)
 - proposer proof format
 - leader schedule proof for light clients
 - grinding resistance analysis (voting-power-based grinding, e.g. via

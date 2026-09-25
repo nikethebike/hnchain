@@ -52,6 +52,7 @@ docs/
     ADR-0034-consensus-state-machine-skeleton.md
     ADR-0035-wiring-the-consensus-engine-to-hn-state.md
     ADR-0036-basic-p2p-networking.md
+    ADR-0037-multi-node-consensus-wiring.md
 
   specs/
     core/

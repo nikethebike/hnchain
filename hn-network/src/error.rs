@@ -79,6 +79,24 @@ pub enum NetworkError {
     /// A `PeerRequestV1`'s own bytes were non-empty, despite that
     /// message type having no fields.
     UnexpectedPeerRequestPayload,
+    /// A TCP frame's length prefix exceeds
+    /// [`crate::transport::MAX_FRAME_LEN`] — rejected before allocating
+    /// a buffer for it (ADR-0018, "Cheap Rejection": "frame limit," the
+    /// very first stage, ahead of envelope decode).
+    FrameTooLarge {
+        /// The rejected length prefix.
+        length: usize,
+    },
+    /// A real transport I/O operation failed (connection reset, broken
+    /// pipe, and so on). Carries `std::io::Error`'s own message as an
+    /// opaque `String` — mirroring `hn_state::StateError::Storage`'s own
+    /// established boundary for a real backend error type that itself
+    /// implements neither `Clone` nor `Eq`/`PartialEq`.
+    Io(String),
+    /// A [`crate::transport::PeerLink`]'s outbound channel has no
+    /// receiver left — the connection's writer thread has already
+    /// exited.
+    PeerConnectionClosed,
 }
 
 impl fmt::Display for NetworkError {
@@ -128,6 +146,16 @@ impl fmt::Display for NetworkError {
             }
             Self::UnexpectedPeerRequestPayload => {
                 write!(formatter, "PeerRequestV1 payload must be empty")
+            }
+            Self::FrameTooLarge { length } => {
+                write!(
+                    formatter,
+                    "TCP frame length {length} exceeds the frame limit"
+                )
+            }
+            Self::Io(message) => write!(formatter, "network I/O error: {message}"),
+            Self::PeerConnectionClosed => {
+                write!(formatter, "peer connection's writer thread has exited")
             }
         }
     }

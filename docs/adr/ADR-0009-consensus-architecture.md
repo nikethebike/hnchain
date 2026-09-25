@@ -20,6 +20,9 @@ Supersedes: None
 Referenced By:
 
 - ADR-0034: Consensus State Machine Skeleton
+- ADR-0037: Multi-Node Consensus Wiring (implements "Timeout And View
+  Change" with a real wall-clock timer loop and a working, explicitly
+  non-final base timeout/backoff default)
 
 ## Context
 

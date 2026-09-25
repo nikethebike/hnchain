@@ -19,6 +19,11 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0037: Multi-Node Consensus Wiring (adds the real `std::net` TCP
+  transport this ADR's own protocol types deliberately did not include)
+
 ## Context
 
 `hn-network` has been a pure stub. ADR-0018 already defines the

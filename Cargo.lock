@@ -237,7 +237,9 @@ version = "0.1.0"
 dependencies = [
  "hn-consensus",
  "hn-core",
+ "hn-crypto",
  "hn-network",
+ "hn-state",
  "hn-storage",
 ]
 

@@ -9,10 +9,20 @@
 //! ADR-0036, "Basic P2P Networking," is this crate's first real
 //! content, deliberately scoped to node discovery, peer handshake, and
 //! message serialization for block/transaction/vote propagation — and
-//! deliberately **pure protocol logic only**: no real transport, no
-//! real sockets, no async runtime. Every type here is testable in
-//! isolation, mirroring `hn_consensus::ConsensusState`'s own "pure
-//! state machine first, real wiring later" split.
+//! deliberately **pure protocol logic only** at that pass: no real
+//! transport, no real sockets, no async runtime. Every protocol type
+//! here is testable in isolation, mirroring
+//! `hn_consensus::ConsensusState`'s own "pure state machine first, real
+//! wiring later" split.
+//!
+//! [`transport`] (ADR-0037, "Decided: Transport") adds the real thing:
+//! plain blocking `std::net::TcpStream`, one reader thread and one
+//! writer thread per connection, explicit length-prefixed framing
+//! ([`transport::write_frame`]/[`transport::read_frame`]) since TCP is
+//! a byte stream, not a message stream. No async runtime — the same
+//! reasoning ADR-0036 already gave for staying transport-free in the
+//! first place, asked again explicitly before this pass added a real
+//! one.
 //!
 //! [`envelope::P2PMessageEnvelopeV1`] is the versioned message wrapper
 //! (ADR-0018) every other payload travels inside, carrying
@@ -81,6 +91,7 @@ mod handshake;
 mod identity;
 mod propagation;
 mod registry;
+mod transport;
 
 pub use discovery::{
     MAX_ANNOUNCED_PEERS, MAX_KNOWN_PEERS, MAX_NETWORK_ADDRESS_LEN, PeerAddressV1, PeerAnnounceV1,
@@ -99,6 +110,7 @@ pub use propagation::{
     TransactionRequestV1, TransactionResponseV1,
 };
 pub use registry::{Channel, MessageType};
+pub use transport::{MAX_FRAME_LEN, PeerLink, read_frame, spawn_peer_link, write_frame};
 
 #[cfg(test)]
 mod tests {

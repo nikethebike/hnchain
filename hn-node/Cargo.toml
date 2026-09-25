@@ -11,7 +11,9 @@ description = "HNChain node composition layer."
 [dependencies]
 hn-consensus = { path = "../hn-consensus" }
 hn-core = { path = "../hn-core" }
+hn-crypto = { path = "../hn-crypto" }
 hn-network = { path = "../hn-network" }
+hn-state = { path = "../hn-state" }
 hn-storage = { path = "../hn-storage" }
 
 [lints]
