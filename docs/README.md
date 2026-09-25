@@ -49,6 +49,7 @@ docs/
     ADR-0031-write-set-values-and-overlay-state-reader.md
     ADR-0032-governance-chamber-weight-query-and-propose-vote-wiring.md
     ADR-0033-atomic-write-set-commit.md
+    ADR-0034-consensus-state-machine-skeleton.md
 
   specs/
     core/

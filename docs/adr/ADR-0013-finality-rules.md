@@ -18,6 +18,10 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0034: Consensus State Machine Skeleton
+
 ## Context
 
 Finality defines when a block is considered irreversible under the assumptions

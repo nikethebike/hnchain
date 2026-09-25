@@ -17,6 +17,10 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0034: Consensus State Machine Skeleton
+
 ## Context
 
 Consensus is the mechanism by which HNChain nodes agree on block history and the
