@@ -227,6 +227,8 @@ version = "0.1.0"
 dependencies = [
  "hn-core",
  "hn-crypto",
+ "hn-hncs",
+ "hn-state",
 ]
 
 [[package]]

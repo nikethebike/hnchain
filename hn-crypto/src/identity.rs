@@ -33,6 +33,12 @@ pub enum KeyRole {
     BridgeOperator = 0x05,
     /// Authorizes identity recovery operations.
     IdentityRecovery = 0x06,
+    /// Authorizes P2P network node identity (ADR-0036, "Basic P2P
+    /// Networking") — distinct from `ValidatorNetwork`: every peer
+    /// (validator or not — a full node, an RPC-only node, a light
+    /// client) may hold one, where `ValidatorNetwork` specifically
+    /// scopes to validator peer-identity/network-layer operations.
+    NodeIdentity = 0x07,
 }
 
 impl KeyRole {

@@ -21,6 +21,14 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0036: Basic P2P Networking (closes "final envelope schema"/
+  "final channel registry"/"final message type registry"/"handshake
+  schema" for a deliberately narrow slice — node discovery, handshake,
+  block/transaction/vote propagation — leaving the rest of this ADR's
+  own Open Decisions untouched)
+
 ## Context
 
 HNChain nodes exchange transactions, blocks, consensus messages, evidence,
@@ -327,22 +335,36 @@ consensus specifications.
 
 ## Open Decisions
 
-- initial transport profiles
-- final envelope schema
-- final channel registry
-- final message type registry
-- handshake schema
-- capability negotiation schema
-- node identity format
+- initial transport profiles (ADR-0036 deliberately does not pick one —
+  pure protocol logic only, no real sockets)
+- envelope schema — resolved for V1, ADR-0036 (compression/encryption
+  fields deliberately omitted, not finalized)
+- channel registry — resolved for V1, ADR-0036 (5 of 10 channels
+  implemented; evidence/sync/snapshot/light_client reserved)
+- message type registry — resolved for V1, ADR-0036 (15 of ~24 message
+  types implemented; the rest reserved)
+- handshake schema — resolved for V1, ADR-0036 (`Hello`, merging the
+  RFC's own separate `hello`/`capabilities` messages)
+- capability negotiation schema — resolved for V1, ADR-0036 (a plain
+  subset check over `supported_channels`/`supported_message_types`, no
+  required-vs-optional distinction yet)
+- node identity format — resolved, ADR-0036 (`KeyRole::NodeIdentity` +
+  `peer_id`, deliberately not network-bound)
 - compression profiles
 - encryption profiles
 - peer scoring policy
 - rate limit policy
-- gossip fanout strategy
-- block propagation strategy
+- gossip fanout strategy — partially resolved, ADR-0036 (static
+  bootstrap + `peer_announce`/`peer_request` gossip; no fanout
+  algorithm decided)
+- block propagation strategy — partially resolved, ADR-0036
+  (announce/request/response for a bare transaction list under a block
+  hash, not a real block — see ADR-0036's own "Explicitly Not
+  Resolved")
 - sync packet formats
 - snapshot packet formats
-- P2P test vector suite
+- P2P test vector suite — this pass added unit/oracle tests for the
+  implemented subset, not a formal conformance vector file
 
 ## Related Specifications
 

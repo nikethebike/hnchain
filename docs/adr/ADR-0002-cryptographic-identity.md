@@ -22,6 +22,8 @@ Referenced By:
 - ADR-0027: Identity State And Account Key Bootstrap (resolves this
   ADR's own `active_key(identity, role, height)` Deferred Decision for
   the `account_signing` role)
+- ADR-0036: Basic P2P Networking (adds `KeyRole::NodeIdentity`,
+  distinct from `validator_network`)
 
 ## Context
 
@@ -215,6 +217,9 @@ Key roles are explicit. Initial conceptual roles:
 - `governance`
 - `bridge_operator`
 - `identity_recovery`
+- `node_identity` (ADR-0036, "Basic P2P Networking" — P2P network
+  identity for any peer, validator or not; distinct from
+  `validator_network`)
 
 One physical key may be authorized for multiple roles only if protocol rules
 explicitly allow it.

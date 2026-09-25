@@ -25,6 +25,7 @@ Referenced By:
 - ADR-0012: Vote Messages And Quorum Certificates
 - ADR-0015: Slashing And Accountability
 - ADR-0025: Governance Model
+- ADR-0036: Basic P2P Networking
 
 ## Context
 
@@ -142,6 +143,8 @@ Initial conceptual domain tags:
 - `hnchain.p2p.message.v1`
 - `hnchain.registry.algorithm.v1`
 - `hnchain.governance.proposal.v1`
+- `hnchain.network.peerid.v1`
+- `hnchain.network.hello.v1`
 
 `hnchain.vote.signing.v1` (ADR-0012), `hnchain.consensus.root.v1` and
 `hnchain.validator.record.v1` (ADR-0010), and `hnchain.evidence.v1`
@@ -156,6 +159,19 @@ consensus_root`, ADR-0008), each validator record's leaf digest for
 `hnchain.governance.proposal.v1` (ADR-0025) is `proposal_id`'s own
 domain tag — a digest over a `Propose` payload's canonical content,
 mirroring `hnchain.transaction.id.v1`'s own role for `tx_id`.
+
+`hnchain.p2p.message.v1` (ADR-0036) was reserved here before it had a
+real use; it is now `P2PMessageEnvelopeV1.message_id`'s domain tag — a
+digest over `(channel, message_type, payload)`, content-addressed for
+gossip deduplication. `hnchain.network.peerid.v1` and
+`hnchain.network.hello.v1` (also ADR-0036) are new: the former derives
+a P2P peer identifier from a `KeyDescriptor` alone (deliberately not
+network-bound, unlike `hnchain.address.account.v1` — see ADR-0036's own
+"Decided: Node Identity" for why peer identity and consensus-visible
+addresses differ here), the latter is the handshake `Hello` message's
+own signing-payload domain tag, mirroring
+`hnchain.vote.signing.v1`/`hnchain.transaction.signing.v1`'s own
+signed-payload-then-signature shape.
 
 `hnchain.list.node.v1` and `hnchain.list.empty.v1` are added by
 ADR-0008 ("Ordered List Commitment"): the internal-node and

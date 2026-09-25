@@ -11,6 +11,8 @@ description = "HNChain P2P networking boundaries."
 [dependencies]
 hn-core = { path = "../hn-core" }
 hn-crypto = { path = "../hn-crypto" }
+hn-hncs = { path = "../hn-hncs" }
+hn-state = { path = "../hn-state" }
 
 [lints]
 workspace = true
