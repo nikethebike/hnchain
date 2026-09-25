@@ -19,6 +19,13 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0038: Genesis Format And Node Daemon Bootstrap (resolves
+  `docs/specs/core/genesis.md`'s own format, explicitly without
+  integrating it into this ADR's `BlockHeader` — see "Open Decisions,"
+  below)
+
 ## Context
 
 Blocks are the canonical containers that bind transaction ordering, execution
@@ -632,8 +639,11 @@ New body sections may be backward-compatible only if:
   `fee_limit`/`ReceiptV1`, there is currently no partial structure to
   decide (no adjustable parameter has been named anywhere yet), not
   just an incomplete one
-- genesis block compatibility rules — blocked on
-  `docs/specs/core/genesis.md` reaching Accepted (currently Draft)
+- genesis block compatibility rules — `docs/specs/core/genesis.md` is
+  now Accepted (ADR-0038) for its own `GenesisManifest` format and
+  loading mechanism, but ADR-0038 explicitly does not integrate genesis
+  into a real `BlockHeader`/block 0 (no concrete `BlockHeader` type
+  exists in this codebase yet); this item stays open until one does
 
 ## Related Specifications
 

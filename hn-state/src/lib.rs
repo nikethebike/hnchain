@@ -335,6 +335,7 @@ mod evidence_digest;
 mod governance;
 mod governance_payload;
 mod governance_transition;
+mod hncoin;
 mod identity_transition;
 mod identity_value;
 mod key;
@@ -399,6 +400,10 @@ pub use governance_transition::{
     apply_vote, apply_vote_with_receipt, chamber_weights, fetch_proposal, fetch_proposal_vote,
     finalize_proposal,
 };
+pub use hncoin::{
+    COMMUNITY_ALLOCATION, FOUNDER_ALLOCATION, GENESIS_SUPPLY, HNCOIN_DECIMALS, MAX_SUPPLY,
+    RESERVE_ALLOCATION,
+};
 pub use identity_transition::{
     apply_identity_bootstrap, apply_identity_rotation, fetch_identity, resolve_account_signing_key,
 };
@@ -444,8 +449,8 @@ pub use validator_record::{
     PendingUnbondingV1, RECORD_VERSION_1, ValidatorRecordV1, ValidatorStatus,
 };
 pub use validator_transition::{
-    UNBONDING_PERIOD_BLOCKS, apply_stake, apply_stake_with_receipt, apply_unbonding_release,
-    apply_unstake, apply_unstake_with_receipt, apply_validator_update,
+    MINIMUM_VALIDATOR_BOND, UNBONDING_PERIOD_BLOCKS, apply_stake, apply_stake_with_receipt,
+    apply_unbonding_release, apply_unstake, apply_unstake_with_receipt, apply_validator_update,
     apply_validator_update_with_receipt,
 };
 pub use validator_update_payload::{

@@ -17,6 +17,12 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0038: Genesis Format And Node Daemon Bootstrap (implements this
+  ADR's genesis allocation amounts as real `hn-state` constants and a
+  real, enforced genesis-loading validation check, for the first time)
+
 ## Context
 
 HNCOIN is HNChain's native asset (ADR-0001, "Balance" — the singleton

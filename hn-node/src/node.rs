@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::net::TcpStream;
+use std::collections::{HashMap, HashSet};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -8,21 +8,21 @@ use std::time::Duration;
 
 use hn_consensus::{ConsensusAction, ConsensusEngine, ConsensusTarget, round_proposer};
 use hn_core::{BlockHeight, Epoch, ProtocolVersion, Round};
-use hn_crypto::{Digest, Ed25519KeyPair, KeyDescriptor, SignatureEnvelope};
+use hn_crypto::{Digest, Ed25519KeyPair, KeyRole, SignatureEnvelope, hash_profile_0x0001};
 use hn_network::{
     Channel, ConsensusProposalMessageV1, HandshakeAction, HandshakeEvent, HandshakeParams,
     HandshakeState, Hello, MessageType, P2PMessageEnvelopeV1, PeerLink, spawn_peer_link,
 };
 use hn_state::{
-    ConsensusVote, QuorumCertificate, ValidatorRecordV1, VoteSigningPayloadV1, VoteTargetType,
-    VoteType, active_set,
+    ConsensusVote, QuorumCertificate, StateCommitter, StateReader, ValidatorRecordV1,
+    ValidatorStatus, VoteSigningPayloadV1, VoteTargetType, VoteType, Write, active_set,
 };
 use hn_storage::RedbStateStore;
 
 use crate::config::NodeConfig;
 use crate::error::{NodeError, NodeResult};
-use crate::genesis::{devnet_validator_records, ensure_genesis_written};
-use crate::identity::{consensus_keypair, network_keypair, peer_addr, validator_id};
+use crate::genesis::GenesisManifest;
+use crate::identity::{keypair_from_seed, resolve_own_validator_id};
 
 /// A fixed devnet `validator_set_commitment` (ADR-0037's own devnet
 /// scope never defines `ValidatorSetCommitmentV1`'s real canonical
@@ -32,6 +32,14 @@ use crate::identity::{consensus_keypair, network_keypair, peer_addr, validator_i
 const DEVNET_VSC: [u8; 32] = [0x11; 32];
 
 const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 1, 0);
+
+/// This node's own out-of-band genesis integrity marker key (ADR-0038,
+/// "Decided: DB Init") — deliberately outside ADR-0007's own domain
+/// registry: node-local bookkeeping, never a consensus-visible state
+/// key.
+fn genesis_marker_key() -> NodeResult<Digest> {
+    Ok(hash_profile_0x0001("hnchain.node.genesismarker.v1", &[])?)
+}
 
 /// What the driving loop reacts to (ADR-0037, "Decided: Round Timer /
 /// Driving Loop").
@@ -64,9 +72,9 @@ struct Ctx {
     store: RedbStateStore,
     records: Vec<ValidatorRecordV1>,
     ordered_ids: Vec<Digest>,
-    own_index: u8,
-    own_validator_id: [u8; 32],
+    own_validator_id: Digest,
     consensus_keypair: Ed25519KeyPair,
+    network_key_seed: [u8; 32],
     chain_id: u8,
     network_id: u16,
     base_timeout_ms: u64,
@@ -74,40 +82,57 @@ struct Ctx {
     event_tx: Sender<NodeEvent>,
     links: HashMap<u64, PeerLink>,
     handshakes: HashMap<u64, HandshakeState>,
-    conn_by_validator: HashMap<u8, u64>,
+    established: HashSet<u64>,
     round_started: bool,
 }
 
-/// Runs this validator's node process until killed (ADR-0037, "Decided:
-/// `hn-node` Process"). Opens (or resumes) a real, durable
-/// `RedbStateStore`, writes every devnet validator's record if not
-/// already present, connects to every configured peer (directed dial,
-/// ADR-0037's own "Decided: Connection Topology") or gives up waiting
-/// after a bounded startup grace period, then drives
+/// Runs this validator's node process until killed (ADR-0038,
+/// "Decided: Node Config"/"Decided: DB Init"/"Decided: Own Validator
+/// Identity Resolution"). Loads and validates a real genesis file,
+/// opens (or resumes, with an integrity check) a durable
+/// `RedbStateStore`, connects to every configured peer (directed dial
+/// by listen-address ordering) or gives up waiting after a bounded
+/// startup grace period, then drives
 /// [`hn_consensus::ConsensusEngine`] entirely off real wall-clock
-/// timers and real network messages — no in-process shortcuts.
+/// timers and real network messages.
 pub fn run(config: NodeConfig) -> NodeResult<()> {
-    if config.validator_index >= config.validator_count {
-        return Err(NodeError::from(crate::config::ConfigError(
-            "validator-index must be less than validator-count".to_string(),
-        )));
-    }
+    let manifest = GenesisManifest::load(&config.genesis_path)?;
 
     std::fs::create_dir_all(&config.data_dir)?;
     let mut store = RedbStateStore::open(config.data_dir.join("state.redb"))?;
+    init_genesis(&mut store, &manifest)?;
 
-    let records = devnet_validator_records(config.validator_count);
-    ensure_genesis_written(&mut store, &records)?;
+    let records: Vec<ValidatorRecordV1> = manifest
+        .validators
+        .iter()
+        .map(|validator| ValidatorRecordV1 {
+            validator_id: validator.validator_id,
+            consensus_key: validator.consensus_key,
+            bonded_stake: validator.bonded_stake,
+            voting_power: validator.bonded_stake,
+            status: ValidatorStatus::Active,
+            pending_unbonding: None,
+        })
+        .collect();
     let ordered_active_set = active_set(&records, records.len());
     let ordered_ids: Vec<Digest> = ordered_active_set
         .iter()
         .map(|record| record.validator_id)
         .collect();
 
+    let consensus_keypair =
+        keypair_from_seed(KeyRole::ValidatorConsensus, config.consensus_key_seed);
+    let own_validator_id = resolve_own_validator_id(&consensus_keypair, &manifest.validators)
+        .ok_or_else(|| {
+            NodeError::from(crate::config::ConfigError(
+                "configured --consensus-key-seed does not match any genesis validator".to_string(),
+            ))
+        })?;
+
     let handshake_params = HandshakeParams {
         protocol_version: PROTOCOL_VERSION,
-        chain_id: config.chain_id,
-        network_id: config.network_id,
+        chain_id: manifest.chain_id,
+        network_id: manifest.network_id,
         required_channels: vec![Channel::Handshake, Channel::Consensus],
         required_message_types: vec![
             MessageType::Hello,
@@ -134,8 +159,7 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
     }
 
     let conn_id_counter = Arc::new(AtomicU64::new(0));
-    let own_addr = peer_addr(config.base_port, config.validator_index);
-    let listener = std::net::TcpListener::bind(own_addr)?;
+    let listener = std::net::TcpListener::bind(config.listen)?;
     spawn_listener(
         listener,
         raw_tx.clone(),
@@ -143,13 +167,15 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         Arc::clone(&conn_id_counter),
     );
 
-    for peer_index in (config.validator_index + 1)..config.validator_count {
-        spawn_dialer(
-            peer_addr(config.base_port, peer_index),
-            raw_tx.clone(),
-            event_tx.clone(),
-            Arc::clone(&conn_id_counter),
-        );
+    for &peer in &config.peers {
+        if config.listen < peer {
+            spawn_dialer(
+                peer,
+                raw_tx.clone(),
+                event_tx.clone(),
+                Arc::clone(&conn_id_counter),
+            );
+        }
     }
 
     spawn_after(
@@ -163,22 +189,48 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         store,
         records,
         ordered_ids,
-        own_index: config.validator_index,
-        own_validator_id: validator_id(config.validator_index),
-        consensus_keypair: consensus_keypair(config.validator_index),
-        chain_id: config.chain_id,
-        network_id: config.network_id,
+        own_validator_id,
+        consensus_keypair,
+        network_key_seed: config.network_key_seed,
+        chain_id: manifest.chain_id,
+        network_id: manifest.network_id,
         base_timeout_ms: config.base_timeout_ms,
         handshake_params,
         event_tx,
         links: HashMap::new(),
         handshakes: HashMap::new(),
-        conn_by_validator: HashMap::new(),
+        established: HashSet::new(),
         round_started: false,
     };
 
-    let required_peers = usize::from(config.validator_count.saturating_sub(1));
-    drive(&mut ctx, event_rx, required_peers)
+    drive(&mut ctx, event_rx, config.peers.len())
+}
+
+/// If no genesis marker is stored yet, validates `manifest` was already
+/// (`GenesisManifest::load`), applies its write-set, and stores the
+/// marker. If a marker already exists, recomputes `manifest`'s own
+/// `genesis_hash` and rejects a mismatch (ADR-0038, "Decided: DB
+/// Init").
+fn init_genesis(store: &mut RedbStateStore, manifest: &GenesisManifest) -> NodeResult<()> {
+    let marker_key = genesis_marker_key()?;
+    let genesis_hash = manifest.genesis_hash()?;
+
+    match store.get(&marker_key)? {
+        None => {
+            let mut writes = manifest.genesis_write_set()?;
+            writes.push(Write {
+                state_key: marker_key,
+                value: genesis_hash.to_vec(),
+            });
+            store.commit(&writes)?;
+            Ok(())
+        }
+        Some(stored) if stored == genesis_hash.to_vec() => Ok(()),
+        Some(_) => Err(NodeError::from(crate::config::ConfigError(
+            "--data-dir was initialized from a different genesis file (genesis_hash mismatch)"
+                .to_string(),
+        ))),
+    }
 }
 
 fn spawn_listener(
@@ -205,7 +257,7 @@ fn spawn_listener(
 }
 
 fn spawn_dialer(
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
     raw_tx: Sender<(u64, P2PMessageEnvelopeV1)>,
     event_tx: Sender<NodeEvent>,
     counter: Arc<AtomicU64>,
@@ -245,7 +297,7 @@ fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) ->
                 ctx.links.insert(conn_id, link);
                 let mut handshake = HandshakeState::new(
                     ctx.handshake_params.clone(),
-                    network_keypair(ctx.own_index),
+                    keypair_from_seed(KeyRole::ValidatorNetwork, ctx.network_key_seed),
                 );
                 if let Ok(HandshakeAction::Send(hello)) = handshake.apply(HandshakeEvent::SendHello)
                 {
@@ -255,26 +307,32 @@ fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) ->
             }
             NodeEvent::PeerMessage { conn_id, envelope } => {
                 handle_peer_message(ctx, conn_id, envelope)?;
-                if !ctx.round_started && ctx.conn_by_validator.len() >= required_peers {
+                if !ctx.round_started && ctx.established.len() >= required_peers {
                     ctx.round_started = true;
                     let action = ctx.engine.begin_round()?;
                     act_on(ctx, action)?;
                 }
             }
             NodeEvent::ProposeTimeout { height, round } => {
-                if is_current(ctx, height, round) {
+                if is_current(ctx, height, round)
+                    && ctx.engine.state().step == hn_consensus::ConsensusStep::Propose
+                {
                     let action = ctx.engine.propose_timeout()?;
                     act_on(ctx, action)?;
                 }
             }
             NodeEvent::PrevoteTimeout { height, round } => {
-                if is_current(ctx, height, round) {
+                if is_current(ctx, height, round)
+                    && ctx.engine.state().step == hn_consensus::ConsensusStep::Prevote
+                {
                     let action = ctx.engine.prevote_timeout()?;
                     act_on(ctx, action)?;
                 }
             }
             NodeEvent::PrecommitTimeout { height, round } => {
-                if is_current(ctx, height, round) {
+                if is_current(ctx, height, round)
+                    && ctx.engine.state().step == hn_consensus::ConsensusStep::Precommit
+                {
                     let action = ctx.engine.precommit_timeout()?;
                     act_on(ctx, action)?;
                 }
@@ -295,29 +353,24 @@ fn is_current(ctx: &Ctx, height: u64, round: u64) -> bool {
     ctx.engine.state().height.get() == height && ctx.engine.state().round.get() == round
 }
 
-/// Whether `qc` still has a defined transition from the engine's
-/// *current* step. Two independent, honest nodes each aggregating
-/// their own [`QuorumCertificate`] from the same gossiped votes (see
-/// ADR-0037, "Decided: Vote Aggregation" — no designated aggregator)
-/// routinely produces more than one certificate for the same round: a
-/// node that already consumed its own self-built prevote quorum and
-/// moved on to `Precommit` will still receive the peer's broadcast
-/// prevote quorum a moment later. `hn_consensus::ConsensusState::apply`
-/// is deliberately a closed, total function that rejects rather than
-/// silently ignores an event with no transition (ADR-0034's own
-/// design), so this driving loop must filter out an already-redundant
-/// certificate itself before ever calling
-/// `ConsensusEngine::handle_quorum_certificate` — the same "stale
-/// event, not an error" handling already applied to timeout events.
-fn expects_qc(ctx: &Ctx, qc: &QuorumCertificate) -> bool {
-    if !is_current(ctx, qc.height.get(), qc.round.get()) {
-        return false;
-    }
-    match qc.certificate_type {
-        VoteType::Prevote => ctx.engine.state().step == hn_consensus::ConsensusStep::Prevote,
-        VoteType::Precommit => ctx.engine.state().step == hn_consensus::ConsensusStep::Precommit,
-    }
-}
+// Every timeout branch above checks *both* `is_current` (height/round)
+// *and* the specific step the timeout is for -- (height, round) alone
+// is not enough: entering `Propose` always schedules a
+// `ProposeTimeout`, but a node that is also this round's proposer
+// self-proposes and casts a `Prevote` synchronously, in the same call,
+// before that timer ever fires -- leaving a stale `ProposeTimeout` for
+// the *same* (height, round) pending while the engine has already
+// moved on to `Prevote`. Found by running a genuinely slow round (a
+// single node with no peers, which can never reach quorum and so never
+// advances height/round quickly): `is_current` alone let the stale
+// timer through and `ConsensusEngine::propose_timeout` correctly
+// rejected it with `UnexpectedEvent { step: Prevote }` -- a real,
+// closed-state-machine safety net catching a genuine driving-loop bug,
+// not a false alarm. Multi-node happy-path runs hid this because a
+// real quorum typically arrives well within one timeout window, so by
+// the time a stale timer fires the round has already advanced past it
+// and the weaker `is_current`-only check already rejected it, just for
+// the wrong reason.
 
 fn send_hello(ctx: &Ctx, conn_id: u64, hello: &Hello) -> NodeResult<()> {
     let Some(link) = ctx.links.get(&conn_id) else {
@@ -333,12 +386,6 @@ fn send_hello(ctx: &Ctx, conn_id: u64, hello: &Hello) -> NodeResult<()> {
     )?;
     let _ = link.send(envelope);
     Ok(())
-}
-
-fn resolve_validator_index(ctx: &Ctx, node_key: &KeyDescriptor) -> Option<u8> {
-    let bytes = node_key.public_key_bytes();
-    (0..ctx.records.len() as u8)
-        .find(|&index| network_keypair(index).key_descriptor().public_key_bytes() == bytes)
 }
 
 fn handle_peer_message(
@@ -358,13 +405,20 @@ fn handle_peer_message(
         }
         let hello = Hello::decode(&envelope.payload)?;
         match handshake.apply(HandshakeEvent::ReceiveHello(hello))? {
-            HandshakeAction::Accepted { peer_hello, .. } => {
-                if let Some(peer_index) = resolve_validator_index(ctx, &peer_hello.node_key) {
-                    ctx.conn_by_validator.insert(peer_index, conn_id);
-                }
+            HandshakeAction::Accepted { .. } => {
+                // Admission control only -- see ADR-0038, "Decided:
+                // Connection-Layer Simplification": consensus messages
+                // authenticate themselves independently of which
+                // connection delivered them, so this connection layer
+                // does not need (and no longer tries) to resolve which
+                // validator is on the other end.
+                ctx.established.insert(conn_id);
             }
             HandshakeAction::Rejected(_) | HandshakeAction::Send(_) => {}
         }
+        return Ok(());
+    }
+    if !ctx.established.contains(&conn_id) {
         return Ok(());
     }
 
@@ -419,6 +473,30 @@ fn handle_peer_message(
     Ok(())
 }
 
+/// Whether `qc` still has a defined transition from the engine's
+/// *current* step. Two independent, honest nodes each aggregating
+/// their own [`QuorumCertificate`] from the same gossiped votes (see
+/// ADR-0037, "Decided: Vote Aggregation" — no designated aggregator)
+/// routinely produces more than one certificate for the same round: a
+/// node that already consumed its own self-built prevote quorum and
+/// moved on to `Precommit` will still receive the peer's broadcast
+/// prevote quorum a moment later. `hn_consensus::ConsensusState::apply`
+/// is deliberately a closed, total function that rejects rather than
+/// silently ignores an event with no transition (ADR-0034's own
+/// design), so this driving loop must filter out an already-redundant
+/// certificate itself before ever calling
+/// `ConsensusEngine::handle_quorum_certificate` — the same "stale
+/// event, not an error" handling already applied to timeout events.
+fn expects_qc(ctx: &Ctx, qc: &QuorumCertificate) -> bool {
+    if !is_current(ctx, qc.height.get(), qc.round.get()) {
+        return false;
+    }
+    match qc.certificate_type {
+        VoteType::Prevote => ctx.engine.state().step == hn_consensus::ConsensusStep::Prevote,
+        VoteType::Precommit => ctx.engine.state().step == hn_consensus::ConsensusStep::Precommit,
+    }
+}
+
 fn broadcast(
     ctx: &Ctx,
     channel: Channel,
@@ -433,7 +511,7 @@ fn broadcast(
         message_type,
         payload,
     )?;
-    for conn_id in ctx.conn_by_validator.values() {
+    for conn_id in &ctx.established {
         if let Some(link) = ctx.links.get(conn_id) {
             let _ = link.send(envelope.clone());
         }
@@ -571,7 +649,7 @@ fn cast_vote(ctx: &mut Ctx, vote_type: VoteType, target: ConsensusTarget) -> Nod
     Ok(())
 }
 
-fn synthetic_block_hash(height: BlockHeight, round: Round, proposer: [u8; 32]) -> [u8; 32] {
+fn synthetic_block_hash(height: BlockHeight, round: Round, proposer: Digest) -> Digest {
     // Not ADR-0008's real block hash (which hashes a block's actual
     // transactions/header) -- this pass's blocks always carry zero
     // transactions (proving liveness/view change is the goal, not state

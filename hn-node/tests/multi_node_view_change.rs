@@ -1,15 +1,19 @@
-//! ADR-0037's own real multi-process proof: three of four validators,
-//! spawned as three separate real OS processes running the compiled
-//! `hn-node` binary, connected over real `127.0.0.1` TCP sockets --
-//! consensus voting and quorum happen entirely through the network
-//! stack, never an in-process function call between "nodes."
+//! ADR-0037/ADR-0038's own real multi-process proof: three of four
+//! validators, spawned as three separate real OS processes running the
+//! compiled `hn-node` binary, booting from a real genesis file over
+//! real `127.0.0.1` TCP sockets -- consensus voting and quorum happen
+//! entirely through the network stack, never an in-process function
+//! call between "nodes."
 //!
 //! Validator index 0 (this cluster's `round_proposer` at height 0,
 //! round 0) is deliberately never started, simulating a dead/
 //! unreachable leader. The three running validators hold 3 of 4 equal
 //! shares of voting power (75%), comfortably above the `2f+1`
 //! threshold, so this is a genuine partial-participation BFT case, not
-//! a 3-of-3 test wearing a 4-validator label.
+//! a 3-of-3 test wearing a 4-validator label. Each running node still
+//! lists the dead validator's address in its own `--peer` list (a real
+//! deployment would not know in advance who is reachable) -- its
+//! dialer thread simply never connects, harmlessly.
 //!
 //! Proves: round 0 never finalizes (the dead proposer's own round
 //! produces nothing); every running process eventually finalizes height
@@ -20,10 +24,13 @@
 //! recovered round rather than stalling right after one view change.
 
 use std::io::{BufRead, BufReader};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use hn_crypto::{Ed25519KeyPair, KeyRole, account_address_body};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -31,7 +38,85 @@ const VALIDATOR_COUNT: u8 = 4;
 const RUNNING_VALIDATORS: [u8; 3] = [1, 2, 3];
 const BASE_PORT: u16 = 31_700;
 const BASE_TIMEOUT_MS: u64 = 200;
+const NETWORK_ID: u16 = 1;
 const WAIT: Duration = Duration::from_secs(25);
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn listen_addr(index: u8) -> SocketAddr {
+    SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        BASE_PORT + u16::from(index),
+    )
+}
+
+/// Consensus key seed for devnet validator `index` -- matches
+/// `hn-node/examples/print_devnet_genesis.rs`'s own convention exactly,
+/// so a node configured with this seed resolves to `validator_id =
+/// [index; 32]` in the genesis file this test also builds.
+fn consensus_key_seed(index: u8) -> [u8; 32] {
+    [index; 32]
+}
+
+/// This node's own network/handshake key seed -- distinct from
+/// `consensus_key_seed`'s own range (`0x80..` never collides with a
+/// `VALIDATOR_COUNT`-sized `0..` range).
+fn network_key_seed(index: u8) -> [u8; 32] {
+    [0x80 + index; 32]
+}
+
+/// Builds the same devnet genesis shape
+/// `hn-node/examples/print_devnet_genesis.rs` produces (duplicated
+/// rather than shared -- a test fixture, not library code) and writes
+/// it to `path`.
+fn write_devnet_genesis(path: &Path) -> TestResult<()> {
+    let validators: Vec<serde_json::Value> = (0..VALIDATOR_COUNT)
+        .map(|index| {
+            let keypair =
+                Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, consensus_key_seed(index));
+            let descriptor = keypair.key_descriptor();
+            serde_json::json!({
+                "validator_id": hex(&[index; 32]),
+                "consensus_key_algorithm_id": descriptor.algorithm_id(),
+                "consensus_key_public_key": hex(&descriptor.public_key_bytes()),
+                "bonded_stake": (hn_state::MINIMUM_VALIDATOR_BOND * 10).to_string(),
+            })
+        })
+        .collect();
+
+    let allocation = |seed: u8, amount: u128| -> TestResult<serde_json::Value> {
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::AccountSigning, [seed; 32]);
+        let descriptor = keypair.key_descriptor();
+        let address = account_address_body(
+            NETWORK_ID,
+            descriptor.algorithm_id(),
+            &descriptor.public_key_bytes(),
+        )?;
+        Ok(serde_json::json!({
+            "address": hex(&address),
+            "amount": amount.to_string(),
+        }))
+    };
+
+    let genesis = serde_json::json!({
+        "manifest_version": 1,
+        "chain_id": hn_core::ChainId::HNCHAIN.get(),
+        "network_id": NETWORK_ID,
+        "genesis_time": 1_758_758_400_u64,
+        "genesis_message": "hn-node multi_node_view_change test fixture - not for production use",
+        "validators": validators,
+        "allocations": {
+            "reserve": allocation(0xA0, hn_state::RESERVE_ALLOCATION)?,
+            "founder": allocation(0xA1, hn_state::FOUNDER_ALLOCATION)?,
+            "community": allocation(0xA2, hn_state::COMMUNITY_ALLOCATION)?,
+        },
+    });
+
+    std::fs::write(path, serde_json::to_vec_pretty(&genesis)?)?;
+    Ok(())
+}
 
 struct NodeProcess {
     child: Child,
@@ -45,21 +130,40 @@ impl Drop for NodeProcess {
     }
 }
 
-fn spawn_node(validator_index: u8, data_dir: &Path) -> TestResult<NodeProcess> {
+fn spawn_node(
+    validator_index: u8,
+    genesis_path: &Path,
+    data_dir: &Path,
+) -> TestResult<NodeProcess> {
+    let genesis_path = genesis_path.to_str().ok_or("non-UTF-8 genesis path")?;
     let data_dir = data_dir.to_str().ok_or("non-UTF-8 data dir path")?;
+    let listen = listen_addr(validator_index).to_string();
+    let peers: Vec<String> = (0..VALIDATOR_COUNT)
+        .filter(|&index| index != validator_index)
+        .map(|index| listen_addr(index).to_string())
+        .collect();
+
+    let mut args = vec![
+        "--genesis".to_string(),
+        genesis_path.to_string(),
+        "--data-dir".to_string(),
+        data_dir.to_string(),
+        "--listen".to_string(),
+        listen,
+        "--consensus-key-seed".to_string(),
+        hex(&consensus_key_seed(validator_index)),
+        "--network-key-seed".to_string(),
+        hex(&network_key_seed(validator_index)),
+        "--base-timeout-ms".to_string(),
+        BASE_TIMEOUT_MS.to_string(),
+    ];
+    for peer in peers {
+        args.push("--peer".to_string());
+        args.push(peer);
+    }
+
     let mut child = Command::new(env!("CARGO_BIN_EXE_hn-node"))
-        .args([
-            "--validator-index",
-            &validator_index.to_string(),
-            "--validator-count",
-            &VALIDATOR_COUNT.to_string(),
-            "--base-port",
-            &BASE_PORT.to_string(),
-            "--data-dir",
-            data_dir,
-            "--base-timeout-ms",
-            &BASE_TIMEOUT_MS.to_string(),
-        ])
+        .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -132,11 +236,14 @@ fn three_of_four_validators_survive_a_dead_round_zero_proposer() -> TestResult {
         std::env::temp_dir().join(format!("hn-node-view-change-test-{}", std::process::id()));
     std::fs::create_dir_all(&data_root)?;
 
+    let genesis_path = data_root.join("genesis.json");
+    write_devnet_genesis(&genesis_path)?;
+
     let mut nodes = Vec::new();
     for validator_index in RUNNING_VALIDATORS {
         let data_dir = data_root.join(format!("validator-{validator_index}"));
         std::fs::create_dir_all(&data_dir)?;
-        nodes.push(spawn_node(validator_index, &data_dir)?);
+        nodes.push(spawn_node(validator_index, &genesis_path, &data_dir)?);
     }
 
     // Height 0, round 1: the real view change. All three running

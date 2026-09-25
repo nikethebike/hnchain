@@ -238,9 +238,11 @@ dependencies = [
  "hn-consensus",
  "hn-core",
  "hn-crypto",
+ "hn-hncs",
  "hn-network",
  "hn-state",
  "hn-storage",
+ "serde_json",
 ]
 
 [[package]]

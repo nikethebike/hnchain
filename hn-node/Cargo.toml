@@ -12,9 +12,11 @@ description = "HNChain node composition layer."
 hn-consensus = { path = "../hn-consensus" }
 hn-core = { path = "../hn-core" }
 hn-crypto = { path = "../hn-crypto" }
+hn-hncs = { path = "../hn-hncs" }
 hn-network = { path = "../hn-network" }
 hn-state = { path = "../hn-state" }
 hn-storage = { path = "../hn-storage" }
+serde_json = "1.0"
 
 [lints]
 workspace = true

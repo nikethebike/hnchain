@@ -1,10 +1,19 @@
 # HNChain Core Specification: Genesis
 
-Status: Draft
+Status: Accepted
 
-Version: 0.1.0
+Version: 0.2.0
 
-Date: 2026-07-18
+Date: 2026-09-25
+
+`docs/adr/ADR-0038-genesis-format-and-node-daemon-bootstrap.md` resolves
+this document's format-level Open Architecture Decisions (§9, below) and
+is the concrete, implemented `GenesisManifest` schema, hash profile, DB
+init, and loading mechanism — this document keeps its own conceptual
+framing and design goals, updated to point at that ADR rather than
+duplicate it. Real genesis validator selection and real custody for the
+three HNCOIN allocation accounts remain open — see ADR-0038's own
+"Explicitly Not Resolved" and `docs/specs/core/genesis-security.md`.
 
 ## 1. Scope
 
@@ -184,11 +193,32 @@ must be documented in the genesis manifest.
 
 ## 9. Open Architecture Decisions
 
-- final genesis message
-- final genesis manifest fields
-- final genesis timestamp
-- final chain ID format
-- final document commitment procedure
-- final genesis state format
-- final genesis hash profile
-- final initial validator set commitment
+- final genesis message — **resolved for the format** (ADR-0038: a
+  bounded UTF-8 string field, `GENESIS_MESSAGE_MAX_LEN = 512` bytes);
+  the actual real-mainnet message text remains unpicked, since no real
+  mainnet genesis exists yet
+- final genesis manifest fields — **resolved, ADR-0038**:
+  `GenesisManifest` (a deliberate merge of this document's own
+  conceptual `GenesisHeader`/`GenesisManifest` into one concrete type —
+  see ADR-0038's own "Decided: `GenesisManifest` Schema" for why)
+- final genesis timestamp — **resolved for the format** (a plain `u64`
+  field, `genesis_time`); the real value is unpicked for the same
+  reason as the message text, above
+- final chain ID format — **resolved, ADR-0038**: `u8`,
+  `hn_core::ChainId` (already the real, assigned `HNCHAIN = 1` lineage
+  value, not a placeholder)
+- final document commitment procedure — **still open**, deliberately
+  not attempted by ADR-0038 (§6, above, lists every open sub-question;
+  `GenesisManifest` carries no document-commitment fields at all yet,
+  not placeholder ones)
+- final genesis state format — **resolved, ADR-0038**: genesis's
+  write-set (validator records, allocation balances) computed through
+  the existing, unmodified state-tree machinery
+  (`hn_state::leaf_for_write`/`compute_state_root`)
+- final genesis hash profile — **resolved, ADR-0038**:
+  `HASH_PROFILE_0x0001("hnchain.genesis.v1", HNCS(GenesisManifest))`
+- final initial validator set commitment — **resolved, ADR-0038**: the
+  initial validator set is part of `GenesisManifest` itself (a bounded
+  list of `GenesisValidator` entries), committed to via the same
+  `genesis_hash` covering the whole manifest — no separate commitment
+  scheme was needed

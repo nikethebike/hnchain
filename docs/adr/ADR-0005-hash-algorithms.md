@@ -26,6 +26,7 @@ Referenced By:
 - ADR-0015: Slashing And Accountability
 - ADR-0025: Governance Model
 - ADR-0036: Basic P2P Networking
+- ADR-0038: Genesis Format And Node Daemon Bootstrap
 
 ## Context
 
@@ -145,6 +146,8 @@ Initial conceptual domain tags:
 - `hnchain.governance.proposal.v1`
 - `hnchain.network.peerid.v1`
 - `hnchain.network.hello.v1`
+- `hnchain.genesis.v1`
+- `hnchain.node.genesismarker.v1`
 
 `hnchain.vote.signing.v1` (ADR-0012), `hnchain.consensus.root.v1` and
 `hnchain.validator.record.v1` (ADR-0010), and `hnchain.evidence.v1`
@@ -172,6 +175,15 @@ addresses differ here), the latter is the handshake `Hello` message's
 own signing-payload domain tag, mirroring
 `hnchain.vote.signing.v1`/`hnchain.transaction.signing.v1`'s own
 signed-payload-then-signature shape.
+
+`hnchain.genesis.v1` (ADR-0038) is `GenesisManifest`'s own
+`genesis_hash` domain tag. `hnchain.node.genesismarker.v1` (also
+ADR-0038) is deliberately *not* a consensus-visible protocol digest —
+it is `hn-node`'s own local, out-of-band sentinel state key (an empty-
+payload digest used purely as a fixed lookup key, not a commitment to
+any content) for checking on startup that an existing database was
+initialized from the same genesis file currently configured; it never
+appears in a real state root or any wire message.
 
 `hnchain.list.node.v1` and `hnchain.list.empty.v1` are added by
 ADR-0008 ("Ordered List Commitment"): the internal-node and

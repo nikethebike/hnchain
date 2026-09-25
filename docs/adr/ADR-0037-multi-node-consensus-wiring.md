@@ -21,6 +21,15 @@ Depends On:
 
 Supersedes: None
 
+Referenced By:
+
+- ADR-0038: Genesis Format And Node Daemon Bootstrap (replaces this
+  ADR's own `--validator-index`/`--validator-count`/`--base-port`
+  devnet arithmetic with real genesis-driven identity and an explicit
+  peer/config flag set; also drops the `resolve_validator_index`/
+  `conn_by_validator` connection-layer bookkeeping this ADR built,
+  found not to be load-bearing for correctness)
+
 ## Context
 
 `hn-consensus` (ADR-0034/ADR-0035) is a real, `hn-state`-wired Tendermint-style
@@ -174,6 +183,20 @@ round already advanced or the height already finalized by the time the
 timer fired) — the same "stale event, not an error" handling ADR-0034's own
 event model already expects callers to do, made concrete for real wall-clock
 timers instead of a test calling the transition method directly.
+
+**Correction (found in ADR-0038's own testing, not caught here):**
+`(height, round)` alone is not a sufficient staleness check — a node
+that is also the current round's proposer self-proposes and casts a
+`Prevote` synchronously, in the same call that entered `Propose`,
+before that stage's own `ProposeTimeout` timer ever fires. The stale
+timer is still for the *same* `(height, round)`, just a step the engine
+has already left, so it must also be checked against the engine's
+*current step*, not only its height/round — see ADR-0038's own
+implementation notes in `hn-node/src/node.rs` for the fix. This pass's
+own multi-node happy-path tests never exercised it: real quorums
+arrived well within one timeout window, so by the time a stale timer
+fired the round had already advanced past it for an unrelated (but
+also correct) reason.
 
 ### Decided: Timeout Duration — Implementation Default, Not ADR-0009's Final Value
 

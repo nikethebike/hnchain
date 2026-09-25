@@ -1,0 +1,47 @@
+{
+  "allocations": {
+    "community": {
+      "address": "c795398010124786792bb48c0ff25e00498b060ca5a85d12caced3ebeaf6c621",
+      "amount": "100000000000000000"
+    },
+    "founder": {
+      "address": "7622339058a508fa3fc380e4f8ee3f813f30b68cf0cb2f56621daa88f44deacb",
+      "amount": "100000000000000000"
+    },
+    "reserve": {
+      "address": "f7ecc11d1d8df458653b77ef8ee4db4f2ee03c49a7eda64915399379049fcec6",
+      "amount": "800000000000000000"
+    }
+  },
+  "chain_id": 1,
+  "genesis_message": "HNChain Devnet Genesis - not for production use",
+  "genesis_time": 1758758400,
+  "manifest_version": 1,
+  "network_id": 1,
+  "validators": [
+    {
+      "bonded_stake": "100000000000000",
+      "consensus_key_algorithm_id": 1,
+      "consensus_key_public_key": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "validator_id": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "bonded_stake": "100000000000000",
+      "consensus_key_algorithm_id": 1,
+      "consensus_key_public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "validator_id": "0101010101010101010101010101010101010101010101010101010101010101"
+    },
+    {
+      "bonded_stake": "100000000000000",
+      "consensus_key_algorithm_id": 1,
+      "consensus_key_public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+      "validator_id": "0202020202020202020202020202020202020202020202020202020202020202"
+    },
+    {
+      "bonded_stake": "100000000000000",
+      "consensus_key_algorithm_id": 1,
+      "consensus_key_public_key": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+      "validator_id": "0303030303030303030303030303030303030303030303030303030303030303"
+    }
+  ]
+}
