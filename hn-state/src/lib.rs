@@ -320,13 +320,35 @@
 //! reached from actual `apply_transaction` output rather than
 //! test-hand-seeded bytes. `apply_block` itself is unchanged and still
 //! usable standalone (no commit) for pure simulation/inspection.
+//!
+//! [`BlockHeader`]/[`BlockBody`] (ADR-0008) assemble every one of those
+//! previously-scattered decisions into concrete types for the first
+//! time — this pass does not decide anything new, it is the first
+//! place `block_hash`, `consensus_root`, `evidence_digest`,
+//! `extra_data_hash`, `protocol_parameters_placeholder_hash`,
+//! `list_merkle_root`/`list_empty_root`, and `hn_core`'s own
+//! `BlockHeight`/`Round`/`Epoch`/`ProtocolEpoch`/`UnixTimeMillis` types
+//! are actually assembled together, rather than existing as
+//! independent, currently-callerless primitives. `BlockBody`'s own
+//! `transactions_root`/`receipts_root`/`evidence_root`/
+//! `extra_data_hash` methods compute the matching `BlockHeader` root
+//! directly from body content; `events_root`/`consensus_root`/
+//! `state_root`/`parent_block_hash`/`proposer` remain values the
+//! caller supplies (external validator-set/state-tree/event/genesis
+//! data this crate has no way to derive from `BlockBody` alone).
+//! `BlockEnvelope` (the `block_version`/`header`/`body`/`justification`
+//! wrapper) and genesis's own mapping into a real header are
+//! deliberately not attempted here — named as still-open, not silently
+//! assumed.
 
 mod access_list;
 mod account;
 mod active_set;
 mod asset_value;
 mod balance_value;
+mod block_body;
 mod block_hash;
+mod block_header;
 mod block_transition;
 mod consensus_root;
 mod envelope_value;
@@ -380,7 +402,12 @@ pub use account::{
 pub use active_set::{active_key, active_set, fetch_validator_record, is_eligible_signer};
 pub use asset_value::{ASSET_VERSION_1, AssetValueV1, MAX_ASSET_HOLDINGS};
 pub use balance_value::{BALANCE_VERSION_1, BalanceValueV1};
+pub use block_body::{
+    BODY_VERSION_1, BlockBody, MAX_EVIDENCE_BLOB_LEN, MAX_EVIDENCE_PER_BLOCK, MAX_RECEIPT_BLOB_LEN,
+    MAX_TRANSACTIONS_PER_BLOCK,
+};
 pub use block_hash::block_hash;
+pub use block_header::{BlockHeader, HEADER_VERSION_1};
 pub use block_transition::{
     AppliedTransaction, BlockApplicationResult, apply_and_commit_block, apply_block,
     apply_transaction,

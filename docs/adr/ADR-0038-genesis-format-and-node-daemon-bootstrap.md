@@ -372,9 +372,11 @@ undecided) key-generation ceremony `genesis-security.md` describes.
   commitment fields at all this pass, not placeholder-`None` ones —
   adding them is real future scope, not a gap silently left in the
   schema.
-- wiring genesis into a real `BlockHeader`/block 0 (blocked on a
-  concrete `BlockHeader` type existing at all, per ADR-0008's own
-  already-recorded dependency on this document)
+- wiring genesis into a real `BlockHeader`/block 0 — `hn_state::
+  BlockHeader` now exists (ADR-0008), so this item's own blocker has
+  changed: not "no type exists," but "nothing yet constructs a real
+  genesis block 0 from `GenesisManifest`," a distinct, still-unstarted
+  integration task
 - non-validating "full node" mode
 - connection retry after an established link drops (ADR-0037's own
   already-recorded gap, unchanged)

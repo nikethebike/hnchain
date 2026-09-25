@@ -7,10 +7,12 @@ use crate::error::StateResult;
 /// `block_hash = HASH_PROFILE_0x0001("hnchain.block.header.v1", HNCS(BlockHeader))`
 ///
 /// `header_bytes` is expected to already be the canonical HNCS encoding
-/// of `BlockHeader`; this crate does not define a concrete
-/// `BlockHeader` schema (several of its fields are not decided yet),
-/// matching how [`crate::value_hash`] treats its own input as
-/// already-canonical bytes rather than defining the schema itself.
+/// of [`crate::BlockHeader`] — this function itself stays independent
+/// of that concrete type, taking already-canonical bytes directly
+/// (matching how [`crate::value_hash`] treats its own input the same
+/// way), but `BlockHeader::block_hash` is the real, typed entry point
+/// most callers want; this function exists underneath it, not as a
+/// second, competing path.
 pub fn block_hash(header_bytes: &[u8]) -> StateResult<Digest> {
     Ok(hash_profile_0x0001(
         "hnchain.block.header.v1",

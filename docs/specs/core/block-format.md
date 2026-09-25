@@ -109,8 +109,11 @@ BlockHeaderV1
 
 All fields are consensus-relevant.
 
-The final HNCS schema is open until the serialization schema registry is
-accepted.
+**Resolved**: the HNCS schema is `hn_state::BlockHeader` (ADR-0008,
+"Decided: `BlockHeader`/`BlockBody` Structs") — field order and types
+exactly as listed above, reusing `hn_core`'s own `BlockHeight`/
+`Round`/`Epoch`/`ProtocolEpoch`/`UnixTimeMillis` types rather than bare
+integers.
 
 ## 5. Header Field Semantics
 
@@ -324,6 +327,14 @@ BlockBodyV1
 The body contains data required to verify header commitments and execute the
 block.
 
+**Resolved**: the HNCS schema is `hn_state::BlockBody` (ADR-0008,
+"Decided: `BlockHeader`/`BlockBody` Structs") — `transactions: Vec
+<TransactionEnvelope>`, `receipts: Vec<ReceiptV1>`, `evidence: Vec
+<Vec<u8>>` (opaque, already-canonical bytes; no `ConsensusEvidence`
+schema decided yet), `extra_data: Vec<u8>`. `BlockBody::
+transactions_root`/`receipts_root`/`evidence_root`/`extra_data_hash`
+compute the matching header commitment directly from body content.
+
 **Decided** (ADR-0008, "Decided: Extra Data Format"): `extra_data` is
 bounded, opaque `bytes`, `<= MAX_EXTRA_DATA_LEN = 256` bytes. It
 carries no separate internal version field of its own — `body_version`
@@ -536,19 +547,20 @@ Test vectors are mandatory before production implementation.
 
 ## 17. Open Decisions
 
-- final block envelope schema
-- final header schema
-- final body schema
+- final block envelope schema (`BlockEnvelopeV1` itself — distinct from
+  header/body below, still open)
+- final header schema — **resolved**, `hn_state::BlockHeader`
+  (ADR-0008, "Decided: `BlockHeader`/`BlockBody` Structs")
+- final body schema — **resolved**, `hn_state::BlockBody` (same)
 - extra data format — **resolved** (§6/§5.16, ADR-0008 "Decided: Extra
   Data Format")
 - genesis mapping — `docs/specs/core/genesis.md` is now Accepted
-  (ADR-0038) for its own `GenesisManifest` format, but mapping genesis
-  into a real `BlockEnvelopeV1`/dedicated genesis envelope still needs
-  a concrete `BlockHeader` type to exist first, which it does not yet
-  (ADR-0008's own "genesis block compatibility rules" item); several
-  header fields are already resolved for genesis specifically —
-  `state_root`, `events_root`, `timestamp`, `protocol_parameters_hash`
-  (ADR-0008/ADR-0038) — narrowing, not closing, this item
+  (ADR-0038) for its own `GenesisManifest` format, and a concrete
+  `BlockHeader`/`BlockBody` type now exists too (ADR-0008), but nothing
+  yet actually constructs a genesis block 0 from `GenesisManifest`
+  using it, and `BlockEnvelopeV1` itself remains unresolved (ADR-0008's
+  own "genesis block compatibility rules" item) — narrowed twice now
+  (this entry and "extra data format," above), not closed
 - receipt schema (`ReceiptV1` core shape decided, ADR-0006 "Receipts" —
   `fee_charged`/`resource_usage`/`emitted_event_references` still open)
 - event schema (not decided — gated on HNVM; `hn-list-merkle-v1` root

@@ -519,9 +519,11 @@ Implemented in [`hn_state::extra_data_hash`]/
 [`hn_state::MAX_EXTRA_DATA_LEN`], independently verified against a
 Python oracle — the same class of standalone, currently-callerless
 primitive `hn_state::block_hash`/`consensus_root`/`evidence_digest`/
-`protocol_parameters_placeholder_hash` already are, decided and coded
-ahead of any real `BlockHeader`/`BlockBody` type existing to consume
-them.
+`protocol_parameters_placeholder_hash` already were at the time this
+paragraph was written, decided and coded ahead of any real
+`BlockHeader`/`BlockBody` type existing to consume them. That type now
+exists (`hn_state::BlockHeader`/`BlockBody`, "Decided: `BlockHeader`/
+`BlockBody` Structs," below) and calls `extra_data_hash` directly.
 
 ### Justification
 
@@ -570,6 +572,79 @@ here, matching how ADR-0006 treats `MAX_TRANSACTION_SIZE`.
 decided separately, in "Extra Data," above — a distinct field with its
 own distinct bound, not folded into this section's two block-wide
 limits.
+
+### Decided: `BlockHeader`/`BlockBody` Structs
+
+`hn_state::BlockHeader`/`BlockBody` now exist as concrete Rust types —
+the first time anywhere in this codebase. This is not a new decision:
+every field's own wire shape was already decided, field by field,
+across this ADR's own passes and ADR-0010/ADR-0012/ADR-0013/ADR-0015/
+ADR-0038; this section records that they are now actually assembled,
+not independently redecided here.
+
+`BlockHeader` fields, in the exact order this ADR's own "Decision"
+section already lists them: `header_version: u16`, `chain_id: u8`,
+`network_id: u16`, `height: hn_core::BlockHeight`, `round:
+hn_core::Round`, `epoch: hn_core::Epoch`, `protocol_epoch:
+hn_core::ProtocolEpoch`, `parent_block_hash: Digest`, `proposer:
+Digest`, `timestamp: hn_core::UnixTimeMillis`, and the eight `Digest`-
+typed roots/hashes ("Transactions Root" through "Extra Data," above).
+Reusing `hn_core`'s own already-built newtypes (`Round`/`Epoch` already
+used identically by `VoteSigningPayloadV1`/`QuorumCertificate`;
+`ProtocolEpoch` built specifically for this field, per its own doc
+comment; `UnixTimeMillis` for `timestamp`, this project's own real
+timestamp type — ADR-0038's `GenesisManifest.genesis_time` predates
+this type's use here and stays a plain `u64` of its own, a distinct,
+already-shipped decision this does not revisit) rather than bare
+integers keeps every field's own meaning and bound where it was already
+decided, not restated or risked drifting.
+
+`BlockHeader::encode`/`decode`/`block_hash` (the last delegating to the
+already-existing `hn_state::block_hash` function) — independently
+verified against a Python oracle for a fully-populated header, not just
+the mechanism-level placeholder-bytes check `block_hash`'s own test
+already had.
+
+`BlockBody` fields, matching this ADR's own "Decision" section's
+`BlockBody` listing: `body_version: u16`, `transactions:
+Vec<TransactionEnvelope>`, `receipts: Vec<ReceiptV1>`, `evidence:
+Vec<Vec<u8>>`, `extra_data: Vec<u8>`. `transactions`/`receipts` are
+hand-rolled `u32 count || elements` sequences (each element itself a
+length-prefixed blob) — not `hn_hncs::write_list`/`read_list`:
+`TransactionEnvelope::decode`/`ReceiptV1::decode` can each fail with a
+domain-specific `StateError`, which those generic helpers'
+`HncsResult`-typed element closures cannot express, the same
+justification `QuorumCertificate.aggregate_proof` already established.
+`evidence` uses `write_list`/`read_list` directly: each entry is
+opaque, already-canonical bytes (no `ConsensusEvidence` schema decided
+yet, ADR-0015, matching `evidence_digest`'s own identical boundary), so
+decoding one can only fail with a plain HNCS framing error, which the
+generic helpers handle natively. New implementation resource bounds,
+not derived, same class of decision as `MAX_TRANSACTION_SIZE`:
+`MAX_TRANSACTIONS_PER_BLOCK = 10000` (this ADR's own already-decided
+value, "Block Size And Transaction Count Limits," above — first Rust
+implementation), `MAX_RECEIPT_BLOB_LEN = 512` bytes (generous headroom
+over `ReceiptV1`'s current fixed 35-byte encoding, so a future,
+still-open `ReceiptV1` growth does not need this wire format to
+change), `MAX_EVIDENCE_PER_BLOCK = 1024`, `MAX_EVIDENCE_BLOB_LEN =
+65536` bytes (evidence *count* is still an open decision, "Block Size
+And Transaction Count Limits," above; these bounds only make `evidence`
+a well-formed bounded list at all, not a policy-grade limit).
+
+`BlockBody::transactions_root`/`receipts_root`/`evidence_root`/
+`extra_data_hash` compute the matching `BlockHeader` root/hash directly
+from body content, tying the two types together — `events_root`/
+`consensus_root`/`state_root`/`parent_block_hash`/`proposer` remain
+values the caller supplies: external validator-set, state-tree, event,
+and genesis/parent data `BlockBody` alone has no way to derive.
+
+**Explicitly not attempted here**: `BlockEnvelope` (the
+`block_version`/`header`/`body`/`justification` wrapper this ADR's own
+"Decision" section also names) and genesis's own mapping into a real
+`BlockHeader`/block 0 (ADR-0038's own "Explicitly Not Resolved," and
+this ADR's own "genesis block compatibility rules" Open Decision,
+below) — both real, separate, still-unstarted integration work, not
+silently assumed to follow automatically from these two types existing.
 
 ## Validation Pipeline
 
@@ -723,9 +798,12 @@ New body sections may be backward-compatible only if:
 
 ## Open Decisions
 
-- final header field registry (sum of the fields below; not a
-  standalone decision)
-- final body section registry (sum of the same)
+- final header field registry — **resolved, assembled as
+  `hn_state::BlockHeader`** ("Decided: `BlockHeader`/`BlockBody`
+  Structs," above; sum of the per-field decisions below — not an
+  independent decision beyond assembling them)
+- final body section registry — **resolved, assembled as
+  `hn_state::BlockBody`** (same section; sum of the same)
 - events root format — **resolved for genesis** (empty_root, "Decided:
   genesis events root," above, since genesis executes zero
   transactions by construction); commitment mechanism for a non-empty
@@ -764,14 +842,19 @@ New body sections may be backward-compatible only if:
   commitment or amendment mechanism; unlike `fee_limit`/`ReceiptV1`,
   there is still no partial structure to decide toward, not just an
   incomplete one
-- genesis block compatibility rules — every header field this pass
-  could resolve for genesis without inventing new protocol content is
-  now resolved (`state_root`/ADR-0038's own `initial_state_root`,
-  `events_root`, `timestamp`, `protocol_parameters_hash` above); this
-  item itself stays open regardless, since it needs a concrete
-  `BlockHeader` type to integrate genesis into in the first place, and
-  none exists in this codebase yet — unaffected by this pass, not
-  narrowed by it beyond what is listed above
+- genesis block compatibility rules — every header field resolvable
+  for genesis without inventing new protocol content already was
+  (`state_root`/ADR-0038's own `initial_state_root`, `events_root`,
+  `timestamp`, `protocol_parameters_hash`), and a concrete
+  `BlockHeader`/`BlockBody` type now exists too ("Decided:
+  `BlockHeader`/`BlockBody` Structs," above); this item still stays
+  open regardless, since nothing yet actually *constructs* a genesis
+  block 0 from `GenesisManifest` using that type — a real, separate,
+  still-unstarted integration task, not blocked on a missing type
+  anymore
+- `BlockEnvelope` (`block_version`/`header`/`body`/`justification`) —
+  not attempted by "Decided: `BlockHeader`/`BlockBody` Structs," above;
+  a distinct, still-open item of its own
 
 ## Related Specifications
 

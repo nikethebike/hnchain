@@ -496,6 +496,20 @@ pub enum StateError {
         /// The `tx_type` byte with no payload schema.
         tx_type: u8,
     },
+    /// A decoded `BlockHeader.header_version` does not match
+    /// [`crate::block_header::HEADER_VERSION_1`], the only shape this
+    /// implementation understands.
+    UnsupportedBlockHeaderVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// A decoded `BlockBody.body_version` does not match
+    /// [`crate::block_body::BODY_VERSION_1`], the only shape this
+    /// implementation understands.
+    UnsupportedBlockBodyVersion {
+        /// The rejected version.
+        value: u16,
+    },
 }
 
 impl From<HashError> for StateError {
@@ -751,6 +765,12 @@ impl core::fmt::Display for StateError {
                 formatter,
                 "tx_type 0x{tx_type:02x} has no decided payload schema yet"
             ),
+            Self::UnsupportedBlockHeaderVersion { value } => {
+                write!(formatter, "unsupported header_version {value}")
+            }
+            Self::UnsupportedBlockBodyVersion { value } => {
+                write!(formatter, "unsupported body_version {value}")
+            }
         }
     }
 }
