@@ -352,6 +352,7 @@ mod permission_value;
 mod proposal_id;
 mod proposal_record;
 mod proposal_vote_record;
+mod protocol_parameters;
 mod receipt;
 mod stake_payload;
 mod state_store;
@@ -428,6 +429,7 @@ pub use permission_value::{
 pub use proposal_id::proposal_id;
 pub use proposal_record::{PROPOSAL_RECORD_VERSION_1, ProposalRecordV1, ProposalStatus};
 pub use proposal_vote_record::{PROPOSAL_VOTE_RECORD_VERSION_1, ProposalVoteRecordV1};
+pub use protocol_parameters::protocol_parameters_placeholder_hash;
 pub use receipt::{RECEIPT_VERSION_1, ReceiptStatus, ReceiptV1};
 pub use stake_payload::{STAKE_PAYLOAD_VERSION_1, StakePayloadV1};
 pub use state_store::{StateCommitter, StateReader, StateWriter, Write};

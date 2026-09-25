@@ -148,6 +148,7 @@ Initial conceptual domain tags:
 - `hnchain.network.hello.v1`
 - `hnchain.genesis.v1`
 - `hnchain.node.genesismarker.v1`
+- `hnchain.protocol.parameters.v1`
 
 `hnchain.vote.signing.v1` (ADR-0012), `hnchain.consensus.root.v1` and
 `hnchain.validator.record.v1` (ADR-0010), and `hnchain.evidence.v1`
@@ -184,6 +185,17 @@ payload digest used purely as a fixed lookup key, not a commitment to
 any content) for checking on startup that an existing database was
 initialized from the same genesis file currently configured; it never
 appears in a real state root or any wire message.
+
+`hnchain.protocol.parameters.v1` (ADR-0008, "Decided: Genesis Protocol
+Parameters Hash (Placeholder)") is `protocol_parameters_hash`'s
+placeholder domain tag — hashed over an empty payload, since no real
+adjustable protocol parameter has been named or given a commitment
+format anywhere in this project yet. Every block before that format
+exists, genesis included, uses this same value; real content, when a
+parameter-commitment format is eventually decided, would need a new
+domain tag of its own rather than reusing this one, the same
+"different content needs its own tag" discipline this whole registry
+already follows.
 
 `hnchain.list.node.v1` and `hnchain.list.empty.v1` are added by
 ADR-0008 ("Ordered List Commitment"): the internal-node and

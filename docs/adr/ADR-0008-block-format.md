@@ -245,6 +245,23 @@ A node must not use local wall-clock time to decide state transition results
 unless the consensus specification explicitly defines the rule and validation
 window.
 
+**Decided: genesis timestamp — no validation window needed.**
+`docs/specs/core/genesis.md`/ADR-0038 already decided
+`genesis_time`'s own semantics independently of this ADR: "a fixed
+protocol timestamp chosen before genesis generation," declared once and
+never checked against wall-clock time or any other block, since genesis
+has no parent to validate drift against in the first place. `BlockHeader
+.timestamp` at genesis is exactly that already-decided `genesis_time`
+value — no separate genesis-specific rule needed, and no validation
+window applies to it at all, by construction, not by exemption. This
+resolves genesis's own concrete need without resolving the *general*
+question this section otherwise still leaves open: what validation
+window applies to an *ordinary* (non-genesis) block's timestamp against
+its parent's remains genuinely blocked on the consensus track
+(`docs/rfc/consensus/*`, still Proposed) — a real drift-tolerance rule
+this ADR has no mechanism to adopt from yet, unrelated to genesis's own
+already-resolved case.
+
 ### Ordered List Commitment (`hn-list-merkle-v1`)
 
 **Decided: a new, dedicated tree profile for ordered lists**, shared by
@@ -365,6 +382,22 @@ Events intended only for local indexing must not be confused with
 consensus-visible events. No event schema is decided yet (ADR-0006,
 "Events") — gated on HNVM.
 
+**Decided: genesis events root.** Genesis does not execute any
+transaction — ADR-0038's own genesis write-set is seeded directly
+(validator records, the three ADR-0024 allocation balances), never
+produced by running anything through an execution pipeline — so
+genesis has exactly zero events, by construction, regardless of what
+the eventual event schema turns out to be. `events_root` at genesis is
+therefore `hn-list-merkle-v1`'s own already-decided `empty_root`
+("Ordered List Commitment," above: `MTH(D[0:0]) = empty_root`, `n =
+0`) — an already-implemented, already-tested value
+([`hn_state::list_empty_root`]), not a new one this decision invents.
+This resolves genesis's own concrete need without resolving the
+*content* question this section otherwise still leaves open: the real
+event schema, and therefore what `events_root` commits to once a block
+actually executes transactions that emit events, remains gated on
+HNVM, exactly as before.
+
 ### Consensus Root
 
 `consensus_root` commits to consensus-specific metadata required to validate
@@ -409,6 +442,27 @@ unaffected by this commitment-mechanism decision.
 block.
 
 This prevents ambiguity during upgrades and parameter transitions.
+
+**Decided: genesis protocol parameters hash (placeholder).** No real,
+named, adjustable protocol parameter — let alone a commitment format
+for one — exists anywhere in this project yet (this section's own
+"Open Decisions" entry: "no adjustable parameter has been named
+anywhere yet"). Rather than leave the field with no defined value at
+all, or invent an ad hoc stand-in, `protocol_parameters_hash` at
+genesis (and at every block before a real commitment format exists) is
+`HASH_PROFILE_0x0001("hnchain.protocol.parameters.v1", <empty bytes>)`
+— a hash over nothing, reserved for real content later
+([`hn_state::protocol_parameters_placeholder_hash`]), the same
+"reserve the slot, name the real blocker" pattern already used
+elsewhere in this codebase (for example `TxType::ContractDeploy`/
+`ContractCall`, reserved pending HNVM) rather than leaving the field
+undefined until real content exists. This resolves the field's own
+concrete genesis-time value without resolving the *format* question
+this section otherwise still leaves open: what a real
+`protocol_parameters_hash` commits to, and how, remains genuinely
+blocked on a real adjustable parameter and a commitment format for it
+being decided — this placeholder is explicitly not a step toward
+either, just a well-defined value to use until they exist.
 
 ### Extra Data
 
@@ -615,35 +669,47 @@ New body sections may be backward-compatible only if:
 - final header field registry (sum of the fields below; not a
   standalone decision)
 - final body section registry (sum of the same)
-- events root format (commitment mechanism — `hn-list-merkle-v1` — is
-  decided; content stays open, gated on an event schema, itself gated
-  on HNVM)
+- events root format — **resolved for genesis** (empty_root, "Decided:
+  genesis events root," above, since genesis executes zero
+  transactions by construction); commitment mechanism for a non-empty
+  case — `hn-list-merkle-v1` — is also decided; real *content* stays
+  open, gated on an event schema, itself gated on HNVM
 - consensus root format (decided above — ADR-0010, "Validator Set
   Commitment": the active validator set's `validator_set_commitment`)
 - evidence root format (decided above — ADR-0015, "Versioned
   Evidence"; slashing amounts remain open there, unaffected)
 - finality justification format (decided above — ADR-0013, "Quorum
   Verification": a single `precommit` `QuorumCertificate`)
-- timestamp validation window — still blocked on the consensus track
-  reaching Accepted (`docs/rfc/consensus/*`, still Proposed) —
-  distinct from the other three items above: no existing conceptual
-  structure anywhere gave this one a concrete mechanism to adopt yet
+- timestamp validation window — **resolved for genesis** (no window
+  applies at all, "Decided: genesis timestamp," above, since genesis
+  has no parent to validate drift against); the *general* window for
+  an ordinary block's timestamp against its parent remains blocked on
+  the consensus track reaching Accepted (`docs/rfc/consensus/*`, still
+  Proposed) — no existing conceptual structure anywhere gave that one
+  a concrete mechanism to adopt yet
 - epoch transition rules (mechanism decided — ADR-0010, "Epoch
   Boundaries": height-aligned, one full epoch of lead time; the
   consensus-protocol `epoch` field's exact length is not, same as
   before — distinct from `protocol_epoch`, already decided)
-- protocol parameter commitment format — still blocked: ADR-0025
-  (Governance Model) decides on-chain signaling votes only, with no
-  automatic protocol effect ("Decided: Signaling Only"), not a
-  parameter-commitment or amendment mechanism; unlike
-  `fee_limit`/`ReceiptV1`, there is currently no partial structure to
-  decide (no adjustable parameter has been named anywhere yet), not
-  just an incomplete one
-- genesis block compatibility rules — `docs/specs/core/genesis.md` is
-  now Accepted (ADR-0038) for its own `GenesisManifest` format and
-  loading mechanism, but ADR-0038 explicitly does not integrate genesis
-  into a real `BlockHeader`/block 0 (no concrete `BlockHeader` type
-  exists in this codebase yet); this item stays open until one does
+- protocol parameter commitment format — **resolved for genesis, as an
+  explicit placeholder** (`hash of the empty byte string`, "Decided:
+  genesis protocol parameters hash (placeholder)," above, since no
+  adjustable parameter has been named anywhere yet); the *real*
+  commitment format, once a real adjustable parameter and a mechanism
+  for it both exist, remains genuinely blocked — ADR-0025 (Governance
+  Model) decides on-chain signaling votes only, with no automatic
+  protocol effect ("Decided: Signaling Only"), not a parameter-
+  commitment or amendment mechanism; unlike `fee_limit`/`ReceiptV1`,
+  there is still no partial structure to decide toward, not just an
+  incomplete one
+- genesis block compatibility rules — every header field this pass
+  could resolve for genesis without inventing new protocol content is
+  now resolved (`state_root`/ADR-0038's own `initial_state_root`,
+  `events_root`, `timestamp`, `protocol_parameters_hash` above); this
+  item itself stays open regardless, since it needs a concrete
+  `BlockHeader` type to integrate genesis into in the first place, and
+  none exists in this codebase yet — unaffected by this pass, not
+  narrowed by it beyond what is listed above
 
 ## Related Specifications
 
