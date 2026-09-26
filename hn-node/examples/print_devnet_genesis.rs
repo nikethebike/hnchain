@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "chain_id": hn_core::ChainId::HNCHAIN.get(),
         "network_id": NETWORK_ID,
         "genesis_time": 1_758_758_400_u64,
-        "genesis_message": "HNChain Devnet Genesis - not for production use",
+        "genesis_message": "18/Oct/2013 \u{2014} an idea took root. Today, High Network's HNChain grows toward greatness",
         "validators": validators,
         "allocations": {
             "reserve": allocation_json(0xA0, hn_state::RESERVE_ALLOCATION)?,

@@ -2,7 +2,7 @@
 
 Status: Accepted
 
-Version: 0.3.0
+Version: 0.4.0
 
 Date: 2026-09-26
 
@@ -18,7 +18,8 @@ three HNCOIN allocation accounts remain open — see ADR-0038's own
 connects this document's own §6 ("Document Commitments") to
 `BlockBody.extra_data`'s already-decided mechanism (ADR-0008) — the
 document-commitment *procedure* itself remains exactly as open as
-before.
+before. §4's final genesis message text is now decided (below) and is
+already embedded in `hn-node/genesis/devnet.json`.
 
 ## 1. Scope
 
@@ -100,7 +101,7 @@ The message is included in the canonical genesis commitment.
 
 The message should be neutral, durable, and non-promotional.
 
-Candidate messages:
+Candidate messages (superseded — see "Decided," below):
 
 ```text
 HNChain Genesis - An open protocol built for long-term trust, transparency and interoperability.
@@ -113,6 +114,18 @@ Protocol over platform. Specification before implementation.
 ```text
 HNChain Genesis Block - Version 1.0
 ```
+
+**Decided**: the final genesis message is
+
+```text
+18/Oct/2013 — an idea took root. Today, High Network's HNChain grows toward greatness
+```
+
+This exact string is `GenesisManifest.genesis_message` (`hn-node/genesis/devnet.json`
+and every genesis file derived from it) — 87 bytes UTF-8, well within the 512-byte
+bound. It is fixed, permanent, and covered by `genesis_hash` like every other
+manifest field; it must not change once a genesis file is published, and no
+future pass should overwrite it with a different message.
 
 The final message must be selected before genesis generation and must not be
 changed after the genesis block is published.
@@ -216,10 +229,12 @@ must be documented in the genesis manifest.
 
 ## 9. Open Architecture Decisions
 
-- final genesis message — **resolved for the format** (ADR-0038: a
-  bounded UTF-8 string field, `GENESIS_MESSAGE_MAX_LEN = 512` bytes);
-  the actual real-mainnet message text remains unpicked, since no real
-  mainnet genesis exists yet
+- final genesis message — **fully resolved**: format decided by
+  ADR-0038 (a bounded UTF-8 string field, `GENESIS_MESSAGE_MAX_LEN =
+  512` bytes), and the actual text is now decided too (§4, above:
+  "18/Oct/2013 — an idea took root. Today, High Network's HNChain
+  grows toward greatness") — carried by the current devnet genesis and
+  meant to carry forward unchanged into any future real genesis
 - final genesis manifest fields — **resolved, ADR-0038**:
   `GenesisManifest` (a deliberate merge of this document's own
   conceptual `GenesisHeader`/`GenesisManifest` into one concrete type —
