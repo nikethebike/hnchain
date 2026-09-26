@@ -12,9 +12,9 @@ use hn_hncs::{
 };
 use hn_state::{
     AccountSection, COMMUNITY_ALLOCATION, EmptyHashTable, FOUNDER_ALLOCATION, Leaf,
-    MINIMUM_VALIDATOR_BOND, RESERVE_ALLOCATION, StateError, ValidatorRecordV1, ValidatorSection,
-    ValidatorStatus, Write, account_section_state_key, compute_state_root, leaf_for_write,
-    validator_section_state_key,
+    MAX_EXTRA_DATA_LEN, MINIMUM_VALIDATOR_BOND, RESERVE_ALLOCATION, StateError, ValidatorRecordV1,
+    ValidatorSection, ValidatorStatus, Write, account_section_state_key, compute_state_root,
+    extra_data_hash, leaf_for_write, validator_section_state_key,
 };
 use serde_json::Value;
 
@@ -97,6 +97,16 @@ pub struct GenesisManifest {
     pub validators: Vec<GenesisValidator>,
     /// The three fixed HNCOIN allocation accounts.
     pub allocations: GenesisAllocations,
+    /// Bounded, opaque, explicitly-specified-only extra data
+    /// (ADR-0041, "Genesis Document Commitments Via `extra_data`") —
+    /// the same `hn_state::MAX_EXTRA_DATA_LEN`/`extra_data_hash`
+    /// mechanism ADR-0008 already decided for `BlockBody.extra_data`,
+    /// reused directly rather than a second, genesis-specific
+    /// document-commitment scheme. Empty (the default when the JSON
+    /// field is absent) until a real document-commitment procedure is
+    /// decided (genesis.md §6, still open) — absence here means
+    /// "explicitly nothing committed yet," not a hidden default.
+    pub extra_data: Vec<u8>,
 }
 
 /// Errors loading, parsing, or validating a genesis file (ADR-0038).
@@ -143,6 +153,8 @@ pub enum GenesisError {
     DuplicateAddress,
     /// `genesis_message` exceeds [`GENESIS_MESSAGE_MAX_LEN`].
     GenesisMessageTooLong(usize),
+    /// `extra_data` exceeds [`hn_state::MAX_EXTRA_DATA_LEN`].
+    ExtraDataTooLong(usize),
     /// Canonical HNCS encoding failed while computing `genesis_hash`.
     Encoding(HncsError),
     /// Hashing `genesis_hash` itself failed (domain-tag validation).
@@ -189,6 +201,12 @@ impl fmt::Display for GenesisError {
                 write!(
                     formatter,
                     "genesis_message length {length} exceeds the limit"
+                )
+            }
+            Self::ExtraDataTooLong(length) => {
+                write!(
+                    formatter,
+                    "extra_data length {length} exceeds MAX_EXTRA_DATA_LEN"
                 )
             }
             Self::Encoding(error) => write!(formatter, "genesis encoding error: {error}"),
@@ -256,6 +274,19 @@ impl GenesisManifest {
             community: parse_account(allocations_value, "community")?,
         };
 
+        // Optional -- absent means "explicitly nothing committed yet"
+        // (ADR-0041), not a required field every genesis file must
+        // spell out just to say so.
+        let extra_data = match value.get("extra_data") {
+            Some(field) => {
+                let text = field
+                    .as_str()
+                    .ok_or(GenesisError::InvalidField("extra_data"))?;
+                hex::decode(text).ok_or(GenesisError::InvalidField("extra_data"))?
+            }
+            None => Vec::new(),
+        };
+
         Ok(Self {
             manifest_version: GENESIS_MANIFEST_VERSION_1,
             chain_id,
@@ -264,6 +295,7 @@ impl GenesisManifest {
             genesis_message,
             validators,
             allocations,
+            extra_data,
         })
     }
 
@@ -272,6 +304,9 @@ impl GenesisManifest {
             return Err(GenesisError::GenesisMessageTooLong(
                 self.genesis_message.len(),
             ));
+        }
+        if self.extra_data.len() > MAX_EXTRA_DATA_LEN {
+            return Err(GenesisError::ExtraDataTooLong(self.extra_data.len()));
         }
         if ChainId::new(self.chain_id).is_err() {
             return Err(GenesisError::ReservedChainId);
@@ -359,6 +394,7 @@ impl GenesisManifest {
         write_account(&mut out, &self.allocations.reserve)?;
         write_account(&mut out, &self.allocations.founder)?;
         write_account(&mut out, &self.allocations.community)?;
+        write_bytes(&mut out, &self.extra_data, MAX_EXTRA_DATA_LEN)?;
         Ok(out)
     }
 
@@ -366,6 +402,15 @@ impl GenesisManifest {
     /// `HASH_PROFILE_0x0001("hnchain.genesis.v1", HNCS(GenesisManifest))`.
     pub fn genesis_hash(&self) -> GenesisResult<Digest> {
         hash_profile_0x0001("hnchain.genesis.v1", &self.encode()?).map_err(GenesisError::Hash)
+    }
+
+    /// This manifest's own `extra_data_hash` — the exact same
+    /// `hn_state::extra_data_hash` function a real block's
+    /// `BlockBody.extra_data` would use (ADR-0041, "Genesis Document
+    /// Commitments Via `extra_data`"), not a parallel, independently-
+    /// defined genesis hash.
+    pub fn extra_data_hash(&self) -> GenesisResult<Digest> {
+        Ok(extra_data_hash(&self.extra_data)?)
     }
 
     /// This manifest's write-set: one [`ValidatorRecordV1`] leaf per
@@ -546,6 +591,7 @@ mod tests {
                     amount: COMMUNITY_ALLOCATION,
                 },
             },
+            extra_data: Vec::new(),
         }
     }
 
@@ -616,6 +662,43 @@ mod tests {
     }
 
     #[test]
+    fn rejects_oversized_extra_data() {
+        let mut manifest = sample_manifest();
+        manifest.extra_data = vec![0_u8; hn_state::MAX_EXTRA_DATA_LEN + 1];
+        assert!(matches!(
+            manifest.validate(),
+            Err(GenesisError::ExtraDataTooLong(_))
+        ));
+    }
+
+    #[test]
+    fn accepts_extra_data_at_exactly_the_limit() -> Result<(), GenesisError> {
+        let mut manifest = sample_manifest();
+        manifest.extra_data = vec![0_u8; hn_state::MAX_EXTRA_DATA_LEN];
+        manifest.validate()
+    }
+
+    #[test]
+    fn extra_data_hash_matches_the_standalone_function() -> Result<(), GenesisError> {
+        let mut manifest = sample_manifest();
+        manifest.extra_data = b"whitepaper-hash-placeholder".to_vec();
+        assert_eq!(
+            manifest.extra_data_hash()?,
+            hn_state::extra_data_hash(&manifest.extra_data)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn genesis_hash_changes_when_extra_data_changes() -> Result<(), GenesisError> {
+        let a = sample_manifest();
+        let mut b = sample_manifest();
+        b.extra_data = b"some-document-commitment".to_vec();
+        assert_ne!(a.genesis_hash()?, b.genesis_hash()?);
+        Ok(())
+    }
+
+    #[test]
     fn genesis_hash_is_deterministic() -> Result<(), GenesisError> {
         let manifest = sample_manifest();
         assert_eq!(manifest.genesis_hash()?, manifest.genesis_hash()?);
@@ -673,6 +756,51 @@ mod tests {
         });
 
         let dir = std::env::temp_dir().join(format!("hn-genesis-load-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("genesis.json");
+        std::fs::write(&path, serde_json::to_vec(&json)?)?;
+
+        let loaded = GenesisManifest::load(&path)?;
+        assert_eq!(loaded, manifest);
+        Ok(())
+    }
+
+    #[test]
+    fn loads_an_explicit_extra_data_field() -> Result<(), Box<dyn std::error::Error>> {
+        let mut manifest = sample_manifest();
+        manifest.extra_data = b"document-commitment-bytes".to_vec();
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [0x01; 32]);
+        let json = serde_json::json!({
+            "manifest_version": 1,
+            "chain_id": 1,
+            "network_id": 1,
+            "genesis_time": manifest.genesis_time,
+            "genesis_message": manifest.genesis_message,
+            "validators": [{
+                "validator_id": hex_encode(&manifest.validators[0].validator_id),
+                "consensus_key_algorithm_id": keypair.key_descriptor().algorithm_id(),
+                "consensus_key_public_key": hex_encode(&keypair.key_descriptor().public_key_bytes()),
+                "bonded_stake": manifest.validators[0].bonded_stake.to_string(),
+            }],
+            "allocations": {
+                "reserve": {
+                    "address": hex_encode(&manifest.allocations.reserve.address),
+                    "amount": manifest.allocations.reserve.amount.to_string(),
+                },
+                "founder": {
+                    "address": hex_encode(&manifest.allocations.founder.address),
+                    "amount": manifest.allocations.founder.amount.to_string(),
+                },
+                "community": {
+                    "address": hex_encode(&manifest.allocations.community.address),
+                    "amount": manifest.allocations.community.amount.to_string(),
+                },
+            },
+            "extra_data": hex_encode(&manifest.extra_data),
+        });
+
+        let dir =
+            std::env::temp_dir().join(format!("hn-genesis-extra-data-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir)?;
         let path = dir.join("genesis.json");
         std::fs::write(&path, serde_json::to_vec(&json)?)?;

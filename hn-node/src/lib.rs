@@ -11,7 +11,13 @@
 //! HNCS-canonicalized, `genesis_hash`-committed manifest — the initial
 //! validator set and the three ADR-0024 HNCOIN allocation accounts,
 //! validated against `hn_state`'s own real monetary/staking constants,
-//! never invented values. [`node::run`] (ADR-0037, "Multi-Node
+//! never invented values. Its `extra_data` field (ADR-0041, "Genesis
+//! Document Commitments Via `extra_data`") reuses `BlockBody.
+//! extra_data`'s own already-decided bounded-bytes mechanism
+//! (ADR-0008) to carry future document commitments (whitepaper hash,
+//! ADR set hash, ...) — empty until a real document-commitment
+//! procedure is decided (`docs/specs/core/genesis.md` §6, still open).
+//! [`node::run`] (ADR-0037, "Multi-Node
 //! Consensus Wiring"; ADR-0038) opens a durable
 //! `hn_storage::RedbStateStore`, applies genesis on a fresh database (or
 //! verifies an existing one still matches, "Decided: DB Init"),

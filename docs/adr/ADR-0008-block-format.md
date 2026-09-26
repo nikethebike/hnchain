@@ -29,6 +29,11 @@ Referenced By:
   `hn_state::BlockHeader::block_hash` outside this ADR's own tests —
   replaces `hn-node`'s earlier synthetic, non-cryptographic per-round
   identifier)
+- ADR-0041: Genesis Document Commitments Via `extra_data` (a second
+  real consumer of this ADR's own "Decided: Extra Data Format" —
+  `GenesisManifest.extra_data` reuses the exact same
+  `MAX_EXTRA_DATA_LEN`/`extra_data_hash` this ADR decided, not a
+  parallel genesis-specific mechanism)
 
 ## Context
 

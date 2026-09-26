@@ -2,9 +2,9 @@
 
 Status: Accepted
 
-Version: 0.2.0
+Version: 0.3.0
 
-Date: 2026-09-25
+Date: 2026-09-26
 
 `docs/adr/ADR-0038-genesis-format-and-node-daemon-bootstrap.md` resolves
 this document's format-level Open Architecture Decisions (§9, below) and
@@ -14,6 +14,11 @@ framing and design goals, updated to point at that ADR rather than
 duplicate it. Real genesis validator selection and real custody for the
 three HNCOIN allocation accounts remain open — see ADR-0038's own
 "Explicitly Not Resolved" and `docs/specs/core/genesis-security.md`.
+`docs/adr/ADR-0041-genesis-document-commitments-via-extra-data.md`
+connects this document's own §6 ("Document Commitments") to
+`BlockBody.extra_data`'s already-decided mechanism (ADR-0008) — the
+document-commitment *procedure* itself remains exactly as open as
+before.
 
 ## 1. Scope
 
@@ -132,6 +137,14 @@ GenesisManifest
   genesis_message
 ```
 
+**Resolved** (ADR-0041, "Genesis Document Commitments Via
+`extra_data`"): the individual `whitepaper_hash`/`specification_hash`/
+... fields above are **not** how the implemented `hn_state::
+GenesisManifest` carries document commitments — a single bounded
+`extra_data: Vec<u8>` field does, reusing `BlockBody.extra_data`'s own
+already-decided mechanism (ADR-0008) rather than a second, parallel
+one. See §6, below.
+
 Optional future fields:
 
 - git tag
@@ -152,6 +165,16 @@ The genesis manifest may commit to:
 - HN Constitution hash
 - compatibility test suite hash
 - genesis release tag hash
+
+**Resolved: where** (ADR-0041) — whichever of the above end up
+decided, their resulting bytes go into `GenesisManifest.extra_data`
+(bounded, `MAX_EXTRA_DATA_LEN = 256` bytes, the same constant/mechanism
+`BlockBody.extra_data` uses), committed via `GenesisManifest.
+extra_data_hash` — literally `hn_state::extra_data_hash`, not a
+separate function. **Still open: which** — the document-commitment
+*procedure* itself (below) is exactly as undecided as before ADR-0041;
+that ADR connects the two gaps without closing either one's own
+remaining question.
 
 Document hashes must be computed over canonical file bytes or a documented
 archive format.
@@ -207,10 +230,13 @@ must be documented in the genesis manifest.
 - final chain ID format — **resolved, ADR-0038**: `u8`,
   `hn_core::ChainId` (already the real, assigned `HNCHAIN = 1` lineage
   value, not a placeholder)
-- final document commitment procedure — **still open**, deliberately
-  not attempted by ADR-0038 (§6, above, lists every open sub-question;
-  `GenesisManifest` carries no document-commitment fields at all yet,
-  not placeholder ones)
+- final document commitment procedure — **partially resolved,
+  ADR-0041**: *where* the resulting bytes go is now decided
+  (`GenesisManifest.extra_data`, reusing `BlockBody.extra_data`'s own
+  mechanism, ADR-0008) — *which* files, what order, what normalization,
+  and what archive format remains **still open**, deliberately not
+  attempted by either ADR-0038 or ADR-0041 (§6, above, lists every
+  remaining open sub-question)
 - final genesis state format — **resolved, ADR-0038**: genesis's
   write-set (validator records, allocation balances) computed through
   the existing, unmodified state-tree machinery

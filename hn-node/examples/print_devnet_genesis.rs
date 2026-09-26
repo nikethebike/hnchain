@@ -56,6 +56,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "founder": allocation_json(0xA1, hn_state::FOUNDER_ALLOCATION)?,
             "community": allocation_json(0xA2, hn_state::COMMUNITY_ALLOCATION)?,
         },
+        // Empty: no document-commitment procedure is decided yet
+        // (genesis.md §6, still open) -- explicit here rather than
+        // simply absent, matching this document's own "make genesis
+        // data explicit" design goal (ADR-0041).
+        "extra_data": "",
     });
 
     println!("{}", serde_json::to_string_pretty(&genesis)?);

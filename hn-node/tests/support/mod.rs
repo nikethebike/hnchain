@@ -99,6 +99,7 @@ pub fn write_devnet_genesis(path: &Path, validator_count: u8) -> TestResult<()> 
             "founder": allocation(0xA1, hn_state::FOUNDER_ALLOCATION)?,
             "community": allocation(0xA2, hn_state::COMMUNITY_ALLOCATION)?,
         },
+        "extra_data": "",
     });
 
     std::fs::write(path, serde_json::to_vec_pretty(&genesis)?)?;

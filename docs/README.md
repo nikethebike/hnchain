@@ -56,6 +56,7 @@ docs/
     ADR-0038-genesis-format-and-node-daemon-bootstrap.md
     ADR-0039-devnet-restart-recovery.md
     ADR-0040-real-block-hash-in-hn-node.md
+    ADR-0041-genesis-document-commitments-via-extra-data.md
 
   specs/
     core/

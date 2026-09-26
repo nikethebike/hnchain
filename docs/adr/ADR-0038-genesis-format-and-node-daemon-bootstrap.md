@@ -33,6 +33,10 @@ Referenced By:
   `GenesisManifest::initial_state_root` directly as `BlockHeader.
   state_root` for every block, genuinely correct for as long as this
   devnet's blocks carry zero transactions)
+- ADR-0041: Genesis Document Commitments Via `extra_data` (adds
+  `GenesisManifest.extra_data`, a breaking change to this ADR's own
+  `genesis_hash` computation — every currently-committed genesis file
+  regenerated alongside it)
 
 ## Context
 
