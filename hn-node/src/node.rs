@@ -6,7 +6,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
-use hn_consensus::{ConsensusAction, ConsensusEngine, ConsensusTarget, round_proposer};
+use hn_consensus::{
+    ConsensusAction, ConsensusEngine, ConsensusError, ConsensusTarget, round_proposer,
+};
 use hn_core::{BlockHeight, Epoch, ProtocolEpoch, ProtocolVersion, Round, UnixTimeMillis};
 use hn_crypto::{Digest, Ed25519KeyPair, KeyRole, SignatureEnvelope, hash_profile_0x0001};
 use hn_network::{
@@ -685,19 +687,47 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
         ConsensusAction::Finalized { block_hash, .. } => {
             let height = ctx.engine.state().height;
             let round = ctx.engine.state().round;
-            let result =
-                ctx.engine
-                    .commit_finalized_block(block_hash, &mut ctx.store, &ctx.records)?;
-            log_line(&format!(
-                "FINALIZED height={} round={} block={} applied={}",
-                height.get(),
-                round.get(),
-                hex(&block_hash),
-                result.applied.len()
-            ));
-            ctx.last_block_hash = block_hash;
-            let action = ctx.engine.begin_new_height()?;
-            act_on(ctx, action)?;
+            match ctx
+                .engine
+                .commit_finalized_block(block_hash, &mut ctx.store, &ctx.records)
+            {
+                Ok(result) => {
+                    log_line(&format!(
+                        "FINALIZED height={} round={} block={} applied={}",
+                        height.get(),
+                        round.get(),
+                        hex(&block_hash),
+                        result.applied.len()
+                    ));
+                    ctx.last_block_hash = block_hash;
+                    let action = ctx.engine.begin_new_height()?;
+                    act_on(ctx, action)?;
+                }
+                // A real, already-named race in ADR-0039's own passive
+                // height-observation catch-up: a jump straight to
+                // `observed_height` (`maybe_sync_forward`) starts a
+                // fresh `ConsensusEngine` with no cached proposal, so a
+                // quorum certificate this node never itself saw
+                // `Proposal` for (only its votes/QC) cannot be applied
+                // here -- doing so would need real block/state sync
+                // (ADR-0016, unchanged), not this pass's scope. Rather
+                // than exit the whole process over one missed height,
+                // log and leave the engine at `Finalize` for this
+                // height/round; the next `maybe_sync_forward` jump
+                // (driven by the very QC/vote traffic that keeps
+                // arriving from peers already past this height) already
+                // replaces the engine wholesale, self-healing past the
+                // gap without any new mechanism.
+                Err(ConsensusError::UnknownProposedBlock { block_hash }) => {
+                    log_line(&format!(
+                        "SKIPPED finalizing height={} round={} block={} (no cached proposal -- passive catch-up gap, ADR-0016)",
+                        height.get(),
+                        round.get(),
+                        hex(&block_hash),
+                    ));
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
         ConsensusAction::RoundAdvanced { .. } | ConsensusAction::NewHeight { .. } => {
             let action = ctx.engine.begin_round()?;
