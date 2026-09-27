@@ -48,7 +48,14 @@
 //! catches up to the network's real current height by observing
 //! ordinary gossiped vote/certificate/proposal traffic (ADR-0039,
 //! "Decided: Passive Height-Observation Catch-Up") — no dedicated sync
-//! protocol.
+//! protocol. Each such jump starts a fresh `ConsensusEngine` with no
+//! cached proposal, so a quorum certificate for a block this node
+//! never itself saw `Proposal` for cannot be applied; rather than exit
+//! the whole process over that one missed height, [`node::run`] logs
+//! and skips it (a `SKIPPED finalizing ...` line), leaving the engine
+//! to be replaced wholesale by the next, self-healing catch-up jump —
+//! found as a real crash via CI's own multi-node restart-recovery test
+//! failing under load (never locally), not a hypothetical.
 //!
 //! Explicitly out of scope, named rather than guessed at: any RPC/CLI
 //! surface, real (non-devnet) validator onboarding and real custody for

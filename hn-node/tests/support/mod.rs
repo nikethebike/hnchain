@@ -199,13 +199,19 @@ pub fn spawn_node(
             guard.push(line);
         }
     });
-    // Drained so the child never blocks on a full stderr pipe; its
-    // content is not part of any test's assertions.
+    // Merged into the same log (tagged) rather than discarded: a panic
+    // message -- the one thing most likely to explain a node that goes
+    // silent on stdout -- prints to stderr, and `wait_until_all_log`'s
+    // own timeout diagnostic needs to see it, not just the last stdout
+    // lines.
+    let stderr_log = Arc::clone(&log);
     std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines() {
-            if line.is_err() {
+            let Ok(line) = line else { break };
+            let Ok(mut guard) = stderr_log.lock() else {
                 break;
-            }
+            };
+            guard.push(format!("[stderr] {line}"));
         }
     });
 
@@ -234,7 +240,21 @@ pub fn wait_until_all_log(
             return Ok(matches);
         }
         if Instant::now() >= deadline {
-            return Err("timed out waiting for all nodes to log a matching line".into());
+            let mut diagnostic =
+                String::from("timed out waiting for all nodes to log a matching line:\n");
+            for (index, node) in nodes.iter().enumerate() {
+                let log = node.log_snapshot()?;
+                let tail_start = log.len().saturating_sub(10);
+                diagnostic.push_str(&format!(
+                    "  node[{index}] logged {} lines, last {}:\n",
+                    log.len(),
+                    log.len() - tail_start
+                ));
+                for line in &log[tail_start..] {
+                    diagnostic.push_str(&format!("    {line}\n"));
+                }
+            }
+            return Err(diagnostic.into());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
