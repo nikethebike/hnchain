@@ -234,7 +234,21 @@ pub fn wait_until_all_log(
             return Ok(matches);
         }
         if Instant::now() >= deadline {
-            return Err("timed out waiting for all nodes to log a matching line".into());
+            let mut diagnostic =
+                String::from("timed out waiting for all nodes to log a matching line:\n");
+            for (index, node) in nodes.iter().enumerate() {
+                let log = node.log_snapshot()?;
+                let tail_start = log.len().saturating_sub(10);
+                diagnostic.push_str(&format!(
+                    "  node[{index}] logged {} lines, last {}:\n",
+                    log.len(),
+                    log.len() - tail_start
+                ));
+                for line in &log[tail_start..] {
+                    diagnostic.push_str(&format!("    {line}\n"));
+                }
+            }
+            return Err(diagnostic.into());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
