@@ -199,13 +199,19 @@ pub fn spawn_node(
             guard.push(line);
         }
     });
-    // Drained so the child never blocks on a full stderr pipe; its
-    // content is not part of any test's assertions.
+    // Merged into the same log (tagged) rather than discarded: a panic
+    // message -- the one thing most likely to explain a node that goes
+    // silent on stdout -- prints to stderr, and `wait_until_all_log`'s
+    // own timeout diagnostic needs to see it, not just the last stdout
+    // lines.
+    let stderr_log = Arc::clone(&log);
     std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines() {
-            if line.is_err() {
+            let Ok(line) = line else { break };
+            let Ok(mut guard) = stderr_log.lock() else {
                 break;
-            }
+            };
+            guard.push(format!("[stderr] {line}"));
         }
     });
 
