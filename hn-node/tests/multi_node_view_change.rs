@@ -33,7 +33,12 @@ const VALIDATOR_COUNT: u8 = 4;
 const RUNNING_VALIDATORS: [u8; 3] = [1, 2, 3];
 const BASE_PORT: u16 = 31_700;
 const BASE_TIMEOUT_MS: u64 = 200;
-const WAIT: Duration = Duration::from_secs(25);
+// See restart_recovery.rs's own identical constant for why this is 90s
+// rather than a smaller number: a generous CI-load margin, not a
+// tuned-to-the-second value -- this exact test flaked past a 25s
+// ceiling on GitHub Actions (real multi-process/real-TCP timing under
+// load, not a hang).
+const WAIT: Duration = Duration::from_secs(90);
 
 #[test]
 fn three_of_four_validators_survive_a_dead_round_zero_proposer() -> TestResult {
