@@ -52,8 +52,8 @@ pub const MAX_EVIDENCE_BLOB_LEN: usize = 65_536;
 /// [`StateError`], which those generic helpers' `HncsResult`-typed
 /// element closures cannot express — the same justification
 /// `hn_state::QuorumCertificate.aggregate_proof` and
-/// `hn_network::ConsensusProposalMessageV1.transactions` already
-/// established for the identical situation.
+/// `hn_network::BlockResponseV1.transactions` already established for
+/// the identical situation.
 ///
 /// `evidence` uses `write_list`/`read_list` directly: each entry is
 /// opaque bytes (no `ConsensusEvidence` schema decided yet, ADR-0015),

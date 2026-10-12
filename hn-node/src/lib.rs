@@ -57,17 +57,40 @@
 //! found as a real crash via CI's own multi-node restart-recovery test
 //! failing under load (never locally), not a hypothetical.
 //!
+//! A receiving node no longer trusts a proposer's claimed `block_hash`
+//! at face value (ADR-0040's own "Explicitly Not Resolved," now
+//! closed): [`node::run`] verifies a whole `hn_state::BlockEnvelope`
+//! (ADR-0042, "BlockEnvelope And Receiver-Side Header Verification") —
+//! recomputing `block_hash` from the received header, authenticating
+//! the proposer (`round_proposer` eligibility plus a real signature
+//! over that hash from the proposer's own registered consensus key),
+//! cross-checking the header against its own body, and — only once
+//! this node's own chain position is itself known to be correct, not
+//! mid-`maybe_sync_forward`-catch-up — `parent_block_hash` and strict
+//! timestamp monotonicity. An embedded `justification` quorum
+//! certificate's own signatures are verified the same way a normal
+//! gossiped one already was. Any failure is a dropped, logged message,
+//! never a crash: externally-triggerable network input must not be
+//! able to take this process down, independent of ADR-0038's own
+//! "no-panic discipline" at the process boundary.
+//!
 //! Explicitly out of scope, named rather than guessed at: any RPC/CLI
 //! surface, real (non-devnet) validator onboarding and real custody for
 //! the three genesis allocation accounts (`docs/specs/core/genesis-
 //! security.md`'s own open items), non-validating "full node" mode,
-//! receiver-side `BlockHeader` reconstruction/verification (a proposer's
-//! claimed `block_hash` is still trusted as given, ADR-0040), real
-//! block/state sync for a future network with non-empty blocks
-//! (ADR-0016, unchanged), and ADR-0011's real leader-election formula
-//! (this crate uses `hn_consensus::round_proposer`, its own
-//! explicitly-sanctioned devnet placeholder) — see ADR-0037/ADR-0038/
-//! ADR-0039/ADR-0040's own "Explicitly Not Resolved."
+//! general malformed-message decode resilience (every message type,
+//! this one included, still propagates a fatal error out of a failed
+//! `::decode` — a real, separate, broader hardening gap ADR-0042 does
+//! not attempt to close), re-proposing a locked value under a real
+//! `justification` on the *proposing* side (this crate's own proposer
+//! still always sends `justification: None`), real block/state sync
+//! for a future network with non-empty blocks (ADR-0016, unchanged,
+//! including this node's own inability to verify `parent_block_hash`/
+//! timestamp monotonicity immediately after a passive catch-up jump),
+//! and ADR-0011's real leader-election formula (this crate uses
+//! `hn_consensus::round_proposer`, its own explicitly-sanctioned
+//! devnet placeholder) — see ADR-0037/ADR-0038/ADR-0039/ADR-0040/
+//! ADR-0042's own "Explicitly Not Resolved."
 
 mod config;
 mod error;

@@ -1,30 +1,22 @@
-use hn_core::{BlockHeight, Round};
-use hn_crypto::Digest;
-use hn_hncs::{Decoder, validate_count, write_bool, write_fixed_bytes, write_u32, write_u64};
-use hn_state::{QuorumCertificate, TransactionEnvelope};
+use hn_crypto::{Digest, SignatureEnvelope};
+use hn_hncs::{Decoder, validate_count, write_bytes, write_fixed_bytes, write_u32};
+use hn_state::{BlockEnvelope, TransactionEnvelope};
 
 use crate::error::NetworkResult;
 
 /// Maximum number of `TransactionEnvelope` entries in one
-/// `BlockResponseV1`/`ConsensusProposalMessageV1` — matches ADR-0008's
-/// own already-decided `MAX_TRANSACTIONS_PER_BLOCK` (10,000), not yet
-/// implemented as a Rust constant anywhere in `hn-state` (no
-/// block-processing pipeline consumes it yet), reused here as the
-/// value rather than duplicated as a fresh, independent choice.
+/// `BlockResponseV1` — matches `hn_state::MAX_TRANSACTIONS_PER_BLOCK`
+/// (ADR-0008) exactly, reused as the value rather than duplicated as a
+/// fresh, independent choice. `ConsensusProposalMessageV1` no longer
+/// has a transactions field of its own (ADR-0042): its proposed
+/// block's transactions live inside `hn_state::BlockBody`, bounded by
+/// that same constant directly.
 pub const MAX_TRANSACTIONS_PER_MESSAGE: usize = 10_000;
 
 /// Maximum length, in bytes, of one embedded `TransactionEnvelope`
 /// blob — matches `hn_state::MAX_TRANSACTION_SIZE` exactly (reused
 /// directly, not duplicated).
 pub const MAX_TRANSACTION_BLOB_LEN: usize = hn_state::MAX_TRANSACTION_SIZE;
-
-/// Maximum length, in bytes, of one embedded `QuorumCertificate` blob.
-/// An implementation resource bound with headroom over a realistic
-/// certificate's own worst case (`MAX_SIGNER_COMMITMENT_LEN` +
-/// `MAX_QUORUM_SIGNATURES` individual signatures) — same class of
-/// decision as `MAX_TRANSACTION_BLOB_LEN`, picked fresh since no
-/// existing `hn_state` constant already covers a whole encoded `QuorumCertificate`.
-pub const MAX_QC_BLOB_LEN: usize = 1_048_576;
 
 /// "I have this transaction" (ADR-0018, "Gossip Announcements").
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -193,47 +185,59 @@ impl BlockResponseV1 {
     }
 }
 
+/// Maximum length, in bytes, of one embedded `BlockEnvelope` blob.
+/// Generous headroom over the sum of `hn_state`'s own
+/// `MAX_BLOCK_HEADER_BLOB_LEN`/`MAX_BLOCK_BODY_BLOB_LEN`/
+/// `MAX_JUSTIFICATION_BLOB_LEN` (the envelope's own three internal
+/// bounds) — a wire-frame safety cap, not a second, independently
+/// chosen policy value.
+pub const MAX_BLOCK_ENVELOPE_BLOB_LEN: usize = 33_554_432;
+
 /// A consensus round proposal (ADR-0036, "Decided:
 /// Block/Transaction/Vote Propagation"; ADR-0039, "Decided: Proposals
-/// Self-Describe Their Height/Round") — the block/transactions/
-/// justification fields deliberately the exact same shape
-/// `hn_consensus::ConsensusEngine::handle_proposal`'s own three
-/// parameters already take, plus `height`/`round` so a receiver can
-/// verify a proposal actually targets its own current round before
-/// acting on it — `hn_consensus::ConsensusEvent::Proposal` itself
-/// carries no height/round (it always targets whichever round the
-/// local `ConsensusState` is already attempting), which is exactly
-/// right for that trusted-input layer but left a real gap at the
-/// network boundary: nothing stopped a stale or out-of-order proposal
-/// from a *different* height being misapplied to whatever round a
-/// receiver's own engine happened to be in. `ConsensusVote`/
-/// `QuorumCertificate` never had this gap — both already self-describe
-/// their own `height`/`round`.
+/// Self-Describe Their Height/Round"; ADR-0042, "Decided:
+/// `BlockEnvelope`, Not A Bare `block_hash` Claim") — the whole
+/// `hn_state::BlockEnvelope` a receiver needs to independently
+/// recompute `block_hash` and cross-check `header` against `body`,
+/// plus `proposer_signature`: a `SignatureEnvelope` over `envelope.
+/// block_hash()` from the registered consensus key of whichever
+/// validator `envelope.header.proposer` names. `height`/`round` are no
+/// longer separate top-level fields (ADR-0039's own reason for adding
+/// them — self-describing height/round for a receiver's own stale-
+/// round filter — is already satisfied by `envelope.header.height`/
+/// `.round` now that the full header travels on the wire; a redundant
+/// top-level copy would just be a second value that could disagree
+/// with the header's own).
+///
+/// `hn_consensus::ConsensusEvent::Proposal` itself still carries no
+/// height/round (it always targets whichever round the local
+/// `ConsensusState` is already attempting) and no signature (it is
+/// fed already-verified `block_hash`/`transactions`/`justification` by
+/// its caller) — this message type is `hn-node`'s own wire boundary
+/// around that trusted-input layer, not a change to the layer itself.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConsensusProposalMessageV1 {
-    /// The height this proposal targets.
-    pub height: BlockHeight,
-    /// The round, within `height`, this proposal targets.
-    pub round: Round,
-    /// The proposed block's hash.
-    pub block_hash: Digest,
-    /// The proposed block's transactions, in order.
-    pub transactions: Vec<TransactionEnvelope>,
-    /// A `prevote` quorum certificate justifying re-proposing a value a
-    /// receiving validator may be locked on something else for (see
-    /// `hn_consensus::ConsensusState`'s own "Locking rule").
-    pub justification: Option<QuorumCertificate>,
+    /// The proposed block, in full — a receiver recomputes
+    /// `block_hash` from `envelope.header` rather than trusting any
+    /// separately-carried claimed value (ADR-0042).
+    pub envelope: BlockEnvelope,
+    /// The proposer's own signature over `envelope.block_hash()`,
+    /// verified by a receiver against `envelope.header.proposer`'s
+    /// registered consensus key (ADR-0042, "Decided: Proposer
+    /// Authentication").
+    pub proposer_signature: SignatureEnvelope,
 }
 
 impl ConsensusProposalMessageV1 {
     /// Encodes this value as canonical HNCS bytes.
     pub fn encode(&self) -> NetworkResult<Vec<u8>> {
         let mut out = Vec::new();
-        write_u64(&mut out, self.height.get());
-        write_u64(&mut out, self.round.get());
-        write_fixed_bytes(&mut out, &self.block_hash);
-        write_transaction_list(&mut out, &self.transactions)?;
-        write_optional_qc(&mut out, self.justification.as_ref())?;
+        write_bytes(
+            &mut out,
+            &self.envelope.encode()?,
+            MAX_BLOCK_ENVELOPE_BLOB_LEN,
+        )?;
+        self.proposer_signature.encode_into(&mut out)?;
         Ok(out)
     }
 
@@ -241,18 +245,13 @@ impl ConsensusProposalMessageV1 {
     /// [`ConsensusProposalMessageV1::encode`].
     pub fn decode(bytes: &[u8]) -> NetworkResult<Self> {
         let mut decoder = Decoder::new(bytes);
-        let height = BlockHeight::new(decoder.read_u64()?);
-        let round = Round::new(decoder.read_u64()?);
-        let block_hash = decoder.read_fixed_bytes::<32>()?;
-        let transactions = read_transaction_list(&mut decoder)?;
-        let justification = read_optional_qc(&mut decoder)?;
+        let envelope_bytes = decoder.read_bytes(MAX_BLOCK_ENVELOPE_BLOB_LEN)?;
+        let envelope = BlockEnvelope::decode(envelope_bytes)?;
+        let proposer_signature = SignatureEnvelope::decode_from(&mut decoder)?;
         decoder.finish()?;
         Ok(Self {
-            height,
-            round,
-            block_hash,
-            transactions,
-            justification,
+            envelope,
+            proposer_signature,
         })
     }
 }
@@ -272,7 +271,7 @@ fn write_transaction_list(
     write_u32(out, transactions.len() as u32);
     for envelope in transactions {
         let bytes = envelope.encode()?;
-        hn_hncs::write_bytes(out, &bytes, MAX_TRANSACTION_BLOB_LEN)?;
+        write_bytes(out, &bytes, MAX_TRANSACTION_BLOB_LEN)?;
     }
     Ok(())
 }
@@ -288,31 +287,14 @@ fn read_transaction_list(decoder: &mut Decoder<'_>) -> NetworkResult<Vec<Transac
     Ok(transactions)
 }
 
-fn write_optional_qc(out: &mut Vec<u8>, qc: Option<&QuorumCertificate>) -> NetworkResult<()> {
-    write_bool(out, qc.is_some());
-    if let Some(qc) = qc {
-        let bytes = qc.encode()?;
-        hn_hncs::write_bytes(out, &bytes, MAX_QC_BLOB_LEN)?;
-    }
-    Ok(())
-}
-
-fn read_optional_qc(decoder: &mut Decoder<'_>) -> NetworkResult<Option<QuorumCertificate>> {
-    if decoder.read_bool()? {
-        let bytes = decoder.read_bytes(MAX_QC_BLOB_LEN)?;
-        Ok(Some(QuorumCertificate::decode(bytes)?))
-    } else {
-        Ok(None)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use hn_core::{AccountNonce, BlockHeight, Round};
+    use hn_core::{AccountNonce, BlockHeight, Epoch, ProtocolEpoch, Round, UnixTimeMillis};
     use hn_crypto::{Ed25519KeyPair, KeyRole, SignatureEnvelope};
     use hn_state::{
-        AccessListV1, QuorumCertificate, TX_VERSION_1, TransactionEnvelope, TransferPayloadV1,
-        TxType, ValidityWindowV1, VoteTargetType, VoteType,
+        AccessListV1, BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader,
+        HEADER_VERSION_1, QuorumCertificate, TX_VERSION_1, TransactionEnvelope, TransferPayloadV1,
+        TxType, ValidityWindowV1, VoteTargetType, VoteType, list_empty_root,
     };
 
     use super::{
@@ -366,7 +348,7 @@ mod tests {
             certificate_type: VoteType::Prevote,
             chain_id: 1,
             network_id: 1,
-            epoch: hn_core::Epoch::new(0),
+            epoch: Epoch::new(0),
             height: BlockHeight::new(1),
             round: Round::new(round),
             validator_set_commitment: [0x66; 32],
@@ -451,14 +433,62 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn consensus_proposal_round_trips_without_justification() -> NetworkResult<()> {
-        let message = ConsensusProposalMessageV1 {
+    fn sample_block_envelope(
+        transactions: Vec<TransactionEnvelope>,
+        justification: Option<QuorumCertificate>,
+    ) -> NetworkResult<BlockEnvelope> {
+        let body = BlockBody {
+            body_version: BODY_VERSION_1,
+            transactions,
+            receipts: vec![],
+            evidence: vec![],
+            extra_data: vec![],
+        };
+        let header = BlockHeader {
+            header_version: HEADER_VERSION_1,
+            chain_id: 1,
+            network_id: 1,
             height: BlockHeight::new(7),
             round: Round::new(2),
-            block_hash: BLOCK_HASH,
-            transactions: vec![sample_envelope(0)?],
-            justification: None,
+            epoch: Epoch::new(0),
+            protocol_epoch: ProtocolEpoch::GENESIS,
+            parent_block_hash: [0_u8; 32],
+            proposer: [0x01_u8; 32],
+            timestamp: UnixTimeMillis::from_millis(1),
+            transactions_root: body.transactions_root()?,
+            state_root: [0x02_u8; 32],
+            receipts_root: body.receipts_root()?,
+            events_root: list_empty_root()?,
+            consensus_root: [0x03_u8; 32],
+            evidence_root: body.evidence_root()?,
+            protocol_parameters_hash: [0x04_u8; 32],
+            extra_data_hash: body.extra_data_hash()?,
+        };
+        Ok(BlockEnvelope {
+            block_version: BLOCK_VERSION_1,
+            header,
+            body,
+            justification,
+        })
+    }
+
+    fn sign_block_hash(envelope: &BlockEnvelope) -> NetworkResult<SignatureEnvelope> {
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [0x07; 32]);
+        let digest = envelope.block_hash()?;
+        Ok(SignatureEnvelope {
+            algorithm_id: keypair.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: keypair.sign(&digest).to_vec(),
+        })
+    }
+
+    #[test]
+    fn consensus_proposal_round_trips_without_justification() -> NetworkResult<()> {
+        let envelope = sample_block_envelope(vec![sample_envelope(0)?], None)?;
+        let proposer_signature = sign_block_hash(&envelope)?;
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            proposer_signature,
         };
         let decoded = ConsensusProposalMessageV1::decode(&message.encode()?)?;
         assert_eq!(decoded, message);
@@ -467,12 +497,11 @@ mod tests {
 
     #[test]
     fn consensus_proposal_round_trips_with_justification() -> NetworkResult<()> {
+        let envelope = sample_block_envelope(vec![sample_envelope(0)?], Some(sample_qc(0)))?;
+        let proposer_signature = sign_block_hash(&envelope)?;
         let message = ConsensusProposalMessageV1 {
-            height: BlockHeight::new(7),
-            round: Round::new(2),
-            block_hash: BLOCK_HASH,
-            transactions: vec![sample_envelope(0)?],
-            justification: Some(sample_qc(0)),
+            envelope,
+            proposer_signature,
         };
         let decoded = ConsensusProposalMessageV1::decode(&message.encode()?)?;
         assert_eq!(decoded, message);

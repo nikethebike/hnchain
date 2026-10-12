@@ -2,7 +2,7 @@
 
 Status: Proposed
 
-Version: 0.1.0
+Version: 0.2.0
 
 Depends On:
 
@@ -14,6 +14,17 @@ Depends On:
 - `docs/adr/ADR-0007-state-tree.md`
 - `docs/adr/ADR-0008-block-format.md`
 - `docs/adr/ADR-0022-protocol-versioning.md`
+- `docs/adr/ADR-0042-block-envelope-and-receiver-side-header-verification.md`
+
+`docs/adr/ADR-0042-block-envelope-and-receiver-side-header-verification.md`
+resolves this document's own long-open `BlockEnvelopeV1` schema (§3, §17)
+as a concrete `hn_state::BlockEnvelope` type, and resolves §13's
+conceptual validation pipeline into a real, implemented receiver-side
+check sequence in `hn-node` — this document keeps its own conceptual
+framing, updated in place to point at that ADR rather than duplicate
+it. This remains Proposed, not Accepted: several other sections
+(receipt schema, size limits, full genesis-to-block-0 mapping) remain
+genuinely open regardless.
 
 ## 1. Purpose
 
@@ -80,6 +91,15 @@ BlockEnvelopeV1
 
 - Consensus finality proof or commit certificate.
 - Format is defined by consensus specifications.
+
+**Resolved** (ADR-0042): `hn_state::BlockEnvelope` is the concrete
+`BlockEnvelopeV1` — `block_version: u16`, `header: BlockHeader`,
+`body: BlockBody`, `justification: Option<hn_state::
+QuorumCertificate>`. No separate `BlockJustificationV1` wrapper exists:
+`QuorumCertificate` (ADR-0012) already carries every field §11, below,
+names (`certificate_type`/`height`/`round`/`epoch`/`target_type`/
+`target_hash`/`signer_commitment`/`aggregate_proof`), so it fills that
+conceptual role directly rather than through a second, parallel type.
 
 ## 4. Block Header
 
@@ -420,6 +440,12 @@ The justification must bind to the block hash and consensus context.
 The block hash excludes justification unless the accepted consensus
 specification explicitly chooses a different rule.
 
+**Resolved** (ADR-0042): `justification` is `Option<hn_state::
+QuorumCertificate>` directly — see §3.1, above. `BlockHash` excludes it
+exactly as this section already required: `block_hash` is computed
+from `BlockHeader` alone (ADR-0008, "Header Hash"), never from the
+envelope's `justification` field.
+
 ## 12. Genesis Block
 
 Genesis is a special block with fixed, published data.
@@ -463,6 +489,26 @@ canonical_block_bytes
 
 Implementation may reorder independent cheap checks, but final validity must be
 equivalent to this pipeline.
+
+**Partially resolved** (ADR-0042): `hn-node`'s own `verify_proposal`
+implements the consensus-relevant half of this pipeline for its own
+always-empty-block devnet scope — chain/network check, header hash
+computation (recomputed and compared against the proposer's own
+signature, not a separately-trusted claim), consensus metadata
+verification (`proposer` eligibility against `round_proposer`,
+`state_root`/`consensus_root`/`protocol_parameters_hash` against this
+devnet's own fixed values), and justification verification
+(`QuorumCertificate::verify_signatures`). `parent block lookup` is
+`parent_block_hash` equality against this node's own last finalized
+block, skipped only while this node's own chain position is not yet
+known to be correct (mid passive-catchup, ADR-0039). Not resolved:
+`transaction execution`/`state root verification` against real,
+non-empty transaction content, `receipt root verification` against
+real receipts, and `event root verification` against real events —
+all still blocked on real transactions existing at all (ADR-0016).
+`size limits`/envelope-body-version checks were already resolved by
+`BlockEnvelope`/`BlockHeader`/`BlockBody`'s own `decode` methods
+(ADR-0008).
 
 ## 14. Size Limits
 
@@ -547,27 +593,38 @@ Test vectors are mandatory before production implementation.
 
 ## 17. Open Decisions
 
-- final block envelope schema (`BlockEnvelopeV1` itself — distinct from
-  header/body below, still open)
+- final block envelope schema — **resolved, ADR-0042**:
+  `hn_state::BlockEnvelope` (`block_version`/`header`/`body`/
+  `justification`)
 - final header schema — **resolved**, `hn_state::BlockHeader`
   (ADR-0008, "Decided: `BlockHeader`/`BlockBody` Structs")
 - final body schema — **resolved**, `hn_state::BlockBody` (same)
 - extra data format — **resolved** (§6/§5.16, ADR-0008 "Decided: Extra
   Data Format")
 - genesis mapping — `docs/specs/core/genesis.md` is now Accepted
-  (ADR-0038) for its own `GenesisManifest` format, and a concrete
-  `BlockHeader`/`BlockBody` type now exists too (ADR-0008), but nothing
-  yet actually constructs a genesis block 0 from `GenesisManifest`
-  using it, and `BlockEnvelopeV1` itself remains unresolved (ADR-0008's
-  own "genesis block compatibility rules" item) — narrowed twice now
-  (this entry and "extra data format," above), not closed
+  (ADR-0038) for its own `GenesisManifest` format, and `BlockHeader`/
+  `BlockBody`/`BlockEnvelope` concrete types all now exist (ADR-0008,
+  ADR-0042), but nothing yet actually constructs a genesis block 0
+  from `GenesisManifest` using any of them — narrowed three times now
+  (this entry, "extra data format," and "final block envelope
+  schema," above), not closed
 - receipt schema (`ReceiptV1` core shape decided, ADR-0006 "Receipts" —
   `fee_charged`/`resource_usage`/`emitted_event_references` still open)
 - event schema (not decided — gated on HNVM; `hn-list-merkle-v1` root
   construction is ready once one exists, ADR-0008)
-- evidence schema, consensus metadata schema, justification schema,
-  timestamp validation semantics, epoch transition rules — all blocked
-  on `docs/rfc/consensus/*` reaching Accepted (currently Proposed)
+- justification schema — **resolved, ADR-0042**: `Option<hn_state::
+  QuorumCertificate>` directly, no separate wrapper type (§3.1/§11,
+  above)
+- timestamp validation semantics — **partially resolved, ADR-0042**:
+  `hn-node`'s own receiver-side check requires strict monotonicity
+  against the parent block's own timestamp (when this node's own chain
+  position is known to be correct); no wall-clock/drift bound exists
+  or is decided — deliberately not invented as a new protocol constant
+  this pass, still fully open
+- evidence schema, consensus metadata schema (beyond the devnet-fixed
+  values ADR-0042's own receiver-side check already compares against),
+  epoch transition rules — all blocked on `docs/rfc/consensus/*`
+  reaching Accepted (currently Proposed)
 - protocol parameter schema — still blocked: ADR-0025 (Governance
   Model) decides on-chain signaling votes only, no automatic protocol
   effect; no adjustable parameter has been named anywhere yet to give

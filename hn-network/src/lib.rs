@@ -64,16 +64,19 @@
 //!
 //! [`propagation`] adds the block/transaction/vote propagation payload
 //! shapes — [`propagation::TransactionResponseV1`]/
-//! [`propagation::BlockResponseV1`]/
-//! [`propagation::ConsensusProposalMessageV1`] deliberately embed
-//! `hn_state::TransactionEnvelope`/`hn_state::QuorumCertificate`
-//! directly rather than redefining them, and `ConsensusProposalMessageV1`'s
-//! own three fields are deliberately identical in shape to
-//! `hn_consensus::ConsensusEngine::handle_proposal`'s own parameters,
-//! so a future wiring pass can hand one straight to it unchanged. An
-//! individual `hn_state::ConsensusVote`/`QuorumCertificate` travels as
-//! its own canonical bytes directly under
-//! [`registry::MessageType::ConsensusVote`]/
+//! [`propagation::BlockResponseV1`] deliberately embed
+//! `hn_state::TransactionEnvelope` directly rather than redefining it.
+//! [`propagation::ConsensusProposalMessageV1`] carries a whole
+//! `hn_state::BlockEnvelope` plus the proposer's own
+//! `hn_crypto::SignatureEnvelope` over its `block_hash` (ADR-0042,
+//! "Receiver-Side Header Verification") — a receiver independently
+//! recomputes `block_hash`, authenticates the proposer, and
+//! cross-checks the header against the body before ever handing
+//! anything to `hn_consensus::ConsensusEngine::handle_proposal`, not a
+//! value this message's own shape can be passed straight through to
+//! unchanged. An individual `hn_state::ConsensusVote`/
+//! `QuorumCertificate` travels as its own canonical bytes directly
+//! under [`registry::MessageType::ConsensusVote`]/
 //! [`registry::MessageType::QuorumCertificateMessage`] — no wrapper
 //! struct needed.
 //!
@@ -105,9 +108,9 @@ pub use handshake::{
 };
 pub use identity::peer_id;
 pub use propagation::{
-    BlockAnnounceV1, BlockRequestV1, BlockResponseV1, ConsensusProposalMessageV1, MAX_QC_BLOB_LEN,
-    MAX_TRANSACTION_BLOB_LEN, MAX_TRANSACTIONS_PER_MESSAGE, TransactionAnnounceV1,
-    TransactionRequestV1, TransactionResponseV1,
+    BlockAnnounceV1, BlockRequestV1, BlockResponseV1, ConsensusProposalMessageV1,
+    MAX_BLOCK_ENVELOPE_BLOB_LEN, MAX_TRANSACTION_BLOB_LEN, MAX_TRANSACTIONS_PER_MESSAGE,
+    TransactionAnnounceV1, TransactionRequestV1, TransactionResponseV1,
 };
 pub use registry::{Channel, MessageType};
 pub use transport::{MAX_FRAME_LEN, PeerLink, read_frame, spawn_peer_link, write_frame};

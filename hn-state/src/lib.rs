@@ -347,6 +347,7 @@ mod active_set;
 mod asset_value;
 mod balance_value;
 mod block_body;
+mod block_envelope;
 mod block_hash;
 mod block_header;
 mod block_transition;
@@ -405,6 +406,10 @@ pub use balance_value::{BALANCE_VERSION_1, BalanceValueV1};
 pub use block_body::{
     BODY_VERSION_1, BlockBody, MAX_EVIDENCE_BLOB_LEN, MAX_EVIDENCE_PER_BLOCK, MAX_RECEIPT_BLOB_LEN,
     MAX_TRANSACTIONS_PER_BLOCK,
+};
+pub use block_envelope::{
+    BLOCK_VERSION_1, BlockEnvelope, MAX_BLOCK_BODY_BLOB_LEN, MAX_BLOCK_HEADER_BLOB_LEN,
+    MAX_JUSTIFICATION_BLOB_LEN,
 };
 pub use block_hash::block_hash;
 pub use block_header::{BlockHeader, HEADER_VERSION_1};

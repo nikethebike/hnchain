@@ -16,9 +16,10 @@ use hn_network::{
     HandshakeState, Hello, MessageType, P2PMessageEnvelopeV1, PeerLink, spawn_peer_link,
 };
 use hn_state::{
-    BlockHeader, ConsensusVote, HEADER_VERSION_1, QuorumCertificate, StateCommitter, StateReader,
-    ValidatorRecordV1, ValidatorStatus, VoteSigningPayloadV1, VoteTargetType, VoteType, Write,
-    active_set, extra_data_hash, list_empty_root, protocol_parameters_placeholder_hash,
+    BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, ConsensusVote,
+    HEADER_VERSION_1, QuorumCertificate, StateCommitter, StateReader, ValidatorRecordV1,
+    ValidatorStatus, VoteSigningPayloadV1, VoteTargetType, VoteType, Write, active_key, active_set,
+    extra_data_hash, list_empty_root, protocol_parameters_placeholder_hash,
 };
 use hn_storage::RedbStateStore;
 
@@ -124,6 +125,37 @@ struct Ctx {
     /// unambiguous "no real parent yet" value, not a claim about what
     /// a real genesis block's `parent_block_hash` should be).
     last_block_hash: Digest,
+    /// The previous block's own real `header.timestamp`, chained
+    /// forward the same way as `last_block_hash` — `UnixTimeMillis::
+    /// from_millis(0)` before the first block, the same class of
+    /// sentinel. Used by [`verify_proposal`]'s timestamp-monotonicity
+    /// check (ADR-0042), only when [`Ctx::chain_position_verified`].
+    last_timestamp: UnixTimeMillis,
+    /// Whether `last_block_hash`/`last_timestamp` are actually known
+    /// to be correct for this engine's *current* height (ADR-0042,
+    /// "Decided: Chain-Position-Gated Checks") — `true` for a node
+    /// that has never needed [`maybe_sync_forward`]'s passive
+    /// catch-up jump (every height it has ever reached, it reached by
+    /// locally finalizing the one before it); set `false` by that
+    /// jump itself (the jumped-to height's real parent is unknown —
+    /// real block/state sync, ADR-0016, remains out of scope) and back
+    /// to `true` the next time this node locally finalizes a block
+    /// (from that point forward, `last_block_hash`/`last_timestamp`
+    /// are correct again). `verify_proposal` skips the
+    /// `parent_block_hash`/`timestamp` checks specifically (and only)
+    /// while this is `false` — every other check it performs needs no
+    /// chain-position context at all.
+    chain_position_verified: bool,
+    /// `block_hash -> that proposal's own verified `BlockHeader``,
+    /// mirroring `ConsensusEngine`'s own internal `proposed_blocks`
+    /// cache (the engine caches `transactions`; this node-layer cache
+    /// exists because the engine has no field for `timestamp` at all,
+    /// and `last_timestamp` needs the just-finalized block's own real
+    /// value, not a recomputed one). Populated at the same two call
+    /// sites as every `ConsensusEngine::handle_proposal` call
+    /// (self-propose and verified-receive), and cleared the same way
+    /// on a successful finalize — see [`act_on`]'s `Finalized` branch.
+    pending_headers: HashMap<Digest, BlockHeader>,
 }
 
 /// Runs this validator's node process until killed (ADR-0038,
@@ -264,6 +296,9 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         round_started: false,
         state_root,
         last_block_hash: [0_u8; 32],
+        last_timestamp: UnixTimeMillis::from_millis(0),
+        chain_position_verified: true,
+        pending_headers: HashMap::new(),
     };
 
     drive(&mut ctx, event_rx, config.peers.len())
@@ -561,7 +596,8 @@ fn handle_peer_message(
         }
         (Channel::Consensus, MessageType::ConsensusProposal) => {
             let message = ConsensusProposalMessageV1::decode(&envelope.payload)?;
-            maybe_sync_forward(ctx, message.height.get())?;
+            let header = &message.envelope.header;
+            maybe_sync_forward(ctx, header.height.get())?;
             // A proposal that does not target this engine's own exact
             // current (height, round, step) is either stale (a round
             // already left behind) or ahead of what
@@ -571,19 +607,50 @@ fn handle_peer_message(
             // silently dropped rather than fed to
             // `ConsensusEngine::handle_proposal` (ADR-0034's own closed,
             // total `apply` would reject it as `UnexpectedEvent`).
-            // `ConsensusProposalMessageV1.height`/`.round` (ADR-0039)
-            // make this an exact check now, not the weaker
-            // step-only guard this branch used before.
-            if message.height.get() == ctx.engine.state().height.get()
-                && message.round.get() == ctx.engine.state().round.get()
+            // `BlockHeader.height`/`.round` (ADR-0039's own reason for
+            // self-describing height/round survives the move from a
+            // bare top-level field into the header itself, ADR-0042)
+            // make this an exact check, not the weaker step-only guard
+            // this branch used before ADR-0039.
+            if header.height.get() == ctx.engine.state().height.get()
+                && header.round.get() == ctx.engine.state().round.get()
                 && ctx.engine.state().step == hn_consensus::ConsensusStep::Propose
             {
-                let action = ctx.engine.handle_proposal(
-                    message.block_hash,
-                    message.transactions,
-                    message.justification,
-                )?;
-                act_on(ctx, action)?;
+                // Receiver-side verification (ADR-0042, "Decided:
+                // Receiver-Side Verification Rules") -- a failure here
+                // is a dropped, logged message, never a fatal error:
+                // this is externally-triggerable network input, and no
+                // externally-triggerable input may crash this process.
+                let chain_position = ctx
+                    .chain_position_verified
+                    .then_some((ctx.last_block_hash, ctx.last_timestamp));
+                match verify_proposal(
+                    &message,
+                    ctx.chain_id,
+                    ctx.network_id,
+                    &ctx.ordered_ids,
+                    &ctx.store,
+                    ctx.state_root,
+                    chain_position,
+                ) {
+                    Ok(block_hash) => {
+                        ctx.pending_headers
+                            .insert(block_hash, message.envelope.header.clone());
+                        let action = ctx.engine.handle_proposal(
+                            block_hash,
+                            message.envelope.body.transactions,
+                            message.envelope.justification,
+                        )?;
+                        act_on(ctx, action)?;
+                    }
+                    Err(reason) => {
+                        log_line(&format!(
+                            "REJECTED proposal height={} round={} reason=\"{reason}\"",
+                            header.height.get(),
+                            header.round.get(),
+                        ));
+                    }
+                }
             }
         }
         _ => {}
@@ -629,8 +696,121 @@ fn maybe_sync_forward(ctx: &mut Ctx, observed_height: u64) -> NodeResult<()> {
     ));
     ctx.engine = ConsensusEngine::new_height(BlockHeight::new(observed_height));
     ctx.round_started = true;
+    // This jump's own target height's real parent/timestamp are
+    // unknown (ADR-0042) -- `verify_proposal` must not check either
+    // against `last_block_hash`/`last_timestamp` until this node
+    // locally finalizes a block again.
+    ctx.chain_position_verified = false;
     let action = ctx.engine.begin_round()?;
     act_on(ctx, action)
+}
+
+/// Verifies an incoming [`ConsensusProposalMessageV1`] before it is
+/// ever handed to [`ConsensusEngine::handle_proposal`] (ADR-0042,
+/// "Decided: Receiver-Side Verification Rules") — returns the
+/// envelope's own, independently recomputed `block_hash` on success.
+///
+/// A failure here is a dropped message, not a fatal error: unlike this
+/// crate's own internal passive-catch-up race
+/// (`ConsensusError::UnknownProposedBlock`, handled in `act_on`'s
+/// `Finalized` branch), this is externally-triggerable network input —
+/// no externally-triggerable input may ever crash this process, the
+/// same principle ADR-0038's own "no-panic discipline" already applies
+/// at the process boundary, now applied one layer in, at the
+/// message-verification boundary. (Decoding `envelope.payload` itself
+/// can still propagate a fatal error on malformed bytes, same as every
+/// other message type already does in `handle_peer_message` — a real,
+/// separate, broader decode-resilience gap this ADR does not attempt
+/// to close.)
+///
+/// Checks, in order: header hash recomputation (implicit —
+/// `block_hash` is derived, never trusted as a separately-carried
+/// claim), chain/network binding, proposer eligibility
+/// (`round_proposer`), proposer signature (against that proposer's own
+/// registered consensus key), header-vs-body consistency
+/// (`BlockEnvelope::verify_body_matches_header`), this devnet's own
+/// fixed `state_root`/`consensus_root`/`protocol_parameters_hash`
+/// values, `parent_block_hash`/timestamp monotonicity (only while
+/// `chain_position` is `Some` — ADR-0042's own "Decided:
+/// Chain-Position-Gated Checks"), and finally the embedded
+/// `justification` quorum certificate's own signatures, if present.
+///
+/// Takes only the specific pieces of [`Ctx`] this check actually
+/// needs, rather than the whole context, so it can be exercised
+/// directly in a unit test without constructing a full `Ctx`'s own
+/// sockets/channels/handshake state — none of which this function
+/// touches. `chain_position` is `Some((last_block_hash,
+/// last_timestamp))` exactly when the caller's own
+/// `Ctx::chain_position_verified` is `true`; `None` skips the two
+/// checks that need it.
+fn verify_proposal(
+    message: &ConsensusProposalMessageV1,
+    chain_id: u8,
+    network_id: u16,
+    ordered_ids: &[Digest],
+    store: &impl StateReader,
+    state_root: Digest,
+    chain_position: Option<(Digest, UnixTimeMillis)>,
+) -> Result<Digest, String> {
+    let header = &message.envelope.header;
+    let block_hash = message
+        .envelope
+        .block_hash()
+        .map_err(|error| format!("header hash computation failed: {error}"))?;
+
+    if header.chain_id != chain_id || header.network_id != network_id {
+        return Err("header chain_id/network_id does not match this node's own".to_string());
+    }
+
+    if round_proposer(ordered_ids, header.height, header.round) != Some(header.proposer) {
+        return Err(format!(
+            "{} is not this round's legitimate proposer",
+            hex(&header.proposer)
+        ));
+    }
+
+    let key = active_key(store, &header.proposer)
+        .map_err(|error| format!("could not resolve the proposer's registered key: {error}"))?
+        .ok_or_else(|| "the proposer has no registered consensus key".to_string())?;
+    message
+        .proposer_signature
+        .verify(&key, &block_hash)
+        .map_err(|error| format!("proposer signature invalid: {error}"))?;
+
+    message
+        .envelope
+        .verify_body_matches_header()
+        .map_err(|error| format!("body does not match header: {error}"))?;
+
+    if header.state_root != state_root {
+        return Err("state_root does not match this devnet's own fixed value".to_string());
+    }
+    if header.consensus_root != DEVNET_VSC {
+        return Err("consensus_root does not match this devnet's own fixed value".to_string());
+    }
+    let expected_protocol_parameters_hash = protocol_parameters_placeholder_hash()
+        .map_err(|error| format!("could not compute the expected placeholder: {error}"))?;
+    if header.protocol_parameters_hash != expected_protocol_parameters_hash {
+        return Err("protocol_parameters_hash does not match the expected placeholder".to_string());
+    }
+
+    if let Some((last_block_hash, last_timestamp)) = chain_position {
+        if header.parent_block_hash != last_block_hash {
+            return Err(
+                "parent_block_hash does not match this node's own last finalized block".to_string(),
+            );
+        }
+        if header.timestamp.as_millis() <= last_timestamp.as_millis() {
+            return Err("timestamp does not strictly advance past the parent's own".to_string());
+        }
+    }
+
+    if let Some(qc) = &message.envelope.justification {
+        qc.verify_signatures(store, ordered_ids)
+            .map_err(|error| format!("justification quorum certificate invalid: {error}"))?;
+    }
+
+    Ok(block_hash)
 }
 
 /// Whether `qc` still has a defined transition from the engine's
@@ -700,6 +880,19 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
                         result.applied.len()
                     ));
                     ctx.last_block_hash = block_hash;
+                    // `pending_headers` mirrors the engine's own
+                    // `proposed_blocks` cache (ADR-0042) -- the just-
+                    // finalized block's own real `timestamp` becomes
+                    // the new monotonicity floor, and every other
+                    // cached header was for a competing, now-
+                    // irrelevant round at this same height, exactly
+                    // like `commit_finalized_block`'s own
+                    // `proposed_blocks.clear()`.
+                    if let Some(header) = ctx.pending_headers.remove(&block_hash) {
+                        ctx.last_timestamp = header.timestamp;
+                    }
+                    ctx.pending_headers.clear();
+                    ctx.chain_position_verified = true;
                     let action = ctx.engine.begin_new_height()?;
                     act_on(ctx, action)?;
                 }
@@ -750,17 +943,39 @@ fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<()> {
     );
 
     if round_proposer(&ctx.ordered_ids, height, round) == Some(ctx.own_validator_id) {
-        let block_hash = build_block_header(ctx, height, round)?.block_hash()?;
+        let header = build_block_header(ctx, height, round)?;
+        let block_hash = header.block_hash()?;
+        let body = BlockBody {
+            body_version: BODY_VERSION_1,
+            transactions: Vec::new(),
+            receipts: Vec::new(),
+            evidence: Vec::new(),
+            extra_data: Vec::new(),
+        };
+        ctx.pending_headers.insert(block_hash, header.clone());
+        let envelope = BlockEnvelope {
+            block_version: BLOCK_VERSION_1,
+            header,
+            body,
+            // Re-proposing a value this node is itself locked on under
+            // a real `prevote` quorum certificate (`hn_consensus::
+            // ConsensusState`'s own "Locking rule") is not wired here
+            // -- unchanged from before this pass, a distinct, separate
+            // gap this ADR does not attempt to close.
+            justification: None,
+        };
+        let proposer_signature = SignatureEnvelope {
+            algorithm_id: ctx.consensus_keypair.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: ctx.consensus_keypair.sign(&block_hash).to_vec(),
+        };
         broadcast(
             ctx,
             Channel::Consensus,
             MessageType::ConsensusProposal,
             ConsensusProposalMessageV1 {
-                height,
-                round,
-                block_hash,
-                transactions: Vec::new(),
-                justification: None,
+                envelope,
+                proposer_signature,
             }
             .encode()?,
         )?;
@@ -919,4 +1134,391 @@ fn hex(bytes: &[u8]) -> String {
 fn log_line(line: &str) {
     println!("{line}");
     let _ = std::io::Write::flush(&mut std::io::stdout());
+}
+
+#[cfg(test)]
+mod tests {
+    use hn_core::{BlockHeight, Round};
+    use hn_state::{StateWriter, ValidatorSection, validator_section_state_key};
+    use hn_storage::InMemoryStateStore;
+
+    use super::*;
+
+    const CHAIN_ID: u8 = 1;
+    const NETWORK_ID: u16 = 1;
+    const STATE_ROOT: Digest = [0x02; 32];
+    const HEIGHT: u64 = 5;
+    const ROUND: u64 = 0;
+
+    /// `round_proposer([id_a, id_b], height=5, round=0)` selects index
+    /// `(5 + 0) % 2 == 1` — validator B, by construction, so these
+    /// fixtures exercise the real eligibility formula rather than
+    /// assuming a result.
+    struct Fixture {
+        store: InMemoryStateStore,
+        ordered_ids: Vec<Digest>,
+        legitimate_proposer: Ed25519KeyPair,
+        legitimate_proposer_id: Digest,
+    }
+
+    fn fixture() -> NodeResult<Fixture> {
+        let mut store = InMemoryStateStore::new();
+        let id_a = [0x10_u8; 32];
+        let id_b = [0x20_u8; 32];
+        let keypair_a = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, id_a);
+        let keypair_b = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, id_b);
+        for (validator_id, keypair) in [(id_a, &keypair_a), (id_b, &keypair_b)] {
+            let record = ValidatorRecordV1 {
+                validator_id,
+                consensus_key: keypair.key_descriptor(),
+                bonded_stake: 100,
+                voting_power: 100,
+                status: ValidatorStatus::Active,
+                pending_unbonding: None,
+            };
+            let key = validator_section_state_key(&validator_id, ValidatorSection::Record)?;
+            store.set(key, record.encode()?)?;
+        }
+        Ok(Fixture {
+            store,
+            ordered_ids: vec![id_a, id_b],
+            legitimate_proposer: keypair_b,
+            legitimate_proposer_id: id_b,
+        })
+    }
+
+    /// A self-consistent, correctly-signed envelope for `proposer_id`/
+    /// `keypair` — every check `verify_proposal` can satisfy without
+    /// external context already holds; callers tamper one field at a
+    /// time to exercise one specific rejection.
+    fn signed_envelope(
+        proposer_id: Digest,
+        keypair: &Ed25519KeyPair,
+        parent_block_hash: Digest,
+        timestamp_millis: u64,
+    ) -> NodeResult<(BlockEnvelope, SignatureEnvelope)> {
+        let body = BlockBody {
+            body_version: BODY_VERSION_1,
+            transactions: Vec::new(),
+            receipts: Vec::new(),
+            evidence: Vec::new(),
+            extra_data: Vec::new(),
+        };
+        let header = BlockHeader {
+            header_version: HEADER_VERSION_1,
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            height: BlockHeight::new(HEIGHT),
+            round: Round::new(ROUND),
+            epoch: Epoch::new(0),
+            protocol_epoch: ProtocolEpoch::GENESIS,
+            parent_block_hash,
+            proposer: proposer_id,
+            timestamp: UnixTimeMillis::from_millis(timestamp_millis),
+            transactions_root: body.transactions_root()?,
+            state_root: STATE_ROOT,
+            receipts_root: body.receipts_root()?,
+            events_root: list_empty_root()?,
+            consensus_root: DEVNET_VSC,
+            evidence_root: body.evidence_root()?,
+            protocol_parameters_hash: protocol_parameters_placeholder_hash()?,
+            extra_data_hash: extra_data_hash(&[])?,
+        };
+        let envelope = BlockEnvelope {
+            block_version: BLOCK_VERSION_1,
+            header,
+            body,
+            justification: None,
+        };
+        let block_hash = envelope.block_hash()?;
+        let signature = SignatureEnvelope {
+            algorithm_id: keypair.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: keypair.sign(&block_hash).to_vec(),
+        };
+        Ok((envelope, signature))
+    }
+
+    const PARENT: Digest = [0x30; 32];
+    const PARENT_TIMESTAMP_MS: u64 = 1_000;
+    const VALID_TIMESTAMP_MS: u64 = 2_000;
+
+    #[test]
+    fn accepts_a_legitimate_proposal_with_a_known_chain_position() -> NodeResult<()> {
+        let fixture = fixture()?;
+        let (envelope, proposer_signature) = signed_envelope(
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            PARENT,
+            VALID_TIMESTAMP_MS,
+        )?;
+        let expected_hash = envelope.block_hash()?;
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            proposer_signature,
+        };
+        let result = verify_proposal(
+            &message,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            &fixture.store,
+            STATE_ROOT,
+            Some((PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS))),
+        );
+        assert_eq!(result, Ok(expected_hash));
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_any_parent_and_timestamp_while_chain_position_is_unknown() -> NodeResult<()> {
+        let fixture = fixture()?;
+        let (envelope, proposer_signature) = signed_envelope(
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            [0xff; 32], // not this node's own last_block_hash
+            0,          // older than any real parent timestamp
+        )?;
+        let expected_hash = envelope.block_hash()?;
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            proposer_signature,
+        };
+        let result = verify_proposal(
+            &message,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            &fixture.store,
+            STATE_ROOT,
+            None,
+        );
+        assert_eq!(result, Ok(expected_hash));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_a_validator_that_is_not_this_rounds_legitimate_proposer() -> NodeResult<()> {
+        let fixture = fixture()?;
+        // Validator A's own real key, correctly self-signed -- a valid
+        // signature from a real, registered validator who is simply
+        // not the proposer this exact (height, round) selects.
+        let impostor_id = [0x10_u8; 32];
+        let impostor_keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, impostor_id);
+        let (envelope, proposer_signature) =
+            signed_envelope(impostor_id, &impostor_keypair, PARENT, VALID_TIMESTAMP_MS)?;
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            proposer_signature,
+        };
+        let result = verify_proposal(
+            &message,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            &fixture.store,
+            STATE_ROOT,
+            None,
+        );
+        assert!(result.is_err_and(|reason| reason.contains("legitimate proposer")));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_a_tampered_signature() -> NodeResult<()> {
+        let fixture = fixture()?;
+        let (envelope, mut proposer_signature) = signed_envelope(
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            PARENT,
+            VALID_TIMESTAMP_MS,
+        )?;
+        proposer_signature.signature[0] ^= 0xff;
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            proposer_signature,
+        };
+        let result = verify_proposal(
+            &message,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            &fixture.store,
+            STATE_ROOT,
+            None,
+        );
+        assert!(result.is_err_and(|reason| reason.contains("signature invalid")));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_a_header_that_disagrees_with_its_own_body() -> NodeResult<()> {
+        let fixture = fixture()?;
+        let (mut envelope, _) = signed_envelope(
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            PARENT,
+            VALID_TIMESTAMP_MS,
+        )?;
+        // Tampered *after* the original signature was computed, then
+        // re-signed over the tampered header's own (now different)
+        // hash -- a real proposer could do exactly this; the
+        // signature alone cannot catch a header that lies about its
+        // own body.
+        envelope.header.transactions_root = [0xaa; 32];
+        let block_hash = envelope.block_hash()?;
+        let proposer_signature = SignatureEnvelope {
+            algorithm_id: fixture.legitimate_proposer.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: fixture.legitimate_proposer.sign(&block_hash).to_vec(),
+        };
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            proposer_signature,
+        };
+        let result = verify_proposal(
+            &message,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            &fixture.store,
+            STATE_ROOT,
+            None,
+        );
+        assert!(result.is_err_and(|reason| reason.contains("does not match header")));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_a_mismatched_state_root() -> NodeResult<()> {
+        let fixture = fixture()?;
+        let (envelope, proposer_signature) = signed_envelope(
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            PARENT,
+            VALID_TIMESTAMP_MS,
+        )?;
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            proposer_signature,
+        };
+        let result = verify_proposal(
+            &message,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            &fixture.store,
+            [0xee; 32], // not this fixture's own STATE_ROOT
+            None,
+        );
+        assert!(result.is_err_and(|reason| reason.contains("state_root")));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_a_wrong_parent_block_hash_when_chain_position_is_known() -> NodeResult<()> {
+        let fixture = fixture()?;
+        let (envelope, proposer_signature) = signed_envelope(
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            [0xff; 32], // not PARENT
+            VALID_TIMESTAMP_MS,
+        )?;
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            proposer_signature,
+        };
+        let result = verify_proposal(
+            &message,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            &fixture.store,
+            STATE_ROOT,
+            Some((PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS))),
+        );
+        assert!(result.is_err_and(|reason| reason.contains("parent_block_hash")));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_a_non_monotonic_timestamp_when_chain_position_is_known() -> NodeResult<()> {
+        let fixture = fixture()?;
+        let (envelope, proposer_signature) = signed_envelope(
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            PARENT,
+            PARENT_TIMESTAMP_MS, // not strictly after the parent's own
+        )?;
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            proposer_signature,
+        };
+        let result = verify_proposal(
+            &message,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            &fixture.store,
+            STATE_ROOT,
+            Some((PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS))),
+        );
+        assert!(result.is_err_and(|reason| reason.contains("timestamp")));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_an_invalid_justification_quorum_certificate() -> NodeResult<()> {
+        let fixture = fixture()?;
+        let (mut envelope, proposer_signature) = signed_envelope(
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            PARENT,
+            VALID_TIMESTAMP_MS,
+        )?;
+        envelope.justification = Some(QuorumCertificate {
+            certificate_type: VoteType::Prevote,
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            epoch: Epoch::new(0),
+            height: BlockHeight::new(HEIGHT),
+            round: Round::new(ROUND),
+            validator_set_commitment: DEVNET_VSC,
+            target_type: VoteTargetType::Block,
+            target_hash: envelope.block_hash()?,
+            total_voting_power: 200,
+            signed_voting_power: 200,
+            signer_commitment: vec![0b0000_0011],
+            // Fabricated, not a real signature from either registered
+            // validator -- `verify_signatures` must catch this itself;
+            // nothing upstream of it does.
+            aggregate_proof: vec![
+                SignatureEnvelope {
+                    algorithm_id: 1,
+                    key_reference: None,
+                    signature: vec![0xaa; 64],
+                },
+                SignatureEnvelope {
+                    algorithm_id: 1,
+                    key_reference: None,
+                    signature: vec![0xbb; 64],
+                },
+            ],
+        });
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            proposer_signature,
+        };
+        let result = verify_proposal(
+            &message,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            &fixture.store,
+            STATE_ROOT,
+            None,
+        );
+        assert!(result.is_err_and(|reason| reason.contains("justification")));
+        Ok(())
+    }
 }

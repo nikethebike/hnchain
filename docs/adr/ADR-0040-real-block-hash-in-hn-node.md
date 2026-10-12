@@ -16,7 +16,12 @@ Depends On:
 
 Supersedes: None
 
-Referenced By: None
+Referenced By:
+
+- ADR-0042: BlockEnvelope And Receiver-Side Header Verification
+  (closes this ADR's own "Explicitly Not Resolved: Receiver-Side
+  Header Reconstruction" — a receiver now recomputes and verifies
+  `block_hash` rather than trusting a proposer's claimed value)
 
 ## Context
 
@@ -103,20 +108,25 @@ digest, not a synthetic one. Field by field:
 
 ### Explicitly Not Resolved: Receiver-Side Header Reconstruction
 
-A receiving node still trusts `ConsensusProposalMessageV1.block_hash`
-exactly as the proposer sends it — unchanged from before this pass.
-Independently reconstructing the proposer's own `BlockHeader` to verify
-the claimed hash would require the receiver to already know or trust
-several proposer-local values the message does not carry today
-(`timestamp`, in particular — no receiver can reproduce a proposer's
-own wall-clock reading bit-for-bit), and is a distinct, larger
-verification task this ADR does not attempt. The security posture is
-therefore unchanged from ADR-0037: a dishonest proposer could still
-claim any `block_hash` it likes for an empty block; what changes here
-is that an *honest* proposer's claimed hash is now a real,
-independently-recomputable commitment to real header content, not an
-opaque per-round counter — a necessary foundation for real verification
-later, not real verification itself.
+**Resolved by ADR-0042** ("BlockEnvelope And Receiver-Side Header
+Verification"). At the time this ADR was written, a receiving node
+still trusted `ConsensusProposalMessageV1.block_hash` exactly as the
+proposer sent it. Independently reconstructing the proposer's own
+`BlockHeader` to verify the claimed hash would have required the
+receiver to already know or trust several proposer-local values the
+message did not carry at all (`timestamp`, in particular — no receiver
+can reproduce a proposer's own wall-clock reading bit-for-bit). ADR-0042
+resolves this not by reconstructing the header from scratch, but by
+having the proposer send the whole header (inside a `BlockEnvelope`)
+and sign its own `block_hash` — the receiver recomputes the hash from
+the received bytes and verifies the signature, so `timestamp` never
+needs to be independently reproduced, only accepted (bounded by strict
+monotonicity against the receiver's own last finalized block's
+timestamp, once that is itself known to be correct). The security
+posture this paragraph originally described — "an honest proposer's
+claimed hash is now a real, independently-recomputable commitment ...
+a necessary foundation for real verification later, not real
+verification itself" — is exactly the foundation ADR-0042 built on.
 
 ## Rejected Options
 
@@ -154,8 +164,12 @@ Unverified `block_hash` claims:
 
 - Risk: a dishonest proposer could send peers a `block_hash` that does
   not match any header it actually holds.
-- Mitigation: unchanged from ADR-0037 — named explicitly above, not a
-  new gap this pass introduces.
+- Mitigation: **closed by ADR-0042** — a receiver now recomputes
+  `block_hash` from the proposer's own sent header and verifies a
+  signature over it, rather than trusting a bare claimed value. At the
+  time this ADR was written, the mitigation was unchanged from
+  ADR-0037 (named explicitly above, not a new gap this pass
+  introduced).
 
 ## Compatibility
 
@@ -166,7 +180,10 @@ receiver can observe or needs to know about.
 
 ## Open Decisions
 
-- receiver-side header reconstruction and verification
+- receiver-side header reconstruction and verification — **resolved,
+  ADR-0042**
+- `BlockEnvelope`/`justification` wiring (ADR-0008) — **resolved,
+  ADR-0042**
 - real `state_root`/`transactions_root`/`receipts_root`/`events_root`
   once blocks carry real transactions
 - real `consensus_root` once `ValidatorSetCommitmentV1`'s own canonical
@@ -175,7 +192,6 @@ receiver can observe or needs to know about.
   `validator_address_body`-equivalent function exists yet)
 - genesis's own real `parent_block_hash` value (ADR-0008, "Parent
   Link," unchanged)
-- `BlockEnvelope`/`justification` wiring (ADR-0008, unchanged)
 
 ## Related Specifications
 

@@ -510,6 +510,24 @@ pub enum StateError {
         /// The rejected version.
         value: u16,
     },
+    /// A decoded `BlockEnvelope.block_version` does not match
+    /// [`crate::block_envelope::BLOCK_VERSION_1`], the only shape this
+    /// implementation understands.
+    UnsupportedBlockEnvelopeVersion {
+        /// The rejected version.
+        value: u16,
+    },
+    /// [`crate::BlockEnvelope::verify_body_matches_header`] (ADR-0042,
+    /// "Receiver-Side Header Verification") found a header root/hash
+    /// field that does not match the value independently recomputed
+    /// from this same envelope's own `body` — the header and body
+    /// disagree about what the block actually contains.
+    BlockBodyHeaderMismatch {
+        /// The disagreeing field's own name (`"transactions_root"`,
+        /// `"receipts_root"`, `"evidence_root"`, `"events_root"`, or
+        /// `"extra_data_hash"`).
+        field: &'static str,
+    },
 }
 
 impl From<HashError> for StateError {
@@ -770,6 +788,15 @@ impl core::fmt::Display for StateError {
             }
             Self::UnsupportedBlockBodyVersion { value } => {
                 write!(formatter, "unsupported body_version {value}")
+            }
+            Self::UnsupportedBlockEnvelopeVersion { value } => {
+                write!(formatter, "unsupported block_version {value}")
+            }
+            Self::BlockBodyHeaderMismatch { field } => {
+                write!(
+                    formatter,
+                    "header.{field} does not match the body it was sent with"
+                )
             }
         }
     }

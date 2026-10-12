@@ -34,6 +34,12 @@ Referenced By:
   `GenesisManifest.extra_data` reuses the exact same
   `MAX_EXTRA_DATA_LEN`/`extra_data_hash` this ADR decided, not a
   parallel genesis-specific mechanism)
+- ADR-0042: BlockEnvelope And Receiver-Side Header Verification
+  (assembles this ADR's own long-open `BlockEnvelope`
+  `block_version`/`header`/`body`/`justification` wrapper as a real
+  `hn_state::BlockEnvelope` type, and wires a receiver-side
+  verification pipeline around it — closing this ADR's own
+  "Explicitly not attempted here: `BlockEnvelope`" item)
 
 ## Context
 
@@ -862,8 +868,10 @@ New body sections may be backward-compatible only if:
   still-unstarted integration task, not blocked on a missing type
   anymore
 - `BlockEnvelope` (`block_version`/`header`/`body`/`justification`) —
-  not attempted by "Decided: `BlockHeader`/`BlockBody` Structs," above;
-  a distinct, still-open item of its own
+  **resolved, ADR-0042**: `hn_state::BlockEnvelope`, wrapping the
+  already-decided `BlockHeader`/`BlockBody` plus an
+  `Option<QuorumCertificate>` justification exactly as this ADR's own
+  conceptual sketch names
 
 ## Related Specifications
 
