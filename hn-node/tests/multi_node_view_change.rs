@@ -5,19 +5,21 @@
 //! entirely through the network stack, never an in-process function
 //! call between "nodes."
 //!
-//! Validator index 0 (this cluster's `round_proposer` at height 0,
-//! round 0) is deliberately never started, simulating a dead/
-//! unreachable leader. The three running validators hold 3 of 4 equal
-//! shares of voting power (75%), comfortably above the `2f+1`
-//! threshold, so this is a genuine partial-participation BFT case, not
-//! a 3-of-3 test wearing a 4-validator label. Each running node still
-//! lists the dead validator's address in its own `--peer` list (a real
-//! deployment would not know in advance who is reachable) -- its
-//! dialer thread simply never connects, harmlessly.
+//! Validator index 1 (this cluster's `round_proposer` at height 1,
+//! round 0 -- the first real consensus-produced height; height 0 is
+//! genesis's own real block, ADR-0043, not a consensus round at all)
+//! is deliberately never started, simulating a dead/unreachable
+//! leader. The three running validators hold 3 of 4 equal shares of
+//! voting power (75%), comfortably above the `2f+1` threshold, so this
+//! is a genuine partial-participation BFT case, not a 3-of-3 test
+//! wearing a 4-validator label. Each running node still lists the dead
+//! validator's address in its own `--peer` list (a real deployment
+//! would not know in advance who is reachable) -- its dialer thread
+//! simply never connects, harmlessly.
 //!
 //! Proves: round 0 never finalizes (the dead proposer's own round
 //! produces nothing); every running process eventually finalizes height
-//! 0 at round 1 (view change: propose-timeout, round advance, a
+//! 1 at round 1 (view change: propose-timeout, round advance, a
 //! rotated -- and running -- proposer) with matching block/certificate
 //! values across all three independently-driven processes; a second
 //! height finalizes afterward, proving the chain continues past the
@@ -30,7 +32,7 @@ use std::time::Duration;
 use support::{TestResult, block_field, spawn_node, wait_until_all_log, write_devnet_genesis};
 
 const VALIDATOR_COUNT: u8 = 4;
-const RUNNING_VALIDATORS: [u8; 3] = [1, 2, 3];
+const RUNNING_VALIDATORS: [u8; 3] = [0, 2, 3];
 const BASE_PORT: u16 = 31_700;
 const BASE_TIMEOUT_MS: u64 = 200;
 // See restart_recovery.rs's own identical constant for why this is 90s
@@ -64,11 +66,11 @@ fn three_of_four_validators_survive_a_dead_round_zero_proposer() -> TestResult {
     }
     let node_refs: Vec<&support::NodeProcess> = nodes.iter().collect();
 
-    // Height 0, round 1: the real view change. All three running
+    // Height 1, round 1: the real view change. All three running
     // processes must independently reach it.
     let round1_lines = wait_until_all_log(
         &node_refs,
-        |line| line.starts_with("FINALIZED height=0 round=1 "),
+        |line| line.starts_with("FINALIZED height=1 round=1 "),
         WAIT,
     )?;
 
@@ -78,7 +80,7 @@ fn three_of_four_validators_survive_a_dead_round_zero_proposer() -> TestResult {
     let expected_block = block_field(&round1_lines[0])?.to_string();
     for line in &round1_lines[1..] {
         if block_field(line)? != expected_block {
-            return Err("nodes finalized different blocks at height 0, round 1".into());
+            return Err("nodes finalized different blocks at height 1, round 1".into());
         }
     }
 
@@ -87,9 +89,9 @@ fn three_of_four_validators_survive_a_dead_round_zero_proposer() -> TestResult {
         if node
             .log_snapshot()?
             .iter()
-            .any(|line| line.starts_with("FINALIZED height=0 round=0 "))
+            .any(|line| line.starts_with("FINALIZED height=1 round=0 "))
         {
-            return Err("height 0 round 0 finalized despite its proposer never running".into());
+            return Err("height 1 round 0 finalized despite its proposer never running".into());
         }
     }
 
@@ -97,7 +99,7 @@ fn three_of_four_validators_survive_a_dead_round_zero_proposer() -> TestResult {
     // one-off recovery.
     wait_until_all_log(
         &node_refs,
-        |line| line.starts_with("FINALIZED height=1 "),
+        |line| line.starts_with("FINALIZED height=2 "),
         WAIT,
     )?;
 

@@ -19,7 +19,13 @@ Depends On:
 
 Supersedes: None
 
-Referenced By: None
+Referenced By:
+
+- ADR-0043: Genesis As A Real Block 0 (makes this ADR's own
+  `Ctx.chain_position_verified`/`last_block_hash`/`last_timestamp`
+  mechanism meaningful from the very first real block: seeded from
+  genesis's own real, computed header instead of an arbitrary
+  `[0; 32]`/`0` placeholder)
 
 ## Context
 

@@ -2,7 +2,7 @@
 
 Status: Proposed
 
-Version: 0.2.0
+Version: 0.3.0
 
 Depends On:
 
@@ -15,14 +15,19 @@ Depends On:
 - `docs/adr/ADR-0008-block-format.md`
 - `docs/adr/ADR-0022-protocol-versioning.md`
 - `docs/adr/ADR-0042-block-envelope-and-receiver-side-header-verification.md`
+- `docs/adr/ADR-0043-genesis-as-a-real-block-0.md`
 
 `docs/adr/ADR-0042-block-envelope-and-receiver-side-header-verification.md`
 resolves this document's own long-open `BlockEnvelopeV1` schema (§3, §17)
 as a concrete `hn_state::BlockEnvelope` type, and resolves §13's
 conceptual validation pipeline into a real, implemented receiver-side
-check sequence in `hn-node` — this document keeps its own conceptual
-framing, updated in place to point at that ADR rather than duplicate
-it. This remains Proposed, not Accepted: several other sections
+check sequence in `hn-node`. `docs/adr/ADR-0043-genesis-as-a-real-
+block-0.md` resolves this document's own §12 ("Genesis Block") and its
+own "genesis mapping" Open Decision (§17) — genesis now maps to a real
+`BlockHeader`, and the first real consensus-produced block starts at
+height 1, not 0. This document keeps its own conceptual framing,
+updated in place to point at both ADRs rather than duplicate them.
+This remains Proposed, not Accepted: several other sections
 (receipt schema, size limits, full genesis-to-block-0 mapping) remain
 genuinely open regardless.
 
@@ -462,6 +467,19 @@ The genesis specification defines:
 The final block format must define how genesis maps into `BlockEnvelopeV1` or a
 dedicated genesis envelope.
 
+**Resolved** (ADR-0043): genesis maps directly into a real
+`BlockHeader` (not a dedicated genesis envelope) — every node
+constructs this header identically from the same, already
+`genesis_hash`-verified `GenesisManifest`. `height = BlockHeight::
+GENESIS` (`0`), `parent_block_hash`/`proposer` are both `[0; 32]`
+("no predecessor," "no validator — protocol-authored," per §5's own
+`proposer` semantics), `timestamp` is `genesis_time` converted from
+seconds to milliseconds, and `state_root` is `GenesisManifest::
+initial_state_root()`. The first real consensus-produced block starts
+at height `1`, not `0` — genesis alone holds height `0`, so
+`height = parent.height + 1` holds across this boundary exactly as it
+does between any two real blocks.
+
 ## 13. Validation Pipeline
 
 Conceptual validation:
@@ -601,13 +619,10 @@ Test vectors are mandatory before production implementation.
 - final body schema — **resolved**, `hn_state::BlockBody` (same)
 - extra data format — **resolved** (§6/§5.16, ADR-0008 "Decided: Extra
   Data Format")
-- genesis mapping — `docs/specs/core/genesis.md` is now Accepted
-  (ADR-0038) for its own `GenesisManifest` format, and `BlockHeader`/
-  `BlockBody`/`BlockEnvelope` concrete types all now exist (ADR-0008,
-  ADR-0042), but nothing yet actually constructs a genesis block 0
-  from `GenesisManifest` using any of them — narrowed three times now
-  (this entry, "extra data format," and "final block envelope
-  schema," above), not closed
+- genesis mapping — **resolved, ADR-0043**: every node constructs
+  genesis's own real `BlockHeader` directly from `docs/specs/core/
+  genesis.md`'s own `GenesisManifest` (ADR-0038), using the
+  `BlockHeader`/`BlockBody` concrete types (ADR-0008); see §12, above
 - receipt schema (`ReceiptV1` core shape decided, ADR-0006 "Receipts" —
   `fee_charged`/`resource_usage`/`emitted_event_references` still open)
 - event schema (not decided — gated on HNVM; `hn-list-merkle-v1` root

@@ -40,6 +40,9 @@ Referenced By:
   `hn_state::BlockEnvelope` type, and wires a receiver-side
   verification pipeline around it — closing this ADR's own
   "Explicitly not attempted here: `BlockEnvelope`" item)
+- ADR-0043: Genesis As A Real Block 0 (closes this ADR's own "genesis
+  block compatibility rules" Open Decision — every node now constructs
+  genesis's own real `BlockHeader` directly from `GenesisManifest`)
 
 ## Context
 
@@ -857,16 +860,12 @@ New body sections may be backward-compatible only if:
   commitment or amendment mechanism; unlike `fee_limit`/`ReceiptV1`,
   there is still no partial structure to decide toward, not just an
   incomplete one
-- genesis block compatibility rules — every header field resolvable
-  for genesis without inventing new protocol content already was
-  (`state_root`/ADR-0038's own `initial_state_root`, `events_root`,
-  `timestamp`, `protocol_parameters_hash`), and a concrete
-  `BlockHeader`/`BlockBody` type now exists too ("Decided:
-  `BlockHeader`/`BlockBody` Structs," above); this item still stays
-  open regardless, since nothing yet actually *constructs* a genesis
-  block 0 from `GenesisManifest` using that type — a real, separate,
-  still-unstarted integration task, not blocked on a missing type
-  anymore
+- genesis block compatibility rules — **resolved, ADR-0043** ("Genesis
+  As A Real Block 0"): every node now constructs genesis's own real
+  `BlockHeader` directly from `GenesisManifest`, and the first real
+  consensus-produced block starts at height 1 (genesis itself holds
+  height 0, uniquely, keeping `height = parent.height + 1` true across
+  that boundary too)
 - `BlockEnvelope` (`block_version`/`header`/`body`/`justification`) —
   **resolved, ADR-0042**: `hn_state::BlockEnvelope`, wrapping the
   already-decided `BlockHeader`/`BlockBody` plus an

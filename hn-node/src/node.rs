@@ -174,6 +174,8 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
     let mut store = RedbStateStore::open(config.data_dir.join("state.redb"))?;
     init_genesis(&mut store, &manifest)?;
     let state_root = manifest.initial_state_root()?;
+    let genesis_header = genesis_block_header(&manifest)?;
+    let genesis_block_hash = genesis_header.block_hash()?;
 
     let records: Vec<ValidatorRecordV1> = manifest
         .validators
@@ -274,7 +276,10 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
     );
 
     let mut ctx = Ctx {
-        engine: ConsensusEngine::new_height(BlockHeight::GENESIS),
+        // Genesis is height 0 (ADR-0043); the first real
+        // consensus-produced block starts at height 1, keeping
+        // `height = parent.height + 1` true across that boundary too.
+        engine: ConsensusEngine::new_height(BlockHeight::new(1)),
         store,
         records,
         ordered_ids,
@@ -295,8 +300,11 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         dialed_peers: HashMap::new(),
         round_started: false,
         state_root,
-        last_block_hash: [0_u8; 32],
-        last_timestamp: UnixTimeMillis::from_millis(0),
+        // Genesis's own real, independently-recomputable hash/
+        // timestamp (ADR-0043) -- no longer an arbitrary `[0; 32]`/`0`
+        // placeholder nothing could actually get wrong.
+        last_block_hash: genesis_block_hash,
+        last_timestamp: genesis_header.timestamp,
         chain_position_verified: true,
         pending_headers: HashMap::new(),
     };
@@ -1119,6 +1127,71 @@ fn build_block_header(ctx: &Ctx, height: BlockHeight, round: Round) -> NodeResul
     })
 }
 
+/// Genesis's own real `BlockHeader` (ADR-0043, "Genesis As A Real
+/// Block 0") — every node constructs this identically from the exact
+/// same, already `genesis_hash`-verified `GenesisManifest` (ADR-0038),
+/// not a consensus-voted, gossiped, or sentinel value. `BlockHeight::
+/// GENESIS` (0) is genesis's own, sole height — the first real
+/// consensus-produced block now starts at height 1 (`run`'s own
+/// `ConsensusEngine::new_height` call), so `height = parent.height + 1`
+/// holds across this boundary too, not just between real blocks.
+///
+/// This header's own `block_hash` becomes `Ctx.last_block_hash`'s real
+/// starting value (`run`, below), replacing the previous `[0; 32]`
+/// placeholder — `verify_proposal`'s own `parent_block_hash` check
+/// (ADR-0042) is now meaningful from the very first real block onward:
+/// every node independently computes the exact same hash from the
+/// exact same genesis content, so a wrong claimed parent is now
+/// actually detectable, not merely checked against an arbitrary shared
+/// convention nothing could ever really get wrong.
+fn genesis_block_header(manifest: &GenesisManifest) -> NodeResult<BlockHeader> {
+    let body = BlockBody {
+        body_version: BODY_VERSION_1,
+        transactions: Vec::new(),
+        receipts: Vec::new(),
+        evidence: Vec::new(),
+        extra_data: manifest.extra_data.clone(),
+    };
+    Ok(BlockHeader {
+        header_version: HEADER_VERSION_1,
+        chain_id: manifest.chain_id,
+        network_id: manifest.network_id,
+        height: BlockHeight::GENESIS,
+        // Genesis is not reached through any real round -- `0` names
+        // "no round," not a claim about which round produced it.
+        round: Round::new(0),
+        epoch: Epoch::new(0),
+        protocol_epoch: ProtocolEpoch::GENESIS,
+        // Genesis has no predecessor at all -- this is the chain's own
+        // actual first content, not a block with something before it.
+        parent_block_hash: [0_u8; 32],
+        // No validator proposes genesis -- it is the protocol's own
+        // fixed, published data (`BlockHeader.proposer`'s own doc
+        // comment already allows "the proposing validator OR SYSTEM
+        // AUTHORITY's own address_body"); `[0; 32]` names "no
+        // validator," not a placeholder standing in for one.
+        proposer: [0_u8; 32],
+        // `genesis_time` is Unix seconds (ADR-0038); `BlockHeader.
+        // timestamp` is `UnixTimeMillis` (ADR-0008) -- converted once,
+        // here, not left as a silent unit mismatch.
+        timestamp: UnixTimeMillis::from_millis(manifest.genesis_time.saturating_mul(1000)),
+        transactions_root: body.transactions_root()?,
+        state_root: manifest.initial_state_root()?,
+        receipts_root: body.receipts_root()?,
+        events_root: list_empty_root()?,
+        // The same fixed `DEVNET_VSC` every other block in this devnet
+        // already uses (ADR-0010's own `consensus_root ==
+        // validator_set_commitment` equality, kept genuinely true) --
+        // not a separately-computed "real" value just for genesis,
+        // which would make genesis's own `consensus_root` inconsistent
+        // with every block that follows it.
+        consensus_root: DEVNET_VSC,
+        evidence_root: body.evidence_root()?,
+        protocol_parameters_hash: protocol_parameters_placeholder_hash()?,
+        extra_data_hash: body.extra_data_hash()?,
+    })
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -1143,6 +1216,7 @@ mod tests {
     use hn_storage::InMemoryStateStore;
 
     use super::*;
+    use crate::genesis::{GenesisAccount, GenesisAllocations, GenesisValidator};
 
     const CHAIN_ID: u8 = 1;
     const NETWORK_ID: u16 = 1;
@@ -1519,6 +1593,88 @@ mod tests {
             None,
         );
         assert!(result.is_err_and(|reason| reason.contains("justification")));
+        Ok(())
+    }
+
+    fn sample_genesis_manifest(genesis_time: u64, extra_data: Vec<u8>) -> GenesisManifest {
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [0x01; 32]);
+        GenesisManifest {
+            manifest_version: crate::genesis::GENESIS_MANIFEST_VERSION_1,
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            genesis_time,
+            genesis_message: "test genesis".to_string(),
+            validators: vec![GenesisValidator {
+                validator_id: [0x01; 32],
+                consensus_key: keypair.key_descriptor(),
+                bonded_stake: hn_state::MINIMUM_VALIDATOR_BOND,
+            }],
+            allocations: GenesisAllocations {
+                reserve: GenesisAccount {
+                    address: [0xA0; 32],
+                    amount: hn_state::RESERVE_ALLOCATION,
+                },
+                founder: GenesisAccount {
+                    address: [0xA1; 32],
+                    amount: hn_state::FOUNDER_ALLOCATION,
+                },
+                community: GenesisAccount {
+                    address: [0xA2; 32],
+                    amount: hn_state::COMMUNITY_ALLOCATION,
+                },
+            },
+            extra_data,
+        }
+    }
+
+    #[test]
+    fn genesis_block_header_is_deterministic() -> NodeResult<()> {
+        let manifest = sample_genesis_manifest(1_700_000_000, Vec::new());
+        let first = genesis_block_header(&manifest)?;
+        let second = genesis_block_header(&manifest)?;
+        assert_eq!(first, second);
+        Ok(())
+    }
+
+    #[test]
+    fn genesis_block_header_has_no_predecessor_or_proposer() -> NodeResult<()> {
+        let manifest = sample_genesis_manifest(1_700_000_000, Vec::new());
+        let header = genesis_block_header(&manifest)?;
+        assert_eq!(header.height, BlockHeight::GENESIS);
+        assert_eq!(header.parent_block_hash, [0_u8; 32]);
+        assert_eq!(header.proposer, [0_u8; 32]);
+        Ok(())
+    }
+
+    #[test]
+    fn genesis_block_header_converts_genesis_time_seconds_to_millis() -> NodeResult<()> {
+        let manifest = sample_genesis_manifest(5, Vec::new());
+        let header = genesis_block_header(&manifest)?;
+        assert_eq!(header.timestamp.as_millis(), 5_000);
+        Ok(())
+    }
+
+    #[test]
+    fn genesis_block_header_commits_to_the_manifests_own_state_root() -> NodeResult<()> {
+        let manifest = sample_genesis_manifest(1_700_000_000, Vec::new());
+        let header = genesis_block_header(&manifest)?;
+        assert_eq!(header.state_root, manifest.initial_state_root()?);
+        Ok(())
+    }
+
+    #[test]
+    fn genesis_block_header_commits_to_the_manifests_own_extra_data() -> NodeResult<()> {
+        let manifest = sample_genesis_manifest(1_700_000_000, vec![0xab, 0xcd]);
+        let header = genesis_block_header(&manifest)?;
+        assert_eq!(
+            header.extra_data_hash,
+            extra_data_hash(&manifest.extra_data)?
+        );
+        // Not the always-empty hash every other (devnet, zero-
+        // transaction) block currently commits to -- genesis's own
+        // `extra_data` is real content here, and must actually affect
+        // the hash, not be silently ignored by reusing the empty case.
+        assert_ne!(header.extra_data_hash, extra_data_hash(&[])?);
         Ok(())
     }
 }

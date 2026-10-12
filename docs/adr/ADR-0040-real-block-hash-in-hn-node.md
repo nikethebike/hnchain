@@ -22,6 +22,8 @@ Referenced By:
   (closes this ADR's own "Explicitly Not Resolved: Receiver-Side
   Header Reconstruction" — a receiver now recomputes and verifies
   `block_hash` rather than trusting a proposer's claimed value)
+- ADR-0043: Genesis As A Real Block 0 (closes this ADR's own Open
+  Decisions item "genesis's own real `parent_block_hash` value")
 
 ## Context
 
@@ -191,7 +193,9 @@ receiver can observe or needs to know about.
 - real `proposer` address derivation for validators (no
   `validator_address_body`-equivalent function exists yet)
 - genesis's own real `parent_block_hash` value (ADR-0008, "Parent
-  Link," unchanged)
+  Link") — **resolved, ADR-0043**: the first real consensus-produced
+  block's `parent_block_hash` is now genesis's own real, computed
+  `block_hash`, not an arbitrary `[0; 32]` sentinel
 
 ## Related Specifications
 

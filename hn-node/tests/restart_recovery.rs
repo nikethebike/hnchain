@@ -8,7 +8,8 @@
 //! finalizing without it (75% of equal voting power, comfortably above
 //! `2f+1`); the killed validator is then restarted against its own
 //! *same* `--data-dir` and identity, as a brand new OS process that
-//! starts, like every process, at height 0 in memory.
+//! starts, like every process, at height 1 in memory (height 0 is
+//! genesis's own real block, ADR-0043, not a consensus round at all).
 //!
 //! Proves real recovery, not just successful reconnection: the
 //! restarted process reconnects to its former peers (ADR-0039's own
@@ -17,7 +18,7 @@
 //! gossiped consensus traffic, jumps forward to it (at least one
 //! `SYNCED` log line), and goes on to independently finalize a height
 //! at or beyond where its peers already were at the moment it rejoined
-//! -- genuinely caught up, not stuck replaying from height 0 forever
+//! -- genuinely caught up, not stuck replaying from height 1 forever
 //! alongside a network that has long since moved on.
 
 mod support;
@@ -115,7 +116,7 @@ fn a_killed_validator_restarts_and_catches_up_to_the_networks_real_height() -> T
     nodes.push(restarted);
 
     // It must observe the network's real height and jump forward, not
-    // silently replay from height 0 forever.
+    // silently replay from height 1 forever.
     let restarted_ref = nodes.last().ok_or("restarted node missing")?;
     wait_until_all_log(
         &[restarted_ref],

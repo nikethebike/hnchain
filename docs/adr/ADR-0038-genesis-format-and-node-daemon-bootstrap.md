@@ -37,6 +37,11 @@ Referenced By:
   `GenesisManifest.extra_data`, a breaking change to this ADR's own
   `genesis_hash` computation — every currently-committed genesis file
   regenerated alongside it)
+- ADR-0043: Genesis As A Real Block 0 (closes this ADR's own "genesis's
+  eventual integration into a real `BlockHeader`/block 0" item — every
+  node now constructs this ADR's own `GenesisManifest` into a real,
+  identical `BlockHeader`; height renumbering moves the first real
+  consensus-produced block from height 0 to height 1)
 
 ## Context
 
@@ -380,11 +385,11 @@ undecided) key-generation ceremony `genesis-security.md` describes.
   commitment fields at all this pass, not placeholder-`None` ones —
   adding them is real future scope, not a gap silently left in the
   schema.
-- wiring genesis into a real `BlockHeader`/block 0 — `hn_state::
-  BlockHeader` now exists (ADR-0008), so this item's own blocker has
-  changed: not "no type exists," but "nothing yet constructs a real
-  genesis block 0 from `GenesisManifest`," a distinct, still-unstarted
-  integration task
+- wiring genesis into a real `BlockHeader`/block 0 — **resolved,
+  ADR-0043** ("Genesis As A Real Block 0"): every node now constructs
+  an identical `BlockHeader` for genesis directly from this ADR's own
+  `GenesisManifest`, and `hn-node` seeds its own chain position from
+  that header's real `block_hash`/`timestamp` at startup
 - non-validating "full node" mode
 - connection retry after an established link drops (ADR-0037's own
   already-recorded gap, unchanged)
@@ -477,7 +482,8 @@ gate it.
   (organizational, not technical)
 - non-validating full-node mode
 - key-management hardening for config-supplied seeds
-- genesis's eventual integration into a real `BlockHeader`/block 0
+- genesis's eventual integration into a real `BlockHeader`/block 0 —
+  **resolved, ADR-0043**
 
 ## Related Specifications
 

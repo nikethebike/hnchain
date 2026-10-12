@@ -74,6 +74,19 @@
 //! able to take this process down, independent of ADR-0038's own
 //! "no-panic discipline" at the process boundary.
 //!
+//! Genesis is now a real block 0 (ADR-0043, "Genesis As A Real Block
+//! 0"), not an arbitrary placeholder: [`node::run`] builds the same
+//! `hn_state::BlockHeader` from the same `GenesisManifest` every other
+//! node independently builds, and seeds its own chain position —
+//! `last_block_hash`/`last_timestamp`, trusted from startup — from
+//! that real, computed header rather than an `[0; 32]`/`0` sentinel
+//! nothing could actually get wrong. The first real consensus-produced
+//! block now starts at height 1, not 0 — genesis alone holds height
+//! 0, keeping `height = parent.height + 1` true across that boundary
+//! too. ADR-0042's own `parent_block_hash` check is therefore
+//! meaningful starting from the very first real block, not just from
+//! the second one onward.
+//!
 //! Explicitly out of scope, named rather than guessed at: any RPC/CLI
 //! surface, real (non-devnet) validator onboarding and real custody for
 //! the three genesis allocation accounts (`docs/specs/core/genesis-
