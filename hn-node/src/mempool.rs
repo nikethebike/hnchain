@@ -3,7 +3,11 @@ use std::fmt;
 
 use hn_core::BlockHeight;
 use hn_crypto::Digest;
-use hn_state::{StateError, StateReader, TransactionEnvelope, ValidatorRecordV1, apply_block};
+use hn_network::MAX_PAYLOAD_LEN;
+use hn_state::{
+    MAX_TRANSACTIONS_PER_BLOCK, StateError, StateReader, TransactionEnvelope, ValidatorRecordV1,
+    apply_block,
+};
 
 /// Capacity of a [`Mempool`] (ADR-0045, "Decided: Mempool Admission") —
 /// a local, non-consensus constant: a devnet value chosen here, not a
@@ -236,6 +240,113 @@ impl Mempool {
             .collect();
         self.remove_included(expired);
     }
+
+    /// Selects transactions for a new block at `height`, against
+    /// `reader`'s own current committed state (ADR-0045, "Decided:
+    /// Block Building (Proposer)"):
+    ///
+    /// 1. Group this mempool's own admitted transactions by sender,
+    ///    each sender's own group sorted ascending by nonce; groups
+    ///    themselves ordered by that sender's *first* arrival in this
+    ///    mempool — "per sender ascending by nonce, across senders in
+    ///    mempool arrival order."
+    /// 2. Stop entirely at `MAX_TRANSACTIONS_PER_BLOCK`, or once the
+    ///    running encoded size would exceed `MAX_PAYLOAD_LEN` (no
+    ///    dedicated `MAX_BLOCK_SIZE` constant exists anywhere in this
+    ///    codebase yet — `hn_network::MAX_PAYLOAD_LEN`, the real P2P
+    ///    envelope cap every proposal already has to fit inside
+    ///    regardless, is the closest existing analog and is reused
+    ///    directly, not duplicated as a second bound).
+    /// 3. Include a candidate only if appending it to the
+    ///    already-accepted selection still lets `apply_block` succeed
+    ///    against `reader` — one that would abort application is
+    ///    dropped, and the next candidate is tried against the same
+    ///    still-valid selection, never included (ADR-0045's own "a
+    ///    proposal must never contain a transaction that aborts block
+    ///    application").
+    ///
+    /// Read-only: never mutates this mempool, never commits anything.
+    /// The caller runs `apply_block`/`apply_and_commit_block` again
+    /// itself once this selection is finalized into a real proposal —
+    /// re-deriving receipts/roots from the authoritative source rather
+    /// than trusting whatever this function last saw internally.
+    #[must_use]
+    pub fn select_for_block(
+        &self,
+        reader: &impl StateReader,
+        height: BlockHeight,
+        validator_candidates: &[ValidatorRecordV1],
+    ) -> Vec<TransactionEnvelope> {
+        self.select_for_block_with_limits(
+            reader,
+            height,
+            validator_candidates,
+            MAX_TRANSACTIONS_PER_BLOCK,
+            MAX_PAYLOAD_LEN,
+        )
+    }
+
+    /// [`Mempool::select_for_block`]'s own real logic, with the two
+    /// numeric limits taken as parameters rather than the real
+    /// `MAX_TRANSACTIONS_PER_BLOCK`/`MAX_PAYLOAD_LEN` constants —
+    /// exercising the *real* limits in a unit test would mean building
+    /// thousands of real signed transactions or megabytes of real
+    /// payload; exercising this instead, with small test-chosen
+    /// limits, is testing the exact same stopping logic the public
+    /// method actually runs, not a separate, parallel implementation.
+    fn select_for_block_with_limits(
+        &self,
+        reader: &impl StateReader,
+        height: BlockHeight,
+        validator_candidates: &[ValidatorRecordV1],
+        max_count: usize,
+        max_bytes: usize,
+    ) -> Vec<TransactionEnvelope> {
+        let mut sender_order: Vec<Digest> = Vec::new();
+        let mut by_sender: HashMap<Digest, Vec<TransactionEnvelope>> = HashMap::new();
+        for tx_id in &self.order {
+            let Some(envelope) = self.entries.get(tx_id) else {
+                continue;
+            };
+            by_sender
+                .entry(envelope.sender)
+                .or_insert_with(|| {
+                    sender_order.push(envelope.sender);
+                    Vec::new()
+                })
+                .push(envelope.clone());
+        }
+        for group in by_sender.values_mut() {
+            group.sort_by_key(|envelope| envelope.nonce.get());
+        }
+
+        let mut selection: Vec<TransactionEnvelope> = Vec::new();
+        let mut encoded_len: usize = 0;
+        for sender in &sender_order {
+            let Some(candidates) = by_sender.remove(sender) else {
+                continue;
+            };
+            for candidate in candidates {
+                if selection.len() >= max_count {
+                    return selection;
+                }
+                let Ok(candidate_bytes) = candidate.encode() else {
+                    continue;
+                };
+                if encoded_len.saturating_add(candidate_bytes.len()) > max_bytes {
+                    return selection;
+                }
+
+                let mut trial = selection.clone();
+                trial.push(candidate.clone());
+                if apply_block(&trial, reader, height, validator_candidates).is_ok() {
+                    encoded_len += candidate_bytes.len();
+                    selection = trial;
+                }
+            }
+        }
+        selection
+    }
 }
 
 #[cfg(test)]
@@ -318,6 +429,51 @@ mod tests {
             &keypair.key_descriptor().public_key_bytes(),
         )?;
         Ok((sender, keypair))
+    }
+
+    /// [`signed_envelope`], but with no `bootstrap_key` — for a second
+    /// transaction from a sender whose `IdentityValueV1` a *prior*
+    /// transaction in the same selection already bootstraps:
+    /// `resolve_account_signing_key` rejects a `bootstrap_key` once an
+    /// identity already exists (`StateError::UnexpectedBootstrapKey`),
+    /// so a real nonce-1-after-nonce-0 pair from the same sender must
+    /// have the key only on the first.
+    fn signed_envelope_without_bootstrap(
+        keypair: &Ed25519KeyPair,
+        sender: [u8; 32],
+        nonce: u64,
+        validity_window: ValidityWindowV1,
+    ) -> hn_state::StateResult<TransactionEnvelope> {
+        let payload = TransferPayloadV1 {
+            recipient: RECIPIENT,
+            asset_id: None,
+            amount: 10,
+        }
+        .encode()?;
+        let mut envelope = TransactionEnvelope {
+            tx_version: TX_VERSION_1,
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            tx_type: TxType::Transfer,
+            sender,
+            bootstrap_key: None,
+            nonce: AccountNonce::new(nonce),
+            fee_limit: 100,
+            validity_window,
+            access_list: AccessListV1 {
+                reads: vec![],
+                writes: vec![],
+            },
+            payload,
+            signatures: vec![],
+        };
+        let digest = envelope.signing_payload().signing_digest()?;
+        envelope.signatures = vec![SignatureEnvelope {
+            algorithm_id: keypair.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: keypair.sign(&digest).to_vec(),
+        }];
+        Ok(envelope)
     }
 
     #[test]
@@ -605,6 +761,204 @@ mod tests {
         assert_eq!(mempool.len(), 1);
         assert!(!mempool.contains(&tx_id_a));
         assert!(mempool.contains(&tx_id_b));
+        Ok(())
+    }
+
+    #[test]
+    fn select_for_block_sorts_each_senders_own_entries_by_nonce() -> hn_state::StateResult<()> {
+        let (sender, keypair) = sender_fixture(0x0c)?;
+        let store = funded_store(sender, 1_000)?;
+        let envelope_0 = signed_envelope(&keypair, sender, 0, open_window())?;
+        let envelope_1 = signed_envelope_without_bootstrap(&keypair, sender, 1, open_window())?;
+        let tx_id_0 = hn_state::tx_id(&envelope_0.encode()?)?;
+        let tx_id_1 = hn_state::tx_id(&envelope_1.encode()?)?;
+
+        // Insert directly, out of nonce order -- `admit`'s own dry run
+        // cannot produce two pending same-sender transactions in one
+        // mempool, so this bypasses it to exercise `select_for_block`'s
+        // own sort in isolation, the same privileged-field-access
+        // pattern `rejects_once_at_capacity` already uses.
+        let mut mempool = Mempool::new();
+        mempool.order = vec![tx_id_1, tx_id_0];
+        mempool.entries.insert(tx_id_1, envelope_1);
+        mempool.entries.insert(tx_id_0, envelope_0);
+
+        let selection = mempool.select_for_block(&store, BlockHeight::new(1), &[]);
+        assert_eq!(selection.len(), 2);
+        assert_eq!(selection[0].nonce.get(), 0);
+        assert_eq!(selection[1].nonce.get(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn select_for_block_preserves_cross_sender_arrival_order() -> hn_state::StateResult<()> {
+        let (sender_a, keypair_a) = sender_fixture(0x0d)?;
+        let (sender_b, keypair_b) = sender_fixture(0x0e)?;
+        let mut store = funded_store(sender_b, 1_000)?;
+        {
+            use hn_state::{AccountSection, StateWriter};
+            let key = account_section_state_key(&sender_a, AccountSection::Balance)?;
+            store.set(
+                key,
+                BalanceValueV1 {
+                    native_balance: 1_000,
+                }
+                .encode(),
+            )?;
+        }
+
+        // Sender B is admitted first, even though sender A is the
+        // "first" fixture alphabetically -- arrival order, not sender
+        // identity, must determine the resulting group order.
+        let envelope_b = signed_envelope(&keypair_b, sender_b, 0, open_window())?;
+        let envelope_a = signed_envelope(&keypair_a, sender_a, 0, open_window())?;
+
+        let mut mempool = Mempool::new();
+        mempool
+            .admit(
+                &envelope_b.encode()?,
+                &store,
+                BlockHeight::GENESIS,
+                CHAIN_ID,
+                NETWORK_ID,
+                &[],
+            )
+            .map_err(|error| StateError::Storage(error.to_string()))?;
+        mempool
+            .admit(
+                &envelope_a.encode()?,
+                &store,
+                BlockHeight::GENESIS,
+                CHAIN_ID,
+                NETWORK_ID,
+                &[],
+            )
+            .map_err(|error| StateError::Storage(error.to_string()))?;
+
+        let selection = mempool.select_for_block(&store, BlockHeight::new(1), &[]);
+        assert_eq!(selection.len(), 2);
+        assert_eq!(selection[0].sender, sender_b);
+        assert_eq!(selection[1].sender, sender_a);
+        Ok(())
+    }
+
+    #[test]
+    fn select_for_block_drops_a_conflicting_tx_but_keeps_trying_later_candidates()
+    -> hn_state::StateResult<()> {
+        let (sender_a, keypair_a) = sender_fixture(0x0f)?;
+        let (sender_c, keypair_c) = sender_fixture(0x10)?;
+        let mut store = funded_store(sender_a, 1_000)?;
+        {
+            use hn_state::{AccountSection, StateWriter};
+            let key = account_section_state_key(&sender_c, AccountSection::Balance)?;
+            store.set(
+                key,
+                BalanceValueV1 {
+                    native_balance: 1_000,
+                }
+                .encode(),
+            )?;
+        }
+
+        // Two transactions from sender A, both independently valid
+        // against the currently-committed state (different payloads,
+        // so distinct tx_ids, both pass `admit`'s own standalone dry
+        // run), but both still claiming nonce 0 -- a real conflict
+        // `select_for_block` only discovers once it tries applying
+        // both together in the same trial. The third transaction, from
+        // an unrelated sender C, must still be picked up afterwards.
+        let envelope_a_first = signed_envelope(&keypair_a, sender_a, 0, open_window())?;
+        let mut envelope_a_conflicting = signed_envelope(&keypair_a, sender_a, 0, open_window())?;
+        envelope_a_conflicting.fee_limit = 200; // distinct content -> distinct tx_id
+        let digest = envelope_a_conflicting.signing_payload().signing_digest()?;
+        envelope_a_conflicting.signatures = vec![SignatureEnvelope {
+            algorithm_id: keypair_a.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: keypair_a.sign(&digest).to_vec(),
+        }];
+        let envelope_c = signed_envelope(&keypair_c, sender_c, 0, open_window())?;
+
+        let mut mempool = Mempool::new();
+        for envelope in [&envelope_a_first, &envelope_a_conflicting, &envelope_c] {
+            mempool
+                .admit(
+                    &envelope.encode()?,
+                    &store,
+                    BlockHeight::GENESIS,
+                    CHAIN_ID,
+                    NETWORK_ID,
+                    &[],
+                )
+                .map_err(|error| StateError::Storage(error.to_string()))?;
+        }
+        assert_eq!(mempool.len(), 3);
+
+        let selection = mempool.select_for_block(&store, BlockHeight::new(1), &[]);
+        assert_eq!(selection.len(), 2);
+        assert_eq!(selection[0].sender, sender_a);
+        assert_eq!(selection[0].fee_limit, envelope_a_first.fee_limit);
+        assert_eq!(selection[1].sender, sender_c);
+        Ok(())
+    }
+
+    #[test]
+    fn select_for_block_with_limits_stops_at_the_given_count_and_byte_bounds()
+    -> hn_state::StateResult<()> {
+        let (sender_a, keypair_a) = sender_fixture(0x11)?;
+        let (sender_b, keypair_b) = sender_fixture(0x12)?;
+        let (sender_c, keypair_c) = sender_fixture(0x13)?;
+        let mut store = funded_store(sender_a, 1_000)?;
+        {
+            use hn_state::{AccountSection, StateWriter};
+            for sender in [sender_b, sender_c] {
+                let key = account_section_state_key(&sender, AccountSection::Balance)?;
+                store.set(
+                    key,
+                    BalanceValueV1 {
+                        native_balance: 1_000,
+                    }
+                    .encode(),
+                )?;
+            }
+        }
+
+        let envelope_a = signed_envelope(&keypair_a, sender_a, 0, open_window())?;
+        let envelope_b = signed_envelope(&keypair_b, sender_b, 0, open_window())?;
+        let envelope_c = signed_envelope(&keypair_c, sender_c, 0, open_window())?;
+        let envelope_a_bytes_len = envelope_a.encode()?.len();
+
+        let mut mempool = Mempool::new();
+        for envelope in [&envelope_a, &envelope_b, &envelope_c] {
+            mempool
+                .admit(
+                    &envelope.encode()?,
+                    &store,
+                    BlockHeight::GENESIS,
+                    CHAIN_ID,
+                    NETWORK_ID,
+                    &[],
+                )
+                .map_err(|error| StateError::Storage(error.to_string()))?;
+        }
+
+        // Count bound: stop after exactly 2, regardless of how many
+        // more would otherwise be valid.
+        let by_count =
+            mempool.select_for_block_with_limits(&store, BlockHeight::new(1), &[], 2, usize::MAX);
+        assert_eq!(by_count.len(), 2);
+        assert_eq!(by_count[0].sender, sender_a);
+        assert_eq!(by_count[1].sender, sender_b);
+
+        // Byte bound: a cap smaller than even the first candidate's own
+        // encoded size must stop before including anything at all.
+        let by_bytes = mempool.select_for_block_with_limits(
+            &store,
+            BlockHeight::new(1),
+            &[],
+            usize::MAX,
+            envelope_a_bytes_len - 1,
+        );
+        assert!(by_bytes.is_empty());
         Ok(())
     }
 }

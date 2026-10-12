@@ -18,9 +18,10 @@ use hn_network::{
 };
 use hn_state::{
     BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, ConsensusVote,
-    HEADER_VERSION_1, QuorumCertificate, StateCommitter, StateReader, ValidatorRecordV1,
-    ValidatorStatus, VoteSigningPayloadV1, VoteTargetType, VoteType, Write, active_key, active_set,
-    extra_data_hash, list_empty_root, protocol_parameters_placeholder_hash,
+    EmptyHashTable, HEADER_VERSION_1, QuorumCertificate, StateCommitter, StateEnumerator,
+    StateReader, ValidatorRecordV1, ValidatorStatus, VoteSigningPayloadV1, VoteTargetType,
+    VoteType, Write, active_key, active_set, apply_block, compute_post_state_root,
+    list_empty_root, protocol_parameters_placeholder_hash,
 };
 use hn_storage::RedbStateStore;
 
@@ -45,6 +46,29 @@ const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 1, 0);
 /// key.
 fn genesis_marker_key() -> NodeResult<Digest> {
     Ok(hash_profile_0x0001("hnchain.node.genesismarker.v1", &[])?)
+}
+
+/// A [`StateEnumerator`] that hides [`genesis_marker_key`] from whatever
+/// it wraps. That marker is stored through the same
+/// [`StateCommitter`]/table as real consensus state (ADR-0038, "Decided:
+/// DB Init" predates `StateEnumerator` and never anticipated a full-table
+/// scan), so a bare enumeration of a node's own store is not the real
+/// consensus state leaf set and must never be hashed into a `state_root`
+/// directly — `compute_post_state_root` needs this filtered view instead.
+struct ExcludingGenesisMarker<'a, E> {
+    inner: &'a E,
+    excluded: Digest,
+}
+
+impl<E: StateEnumerator> StateEnumerator for ExcludingGenesisMarker<'_, E> {
+    fn enumerate(&self) -> hn_state::StateResult<Vec<(Digest, Vec<u8>)>> {
+        Ok(self
+            .inner
+            .enumerate()?
+            .into_iter()
+            .filter(|(key, _)| *key != self.excluded)
+            .collect())
+    }
 }
 
 /// What the driving loop reacts to (ADR-0037, "Decided: Round Timer /
@@ -1071,16 +1095,51 @@ fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<()> {
     );
 
     if round_proposer(&ctx.ordered_ids, height, round) == Some(ctx.own_validator_id) {
-        let header = build_block_header(ctx, height, round)?;
-        let block_hash = header.block_hash()?;
+        // ADR-0045, "Decided: Block Building (Proposer)" -- select
+        // from this node's own mempool, then actually run the result
+        // through `apply_block` for real (not a second, separate
+        // simulation): `select_for_block` already ran this exact check
+        // per candidate, but re-deriving `result` from the final
+        // selection here, rather than threading it out of
+        // `select_for_block` itself, keeps "what got selected" and
+        // "what the real receipts/roots are" from two different
+        // internal code paths that could silently drift apart.
+        let selected = ctx
+            .mempool
+            .select_for_block(&ctx.store, height, &ctx.records);
+        let application = apply_block(&selected, &ctx.store, height, &ctx.records)?;
+        let empty_table = EmptyHashTable::build()?;
+        let write_set: Vec<Write> = application
+            .applied
+            .iter()
+            .flat_map(|applied| applied.write_set.clone())
+            .collect();
+        let state_enumerator = ExcludingGenesisMarker {
+            inner: &ctx.store,
+            excluded: genesis_marker_key()?,
+        };
+        let state_root = compute_post_state_root(&state_enumerator, &write_set, &empty_table)?;
+
         let body = BlockBody {
             body_version: BODY_VERSION_1,
-            transactions: Vec::new(),
-            receipts: Vec::new(),
+            transactions: selected,
+            receipts: application
+                .applied
+                .iter()
+                .map(|applied| applied.receipt)
+                .collect(),
             evidence: Vec::new(),
             extra_data: Vec::new(),
         };
+        let header = build_block_header(ctx, height, round, &body, state_root)?;
+        let block_hash = header.block_hash()?;
         ctx.pending_headers.insert(block_hash, header.clone());
+        // `body` moves into `envelope` just below; the engine's own
+        // `proposed_blocks` cache (consulted later by
+        // `commit_finalized_block`, once this block actually
+        // finalizes) needs its own, separate copy of exactly the same
+        // transactions.
+        let transactions_for_engine = body.transactions.clone();
         let envelope = BlockEnvelope {
             block_version: BLOCK_VERSION_1,
             header,
@@ -1107,7 +1166,9 @@ fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<()> {
             }
             .encode()?,
         )?;
-        let action = ctx.engine.handle_proposal(block_hash, Vec::new(), None)?;
+        let action = ctx
+            .engine
+            .handle_proposal(block_hash, transactions_for_engine, None)?;
         act_on(ctx, action)?;
     }
     Ok(())
@@ -1191,7 +1252,22 @@ fn cast_vote(ctx: &mut Ctx, vote_type: VoteType, target: ConsensusTarget) -> Nod
 /// elsewhere, or a value that is genuinely, currently correct for this
 /// devnet's own always-empty blocks — see each field's own comment
 /// below for which.
-fn build_block_header(ctx: &Ctx, height: BlockHeight, round: Round) -> NodeResult<BlockHeader> {
+/// Builds this round's real `hn_state::BlockHeader` from `body` and its
+/// own already-computed `state_root` (ADR-0045, "Decided: Block
+/// Building (Proposer)") — `transactions_root`/`receipts_root`/
+/// `evidence_root`/`extra_data_hash` are derived from `body` itself
+/// (via `BlockBody`'s own helper methods, the same ones `verify_proposal`
+/// independently recomputes on receipt), not assumed empty: this
+/// devnet's blocks are no longer always empty now that real
+/// transactions can flow through the mempool (ADR-0045), even though
+/// an empty selection remains a genuinely valid, common case.
+fn build_block_header(
+    ctx: &Ctx,
+    height: BlockHeight,
+    round: Round,
+    body: &BlockBody,
+    state_root: Digest,
+) -> NodeResult<BlockHeader> {
     let now_millis = u64::try_from(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1222,18 +1298,17 @@ fn build_block_header(ctx: &Ctx, height: BlockHeight, round: Round) -> NodeResul
         // derivation this codebase doesn't have.
         proposer: ctx.own_validator_id,
         timestamp: UnixTimeMillis::from_millis(now_millis),
-        // This devnet's blocks always carry zero transactions
-        // (ADR-0037's own deliberate scope), so transactions/receipts/
-        // events/evidence are all genuinely empty, not simplified.
-        transactions_root: list_empty_root()?,
-        // Genuinely correct, not a placeholder: with an always-empty
-        // transaction list, `commit_finalized_block`'s own write-set is
-        // always empty too, so the real state root never changes after
-        // genesis -- `ctx.state_root` already is that one real,
-        // unchanging value (computed once at startup,
-        // `GenesisManifest::initial_state_root`).
-        state_root: ctx.state_root,
-        receipts_root: list_empty_root()?,
+        transactions_root: body.transactions_root()?,
+        // Real, independently-recomputable now (ADR-0045) --
+        // `compute_post_state_root` over this node's own committed
+        // state, overlaid with this exact block's own write set, not
+        // assumed unchanging from genesis anymore.
+        state_root,
+        receipts_root: body.receipts_root()?,
+        // No `events` concept exists in `BlockBody` at all yet
+        // (HNVM-gated, ADR-0008) -- `list_empty_root()` remains the
+        // one correct value for as long as that stays true, regardless
+        // of whether `transactions` is empty.
         events_root: list_empty_root()?,
         // The same fixed `DEVNET_VSC` this node's own votes/QCs already
         // use as `validator_set_commitment` -- `consensus_root` and
@@ -1241,9 +1316,9 @@ fn build_block_header(ctx: &Ctx, height: BlockHeight, round: Round) -> NodeResul
         // value (ADR-0010), so reusing this constant here keeps that
         // equality genuinely true, not coincidentally matching.
         consensus_root: DEVNET_VSC,
-        evidence_root: list_empty_root()?,
+        evidence_root: body.evidence_root()?,
         protocol_parameters_hash: protocol_parameters_placeholder_hash()?,
-        extra_data_hash: extra_data_hash(&[])?,
+        extra_data_hash: body.extra_data_hash()?,
     })
 }
 
@@ -1332,7 +1407,7 @@ fn log_line(line: &str) {
 #[cfg(test)]
 mod tests {
     use hn_core::{BlockHeight, Round};
-    use hn_state::{StateWriter, ValidatorSection, validator_section_state_key};
+    use hn_state::{StateWriter, ValidatorSection, extra_data_hash, validator_section_state_key};
     use hn_storage::InMemoryStateStore;
 
     use super::*;
