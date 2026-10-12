@@ -97,10 +97,11 @@
 //! not attempt to close), re-proposing a locked value under a real
 //! `justification` on the *proposing* side (this crate's own proposer
 //! still always sends `justification: None`), real block/state sync
-//! for a future network with non-empty blocks (ADR-0016, unchanged,
-//! including this node's own inability to verify `parent_block_hash`/
-//! timestamp monotonicity immediately after a passive catch-up jump),
-//! and ADR-0011's real leader-election formula (this crate uses
+//! for a future network with non-empty blocks (specified, not yet
+//! implemented, ADR-0044 — including this node's own inability to
+//! verify `parent_block_hash`/timestamp monotonicity immediately
+//! after a passive catch-up jump, ADR-0039), and ADR-0011's real
+//! leader-election formula (this crate uses
 //! `hn_consensus::round_proposer`, its own explicitly-sanctioned
 //! devnet placeholder) — see ADR-0037/ADR-0038/ADR-0039/ADR-0040/
 //! ADR-0042's own "Explicitly Not Resolved."

@@ -59,6 +59,7 @@ docs/
     ADR-0041-genesis-document-commitments-via-extra-data.md
     ADR-0042-block-envelope-and-receiver-side-header-verification.md
     ADR-0043-genesis-as-a-real-block-0.md
+    ADR-0044-full-verification-block-and-state-sync.md
 
   specs/
     core/

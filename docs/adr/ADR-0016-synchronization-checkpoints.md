@@ -27,6 +27,15 @@ Referenced By:
   shortcut valid only because this devnet's own blocks are always
   empty; this ADR's own real checkpoint/snapshot/replay design remains
   entirely open)
+- ADR-0044: Full-Verification Block And State Sync (concretizes this
+  ADR's own "Full Verification Mode" normative rule — durable block
+  storage, a real fetch/verify/replay wire protocol under this ADR's
+  own already-reserved `Channel::Sync`, and a real finality-proof
+  check per historical block. Checkpoint-assisted sync, snapshot-
+  assisted sync, weak subjectivity, and light clients — this ADR's
+  other modes — remain exactly as open as before; ADR-0044's own
+  implementation is also deliberately deferred, pending real
+  transactions actually flowing through consensus, ADR-0037)
 
 ## Context
 
@@ -110,6 +119,14 @@ HNChain must support full verification from genesis.
 
 Checkpoint-assisted synchronization is an optimization, not the only security
 mode.
+
+**Resolved, ADR-0044** ("Full-Verification Block And State Sync"): the
+concrete mechanism — durable per-node block storage, a height-ranged
+fetch/verify/replay wire protocol, and a real `precommit` quorum
+certificate required per historical block (not merely a legitimate
+proposer's signature, which proves authorship but not that `2f+1` of
+the active set actually finalized it). Specified, not yet
+implemented — see that ADR's own "Open Decisions."
 
 ### Snapshot Integration
 

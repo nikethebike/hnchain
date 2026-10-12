@@ -307,7 +307,8 @@ Explicitly not closed, named rather than silently assumed:
   side (unchanged, newly named explicitly here)
 - a real wall-clock timestamp bound, if one is ever wanted (explicitly
   rejected this pass, not merely deferred by oversight)
-- real block/state sync (ADR-0016, unchanged) — the only real fix for
+- real block/state sync — **specified, not yet implemented, ADR-0044**
+  ("Full-Verification Block And State Sync") — the only real fix for
   chain-position-gated checks being skipped during catch-up
 
 ## Related Specifications

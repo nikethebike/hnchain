@@ -27,6 +27,10 @@ Referenced By:
   `on_close` parameter, and `ConsensusProposalMessageV1`'s `height`/
   `round` fields — both closing real gaps found while testing restart
   recovery, not part of this ADR's own original decision)
+- ADR-0044: Full-Verification Block And State Sync (specifies the two
+  new `MessageType` values this ADR's own registry already reserves
+  room for under `Channel::Sync` — not yet added to the Rust registry
+  itself, since ADR-0044's own implementation is deliberately deferred)
 
 ## Context
 

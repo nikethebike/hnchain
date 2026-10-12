@@ -14,7 +14,15 @@ Depends On:
 
 Supersedes: None
 
-Referenced By: None
+Referenced By:
+
+- ADR-0044: Full-Verification Block And State Sync (narrows this
+  ADR's own "Decided: Passive Height-Observation Catch-Up" to
+  networks whose blocks are still always empty — this ADR's own text
+  already said that shortcut "is explicitly not [a step toward real
+  sync]," so ADR-0044 is the arrival of the thing it always said would
+  eventually be needed, not a reversal. This ADR's own separate
+  connection-drop-reconnection decision is untouched)
 
 ## Context
 
@@ -131,6 +139,11 @@ catch up. A future pass with real transactions in blocks would need
 real block/state sync (ADR-0016's own still-entirely-open territory:
 checkpoints, snapshots, verified historical replay) — this is
 explicitly not that, and is not positioned as a step toward it.
+**That future pass is now specified**: ADR-0044 ("Full-Verification
+Block And State Sync") replaces this exact jump with a real
+fetch/verify/replay procedure, for any network whose blocks are not
+guaranteed empty — not yet implemented there either, but no longer an
+unnamed gap.
 
 If the jump lands at round `0` while peers have already moved past it
 at that height (this node caught up mid-round, not at its very start),
