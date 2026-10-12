@@ -466,7 +466,7 @@ pub use proposal_vote_record::{PROPOSAL_VOTE_RECORD_VERSION_1, ProposalVoteRecor
 pub use protocol_parameters::protocol_parameters_placeholder_hash;
 pub use receipt::{RECEIPT_VERSION_1, ReceiptStatus, ReceiptV1};
 pub use stake_payload::{STAKE_PAYLOAD_VERSION_1, StakePayloadV1};
-pub use state_store::{StateCommitter, StateReader, StateWriter, Write};
+pub use state_store::{StateCommitter, StateEnumerator, StateReader, StateWriter, Write};
 pub use transaction_envelope::{
     MAX_SIGNATURES, MAX_TRANSACTION_SIZE, TX_VERSION_1, TransactionEnvelope, TransactionPayload,
     TransactionSigningPayload, TxType, decode_transaction_payload,
@@ -476,7 +476,7 @@ pub use transfer::{
     fetch_transfer_party,
 };
 pub use transfer_payload::{TRANSFER_PAYLOAD_VERSION_1, TransferPayloadV1};
-pub use tree::{Leaf, compute_state_root, leaf_for_write};
+pub use tree::{Leaf, compute_post_state_root, compute_state_root, leaf_for_write};
 pub use tx_id::tx_id;
 pub use unstake_payload::{UNSTAKE_PAYLOAD_VERSION_1, UnstakePayloadV1};
 pub use validator::{DOMAIN_VALIDATORS, ValidatorSection, validator_section_state_key};

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use hn_crypto::Digest;
-use hn_state::{StateCommitter, StateReader, StateResult, StateWriter, Write};
+use hn_state::{StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter, Write};
 
 /// An in-memory [`StateReader`]/[`StateWriter`] implementation.
 ///
@@ -49,10 +49,20 @@ impl StateCommitter for InMemoryStateStore {
     }
 }
 
+impl StateEnumerator for InMemoryStateStore {
+    fn enumerate(&self) -> StateResult<Vec<(Digest, Vec<u8>)>> {
+        Ok(self
+            .values
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::InMemoryStateStore;
-    use hn_state::{StateCommitter, StateReader, StateResult, StateWriter, Write};
+    use hn_state::{StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter, Write};
 
     #[test]
     fn round_trips_a_stored_value() -> StateResult<()> {
@@ -96,6 +106,28 @@ mod tests {
         store.commit(&writes)?;
         assert_eq!(store.get(&[0x55; 32])?, Some(b"one".to_vec()));
         assert_eq!(store.get(&[0x66; 32])?, Some(b"two".to_vec()));
+        Ok(())
+    }
+
+    #[test]
+    fn enumerate_returns_every_stored_pair() -> StateResult<()> {
+        let mut store = InMemoryStateStore::new();
+        store.set([0x11; 32], b"one".to_vec())?;
+        store.set([0x22; 32], b"two".to_vec())?;
+
+        let mut entries = store.enumerate()?;
+        entries.sort();
+        assert_eq!(
+            entries,
+            vec![([0x11; 32], b"one".to_vec()), ([0x22; 32], b"two".to_vec()),]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn enumerate_is_empty_for_a_fresh_store() -> StateResult<()> {
+        let store = InMemoryStateStore::new();
+        assert_eq!(store.enumerate()?, Vec::new());
         Ok(())
     }
 }

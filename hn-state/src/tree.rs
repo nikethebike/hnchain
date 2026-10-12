@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
+
 use hn_crypto::Digest;
 
 use crate::{
     error::{StateError, StateResult},
     node::{EmptyHashTable, TREE_DEPTH, internal_hash, leaf_hash, value_hash},
-    state_store::Write,
+    state_store::{StateEnumerator, Write},
 };
 
 /// One `(state_key, leaf_hash)` entry in a write set passed to
@@ -23,6 +25,44 @@ pub type Leaf = (Digest, Digest);
 pub fn leaf_for_write(write: &Write) -> StateResult<Leaf> {
     let vh = value_hash(&write.value)?;
     Ok((write.state_key, leaf_hash(&write.state_key, &vh)?))
+}
+
+/// Computes the state root after overlaying `write_set` onto
+/// `enumerator`'s own complete, already-committed leaf set (ADR-0045,
+/// "Decided: `state_root` Computation Strategy (Devnet)") — the real,
+/// full-recompute strategy this project accepted for devnet scale:
+/// `O(N)` in total state size, per block, per validator, not yet the
+/// incrementally-maintained sparse Merkle structure a real testnet
+/// would need (a separate future ADR, per ADR-0045's own "named as
+/// non-scalable").
+///
+/// `write_set` is applied in order on top of `enumerator`'s own
+/// snapshot: a later entry for the same `state_key` overrides an
+/// earlier one (whether that earlier one came from `enumerator` or
+/// from `write_set` itself) — the ordinary "this block's own later
+/// transaction sees this block's own earlier one's effects" semantics
+/// [`crate::OverlayReader`] already gives at the single-key-read level,
+/// applied here at the whole-leaf-set level instead. This is
+/// deliberately *not* [`compute_state_root`]'s own `DuplicateStateKey`
+/// rejection: a write set legitimately touches the same key more than
+/// once across several transactions in one block, and the last write
+/// winning is correct, not an error to guard against.
+pub fn compute_post_state_root(
+    enumerator: &impl StateEnumerator,
+    write_set: &[Write],
+    empty_table: &EmptyHashTable,
+) -> StateResult<Digest> {
+    let mut values: BTreeMap<Digest, Vec<u8>> = enumerator.enumerate()?.into_iter().collect();
+    for write in write_set {
+        values.insert(write.state_key, write.value.clone());
+    }
+
+    let entries: Vec<Leaf> = values
+        .into_iter()
+        .map(|(state_key, value)| leaf_for_write(&Write { state_key, value }))
+        .collect::<StateResult<_>>()?;
+
+    compute_state_root(&entries, empty_table)
 }
 
 /// Computes the `hn-smt-256-v1` state root for a finished write set

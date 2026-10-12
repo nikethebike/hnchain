@@ -81,6 +81,31 @@ pub trait StateCommitter {
     fn commit(&mut self, writes: &[Write]) -> StateResult<()>;
 }
 
+/// Enumerates every `(state_key, value)` pair currently committed
+/// (ADR-0045, "Decided: `state_root` Computation Strategy (Devnet)") —
+/// `compute_state_root`/[`crate::compute_post_state_root`] need the
+/// complete leaf set, and neither [`StateReader`] (point lookups only,
+/// ADR-0019) nor [`StateCommitter`] gives any existing caller a way to
+/// ask for "everything." A bulk, `O(N)`-in-total-state-size operation,
+/// deliberately kept as its own trait rather than folded into
+/// [`StateReader`] — a reader-only consumer (most of this crate) is
+/// never implicitly required to support bulk enumeration just because
+/// it needs point lookups.
+///
+/// Not one of ADR-0019's own nine named conceptual interfaces
+/// (`StateReader`, `StateWriter`, `StateTransaction`, `StateCommitter`,
+/// `BlockStore`, `ProofStore`, `SnapshotStore`, `PruningController`,
+/// `ArchiveStore`) — none of them means "enumerate everything," and
+/// this is accepted explicitly as a devnet-only, non-scalable need
+/// (ADR-0045's own "named as non-scalable" framing), not a new
+/// permanent member of that list.
+pub trait StateEnumerator {
+    /// Returns every `(state_key, value)` pair currently stored, in no
+    /// particular order — [`crate::compute_state_root`]'s own internal
+    /// sort does not care, and nothing calling this should either.
+    fn enumerate(&self) -> StateResult<Vec<(Digest, Vec<u8>)>>;
+}
+
 /// One `(state_key, value)` write-set entry — every `apply_*` function
 /// in this crate's real output (ADR-0031, "Write-Set Value Bytes And
 /// Overlay State Reader"), replacing the earlier `Leaf`-only

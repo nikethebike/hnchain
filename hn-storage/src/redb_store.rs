@@ -1,8 +1,10 @@
 use std::path::Path;
 
 use hn_crypto::Digest;
-use hn_state::{StateCommitter, StateError, StateReader, StateResult, StateWriter, Write};
-use redb::{ReadableDatabase, TableDefinition};
+use hn_state::{
+    StateCommitter, StateEnumerator, StateError, StateReader, StateResult, StateWriter, Write,
+};
+use redb::{ReadableDatabase, ReadableTable, TableDefinition};
 
 /// The one table this store keeps: `state_key -> canonical HNCS value
 /// bytes`, exactly [`StateReader`]/[`StateWriter`]'s own scope. `&[u8]`
@@ -98,6 +100,25 @@ impl StateCommitter for RedbStateStore {
     }
 }
 
+impl StateEnumerator for RedbStateStore {
+    fn enumerate(&self) -> StateResult<Vec<(Digest, Vec<u8>)>> {
+        let read_txn = self.database.begin_read().map_err(storage_error)?;
+        let table = read_txn.open_table(STATE_TABLE).map_err(storage_error)?;
+        table
+            .iter()
+            .map_err(storage_error)?
+            .map(|entry| {
+                let (key_guard, value_guard) = entry.map_err(storage_error)?;
+                let state_key: Digest = key_guard
+                    .value()
+                    .try_into()
+                    .map_err(|_| StateError::Storage("stored state_key is not 32 bytes".into()))?;
+                Ok((state_key, value_guard.value().to_vec()))
+            })
+            .collect()
+    }
+}
+
 /// Converts any `redb` error into [`StateError::Storage`] via its own
 /// `Display` output. Backend-agnostic by construction: this crate's
 /// callers see only "a storage operation failed", never a `redb`-typed
@@ -108,7 +129,7 @@ fn storage_error(error: impl Into<redb::Error>) -> StateError {
 
 #[cfg(test)]
 mod tests {
-    use hn_state::{StateCommitter, StateReader, StateResult, StateWriter, Write};
+    use hn_state::{StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter, Write};
     use tempfile::tempdir;
 
     use super::{STATE_TABLE, storage_error};
@@ -176,6 +197,30 @@ mod tests {
         store.commit(&writes)?;
         assert_eq!(store.get(&[0x55; 32])?, Some(b"one".to_vec()));
         assert_eq!(store.get(&[0x66; 32])?, Some(b"two".to_vec()));
+        Ok(())
+    }
+
+    #[test]
+    fn enumerate_returns_every_stored_pair() -> StateResult<()> {
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let mut store = RedbStateStore::open(dir.path().join("state.redb"))?;
+        store.set([0x11; 32], b"one".to_vec())?;
+        store.set([0x22; 32], b"two".to_vec())?;
+
+        let mut entries = store.enumerate()?;
+        entries.sort();
+        assert_eq!(
+            entries,
+            vec![([0x11; 32], b"one".to_vec()), ([0x22; 32], b"two".to_vec()),]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn enumerate_is_empty_for_a_fresh_database() -> StateResult<()> {
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let store = RedbStateStore::open(dir.path().join("state.redb"))?;
+        assert_eq!(store.enumerate()?, Vec::new());
         Ok(())
     }
 
