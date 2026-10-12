@@ -26,6 +26,10 @@ Referenced By:
   mechanism meaningful from the very first real block: seeded from
   genesis's own real, computed header instead of an arbitrary
   `[0; 32]`/`0` placeholder)
+- ADR-0045: Transactions Through Consensus (replaces this ADR's own
+  fixed-devnet-value `state_root` check — step 6 of "Decided: Receiver-
+  Side Verification Rules," below — with real execution, once blocks
+  carry real transactions)
 
 ## Context
 
@@ -166,7 +170,13 @@ handle_proposal`:
    must each match this devnet's own fixed values (`ctx.state_root`,
    `DEVNET_VSC`, `protocol_parameters_placeholder_hash()`) — the same
    values an honest proposer already computes (ADR-0040), now actually
-   compared rather than assumed.
+   compared rather than assumed. **The fixed-value check against
+   `state_root` specifically is replaced by ADR-0045** ("Transactions
+   Through Consensus"): once blocks carry real transactions, a
+   validator recomputes `state_root` by actually executing the block
+   rather than comparing it to a devnet-wide constant.
+   `consensus_root`/`protocol_parameters_hash` remain fixed-value
+   checks, unchanged (ADR-0010's own still-open item).
 7. If present, `envelope.justification` must pass
    `QuorumCertificate::verify_signatures` — the same check a normally
    gossiped QC already gets via `handle_quorum_certificate`, now also

@@ -259,7 +259,12 @@ liveness-not-safety property real Tendermint networks have).
 
 Blocks in this pass carry zero transactions — proving liveness and view
 change is this ADR's own stated goal, not state transitions, which
-`single_validator_chain_integration.rs` already covers end-to-end. A
+`single_validator_chain_integration.rs` already covers end-to-end.
+**This "always empty" scope is resolved, ADR-0045** ("Transactions
+Through Consensus" — mempool, block building from real transactions,
+and execution-based proposal validation; not yet implemented in code
+at the time ADR-0045 itself was accepted, but no longer an open
+architectural question). A
 finalized block prints one line to stdout
 (`FINALIZED height=<h> round=<r> block=<hex> signed_power=<n>/<total>`) —
 the multi-process integration test's own observation mechanism, reading

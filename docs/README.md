@@ -60,6 +60,7 @@ docs/
     ADR-0042-block-envelope-and-receiver-side-header-verification.md
     ADR-0043-genesis-as-a-real-block-0.md
     ADR-0044-full-verification-block-and-state-sync.md
+    ADR-0045-transactions-through-consensus.md
 
   specs/
     core/

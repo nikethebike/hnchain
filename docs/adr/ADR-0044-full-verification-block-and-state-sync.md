@@ -24,7 +24,12 @@ Height-Observation Catch-Up" to the always-empty-block devnet it was
 built for — see "Compatibility," below — without touching ADR-0039's
 separate connection-drop-reconnection decision at all)
 
-Referenced By: None
+Referenced By:
+
+- ADR-0045: Transactions Through Consensus (implementation unblocked
+  by ADR-0045 — this ADR's own mechanism can only be meaningfully
+  tested once real transactions actually flow through consensus-
+  produced blocks, which ADR-0045 is the accepted decision for)
 
 ## Context
 
@@ -74,11 +79,13 @@ and safety; the other modes are UX/performance optimizations layered
 on top later, not blockers.
 
 Real transactions still never flow through consensus-produced blocks
-anywhere in this codebase (ADR-0037's own deliberate, still-unchanged
-scope) — this ADR specifies a mechanism general enough to replay real,
-non-empty block content once that exists, but cannot itself be
-exercised against anything but empty blocks today. It is written and
-reviewed now, as a spec, deliberately ahead of both that prerequisite
+anywhere in this codebase at the time of this ADR (ADR-0037's own
+deliberate, then-unchanged scope — **since resolved, ADR-0045**,
+"Transactions Through Consensus," not yet implemented in code) — this
+ADR specifies a mechanism general enough to replay real, non-empty
+block content once that exists, but cannot itself be exercised against
+anything but empty blocks today. It is written and reviewed now, as a
+spec, deliberately ahead of both that prerequisite
 and its own implementation — see "Open Decisions."
 
 ## Decision
@@ -349,8 +356,8 @@ Validator-set evolution during the synced range:
   encoding, `hn-node` orchestration, replacing `maybe_sync_forward`) —
   deliberately deferred: the user's own call was to specify this ADR
   now and sequence real implementation relative to real transactions
-  actually flowing through consensus (ADR-0037's own still-separate,
-  still-open scope), not to build an untestable mechanism today
+  actually flowing through consensus — **decided, ADR-0045**, not yet
+  implemented — not to build an untestable mechanism today
 - a real, non-placeholder `consensus_root`/active-set-at-height
   resolution (ADR-0010, unchanged — named above as a real boundary
   this ADR's own `commit_qc` verification step depends on)
