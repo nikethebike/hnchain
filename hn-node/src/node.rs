@@ -13,7 +13,8 @@ use hn_core::{BlockHeight, Epoch, ProtocolEpoch, ProtocolVersion, Round, UnixTim
 use hn_crypto::{Digest, Ed25519KeyPair, KeyRole, SignatureEnvelope, hash_profile_0x0001};
 use hn_network::{
     Channel, ConsensusProposalMessageV1, HandshakeAction, HandshakeEvent, HandshakeParams,
-    HandshakeState, Hello, MessageType, P2PMessageEnvelopeV1, PeerLink, spawn_peer_link,
+    HandshakeState, Hello, MessageType, P2PMessageEnvelopeV1, PeerLink, TransactionAnnounceV1,
+    TransactionRequestV1, TransactionResponseV1, spawn_peer_link,
 };
 use hn_state::{
     BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, ConsensusVote,
@@ -27,6 +28,7 @@ use crate::config::NodeConfig;
 use crate::error::{NodeError, NodeResult};
 use crate::genesis::GenesisManifest;
 use crate::identity::{keypair_from_seed, resolve_own_validator_id};
+use crate::mempool::Mempool;
 
 /// A fixed devnet `validator_set_commitment` (ADR-0037's own devnet
 /// scope never defines `ValidatorSetCommitmentV1`'s real canonical
@@ -156,6 +158,22 @@ struct Ctx {
     /// (self-propose and verified-receive), and cleared the same way
     /// on a successful finalize — see [`act_on`]'s `Finalized` branch.
     pending_headers: HashMap<Digest, BlockHeader>,
+    /// This node's own local transaction pool (ADR-0045, "Decided:
+    /// Mempool Is Local Policy, Not Consensus") — never read by
+    /// consensus logic itself yet (block building/validation are
+    /// later passes); populated and drained only by the gossip
+    /// handlers below.
+    mempool: Mempool,
+    /// This node's own last *finalized* height — distinct from
+    /// `ctx.engine.state().height`, which is the height currently
+    /// being contested (one past the last finalized one, once a round
+    /// is under way). `Mempool::admit`'s own validity-window/dry-run
+    /// checks need "the height a transaction would actually be
+    /// considered for next" (`last_finalized_height + 1`), tracked
+    /// here explicitly rather than inferred from the engine's own
+    /// current position, which a passive catch-up jump (ADR-0039) can
+    /// otherwise make momentarily ambiguous.
+    last_finalized_height: BlockHeight,
 }
 
 /// Runs this validator's node process until killed (ADR-0038,
@@ -307,6 +325,11 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         last_timestamp: genesis_header.timestamp,
         chain_position_verified: true,
         pending_headers: HashMap::new(),
+        mempool: Mempool::new(),
+        // Genesis is the last thing every node has "finalized" before
+        // any real round begins (ADR-0043) -- the first real
+        // transaction is admitted against `last_finalized_height + 1`.
+        last_finalized_height: BlockHeight::GENESIS,
     };
 
     drive(&mut ctx, event_rx, config.peers.len())
@@ -661,6 +684,76 @@ fn handle_peer_message(
                 }
             }
         }
+        // ADR-0045, "Decided: Transaction Gossip" -- an announce/
+        // request/response cycle over an opaque tx_id, mirroring
+        // `Channel::Blocks`' own (dormant) `BlockAnnounce`/
+        // `BlockRequest`/`BlockResponse` family exactly, since both are
+        // the same "digest now, full content on request" shape. Every
+        // step here is a dropped, logged message on failure, never a
+        // fatal error -- this is externally-triggerable network input,
+        // the same principle ADR-0042 already established for
+        // proposals.
+        (Channel::Transactions, MessageType::TransactionAnnounce) => {
+            let announce = TransactionAnnounceV1::decode(&envelope.payload)?;
+            if !ctx.mempool.contains(&announce.tx_id) {
+                send_to(
+                    ctx,
+                    conn_id,
+                    Channel::Transactions,
+                    MessageType::TransactionRequest,
+                    TransactionRequestV1 {
+                        tx_id: announce.tx_id,
+                    }
+                    .encode(),
+                )?;
+            }
+        }
+        (Channel::Transactions, MessageType::TransactionRequest) => {
+            let request = TransactionRequestV1::decode(&envelope.payload)?;
+            if let Some(known) = ctx.mempool.get(&request.tx_id) {
+                send_to(
+                    ctx,
+                    conn_id,
+                    Channel::Transactions,
+                    MessageType::TransactionResponse,
+                    TransactionResponseV1 {
+                        envelope: known.clone(),
+                    }
+                    .encode()?,
+                )?;
+            }
+        }
+        (Channel::Transactions, MessageType::TransactionResponse) => {
+            let response = TransactionResponseV1::decode(&envelope.payload)?;
+            let raw = response.envelope.encode()?;
+            match ctx.mempool.admit(
+                &raw,
+                &ctx.store,
+                ctx.last_finalized_height,
+                ctx.chain_id,
+                ctx.network_id,
+                &ctx.records,
+            ) {
+                Ok(tx_id) => {
+                    log_line(&format!("ADMITTED tx={}", hex(&tx_id)));
+                    // Re-broadcast exactly once: every other node that
+                    // already has this tx_id (including whichever peer
+                    // sent it here) will see this announce, find it
+                    // already admitted, and not re-request it --
+                    // natural idempotency from `Mempool::contains`
+                    // alone, not a separate "already forwarded" guard.
+                    broadcast(
+                        ctx,
+                        Channel::Transactions,
+                        MessageType::TransactionAnnounce,
+                        TransactionAnnounceV1 { tx_id }.encode(),
+                    )?;
+                }
+                Err(reason) => {
+                    log_line(&format!("REJECTED transaction reason=\"{reason}\""));
+                }
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -867,6 +960,32 @@ fn broadcast(
     Ok(())
 }
 
+/// Sends one message to exactly one established peer — [`broadcast`]'s
+/// directed counterpart, needed for `TransactionRequest`/
+/// `TransactionResponse` (ADR-0045, "Decided: Transaction Gossip"):
+/// those answer the specific peer that asked, not every peer.
+fn send_to(
+    ctx: &Ctx,
+    conn_id: u64,
+    channel: Channel,
+    message_type: MessageType,
+    payload: Vec<u8>,
+) -> NodeResult<()> {
+    let Some(link) = ctx.links.get(&conn_id) else {
+        return Ok(());
+    };
+    let envelope = P2PMessageEnvelopeV1::new(
+        PROTOCOL_VERSION,
+        ctx.chain_id,
+        ctx.network_id,
+        channel,
+        message_type,
+        payload,
+    )?;
+    let _ = link.send(envelope);
+    Ok(())
+}
+
 fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
     match action {
         ConsensusAction::None => maybe_start_propose_stage(ctx)?,
@@ -901,6 +1020,7 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
                     }
                     ctx.pending_headers.clear();
                     ctx.chain_position_verified = true;
+                    ctx.last_finalized_height = height;
                     let action = ctx.engine.begin_new_height()?;
                     act_on(ctx, action)?;
                 }

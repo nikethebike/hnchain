@@ -16,13 +16,18 @@
 #![allow(dead_code)]
 
 use std::io::{BufRead, BufReader};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use hn_core::ProtocolVersion;
 use hn_crypto::{Ed25519KeyPair, KeyRole, account_address_body};
+use hn_network::{
+    Channel, HandshakeAction, HandshakeEvent, HandshakeParams, HandshakeState, Hello, MessageType,
+    P2PMessageEnvelopeV1, read_frame, write_frame,
+};
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -275,4 +280,102 @@ pub fn height_field(finalized_line: &str) -> TestResult<u64> {
         .find_map(|field| field.strip_prefix("height="))
         .ok_or("FINALIZED line missing a height= field")?;
     Ok(raw.parse()?)
+}
+
+/// This test-local protocol version -- matches `hn-node`'s own private
+/// `PROTOCOL_VERSION` constant by value (not importable: it is not
+/// `pub`, the same reasoning every other devnet fixture here duplicates
+/// rather than reaches into the real binary's own internals for).
+fn test_protocol_version() -> ProtocolVersion {
+    ProtocolVersion::new(0, 1, 0)
+}
+
+/// Connects to `addr`, completes the real `Hello` handshake as a
+/// minimal, non-validating peer (ADR-0045, "Decided: Devnet
+/// Transaction Entry Point"), sends exactly one application message on
+/// `channel`/`message_type`, and returns the still-open stream so a
+/// caller can read a reply, if one is expected.
+///
+/// Declares the exact same `required_channels`/`required_message_types`
+/// a real `hn-node` validator declares (`Channel::Handshake`/
+/// `Consensus`; `Hello`/`ConsensusProposal`/`ConsensusVote`/
+/// `QuorumCertificateMessage`) -- not because this client ever sends
+/// any of those, but because that is what a real node's own handshake
+/// requires its peer's `Hello` to claim support for today. A real
+/// "non-validating full node" capability profile remains a distinct,
+/// separate, still-open item (ADR-0038) this test-only client stands
+/// in for, not an implementation of.
+pub fn connect_handshake_and_send(
+    addr: SocketAddr,
+    chain_id: u8,
+    network_id: u16,
+    channel: Channel,
+    message_type: MessageType,
+    payload: Vec<u8>,
+) -> TestResult<TcpStream> {
+    let mut stream = TcpStream::connect(addr)?;
+
+    let params = HandshakeParams {
+        protocol_version: test_protocol_version(),
+        chain_id,
+        network_id,
+        required_channels: vec![Channel::Handshake, Channel::Consensus],
+        required_message_types: vec![
+            MessageType::Hello,
+            MessageType::ConsensusProposal,
+            MessageType::ConsensusVote,
+            MessageType::QuorumCertificateMessage,
+        ],
+    };
+    let keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorNetwork, [0xEE; 32]);
+    let mut handshake = HandshakeState::new(params, keypair);
+
+    let HandshakeAction::Send(hello) = handshake.apply(HandshakeEvent::SendHello)? else {
+        return Err("expected to send a Hello first".into());
+    };
+    send_envelope(
+        &mut stream,
+        chain_id,
+        network_id,
+        Channel::Handshake,
+        MessageType::Hello,
+        hello.encode()?,
+    )?;
+
+    let response = read_frame(&mut stream)?;
+    let peer_hello = Hello::decode(&response.payload)?;
+    match handshake.apply(HandshakeEvent::ReceiveHello(peer_hello))? {
+        HandshakeAction::Accepted { .. } => {}
+        other => return Err(format!("handshake not accepted: {other:?}").into()),
+    }
+
+    send_envelope(
+        &mut stream,
+        chain_id,
+        network_id,
+        channel,
+        message_type,
+        payload,
+    )?;
+    Ok(stream)
+}
+
+fn send_envelope(
+    stream: &mut TcpStream,
+    chain_id: u8,
+    network_id: u16,
+    channel: Channel,
+    message_type: MessageType,
+    payload: Vec<u8>,
+) -> TestResult<()> {
+    let envelope = P2PMessageEnvelopeV1::new(
+        test_protocol_version(),
+        chain_id,
+        network_id,
+        channel,
+        message_type,
+        payload,
+    )?;
+    write_frame(stream, &envelope)?;
+    Ok(())
 }

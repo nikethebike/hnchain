@@ -118,6 +118,15 @@ impl Mempool {
         self.entries.contains_key(tx_id)
     }
 
+    /// The admitted transaction stored under `tx_id`, if any —
+    /// ADR-0045's own "Decided: Transaction Gossip" needs this to
+    /// answer a peer's `TransactionRequest` with the real envelope it
+    /// already admitted.
+    #[must_use]
+    pub fn get(&self, tx_id: &Digest) -> Option<&TransactionEnvelope> {
+        self.entries.get(tx_id)
+    }
+
     /// Runs `raw_bytes` through ADR-0045's own six-step admission
     /// pipeline, in order, and — if every step passes — stores the
     /// decoded transaction and returns its `tx_id`.
