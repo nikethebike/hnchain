@@ -11,15 +11,10 @@ mod support;
 
 use std::time::Duration;
 
-use hn_core::AccountNonce;
-use hn_crypto::{Ed25519KeyPair, KeyRole, SignatureEnvelope, account_address_body};
 use hn_network::{Channel, MessageType};
-use hn_state::{
-    AccessListV1, TX_VERSION_1, TransactionEnvelope, TransferPayloadV1, TxType, ValidityWindowV1,
-};
 use support::{
-    NETWORK_ID, TestResult, connect_handshake_and_send, hex, spawn_node, wait_until_all_log,
-    write_devnet_genesis,
+    NETWORK_ID, TestResult, connect_handshake_and_send, hex, signed_reserve_transfer, spawn_node,
+    wait_until_all_log, write_devnet_genesis,
 };
 
 const VALIDATOR_COUNT: u8 = 2;
@@ -27,58 +22,6 @@ const BASE_PORT: u16 = 31_900;
 const BASE_TIMEOUT_MS: u64 = 200;
 const WAIT: Duration = Duration::from_secs(90);
 const RECIPIENT: [u8; 32] = [0x44; 32];
-
-/// The devnet genesis's own real Reserve allocation account — a real,
-/// known keypair (seed `[0xA0; 32]`, matching `write_devnet_genesis`'s
-/// own convention exactly), not a separately-seeded fixture account.
-/// Its own real `BalanceValueV1` already exists at genesis
-/// (`hn_state::RESERVE_ALLOCATION`, comfortably above this test's own
-/// tiny transfer amount), so no out-of-band funding step is needed.
-fn reserve_keypair() -> Ed25519KeyPair {
-    Ed25519KeyPair::from_seed(KeyRole::AccountSigning, [0xA0; 32])
-}
-
-fn signed_bootstrap_transfer() -> TestResult<TransactionEnvelope> {
-    let keypair = reserve_keypair();
-    let sender = account_address_body(
-        NETWORK_ID,
-        keypair.key_descriptor().algorithm_id(),
-        &keypair.key_descriptor().public_key_bytes(),
-    )?;
-    let payload = TransferPayloadV1 {
-        recipient: RECIPIENT,
-        asset_id: None,
-        amount: 100,
-    }
-    .encode()?;
-    let mut envelope = TransactionEnvelope {
-        tx_version: TX_VERSION_1,
-        chain_id: hn_core::ChainId::HNCHAIN.get(),
-        network_id: NETWORK_ID,
-        tx_type: TxType::Transfer,
-        sender,
-        bootstrap_key: Some(keypair.key_descriptor()),
-        nonce: AccountNonce::new(0),
-        fee_limit: 100,
-        validity_window: ValidityWindowV1 {
-            min_height: None,
-            max_height: None,
-        },
-        access_list: AccessListV1 {
-            reads: vec![],
-            writes: vec![],
-        },
-        payload,
-        signatures: vec![],
-    };
-    let digest = envelope.signing_payload().signing_digest()?;
-    envelope.signatures = vec![SignatureEnvelope {
-        algorithm_id: keypair.key_descriptor().algorithm_id(),
-        key_reference: None,
-        signature: keypair.sign(&digest).to_vec(),
-    }];
-    Ok(envelope)
-}
 
 #[test]
 fn a_transaction_injected_into_one_node_gossips_to_another() -> TestResult {
@@ -123,7 +66,7 @@ fn a_transaction_injected_into_one_node_gossips_to_another() -> TestResult {
         )?;
     }
 
-    let envelope = signed_bootstrap_transfer()?;
+    let envelope = signed_reserve_transfer(RECIPIENT, 100)?;
     let expected_tx_id = hex(&hn_state::tx_id(&envelope.encode()?)?);
 
     // Inject directly into node 0 only -- as a bare TransactionResponse,

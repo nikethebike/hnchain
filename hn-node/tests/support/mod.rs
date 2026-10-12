@@ -22,11 +22,14 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use hn_core::ProtocolVersion;
-use hn_crypto::{Ed25519KeyPair, KeyRole, account_address_body};
+use hn_core::{AccountNonce, ProtocolVersion};
+use hn_crypto::{Digest, Ed25519KeyPair, KeyRole, SignatureEnvelope, account_address_body};
 use hn_network::{
     Channel, HandshakeAction, HandshakeEvent, HandshakeParams, HandshakeState, Hello, MessageType,
     P2PMessageEnvelopeV1, read_frame, write_frame,
+};
+use hn_state::{
+    AccessListV1, TX_VERSION_1, TransactionEnvelope, TransferPayloadV1, TxType, ValidityWindowV1,
 };
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -280,6 +283,73 @@ pub fn height_field(finalized_line: &str) -> TestResult<u64> {
         .find_map(|field| field.strip_prefix("height="))
         .ok_or("FINALIZED line missing a height= field")?;
     Ok(raw.parse()?)
+}
+
+/// Extracts the hex `state_root=` value from a `FINALIZED ...` log
+/// line (ADR-0045, "Decided: Validator Execution" -- every node
+/// recomputes this independently after committing, so comparing it
+/// across nodes is a real cross-node agreement check, not an assumed
+/// one).
+pub fn state_root_field(finalized_line: &str) -> TestResult<&str> {
+    finalized_line
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("state_root="))
+        .ok_or_else(|| "FINALIZED line missing a state_root= field".into())
+}
+
+/// The devnet genesis's own real Reserve allocation account (seed
+/// `[0xA0; 32]`, matching `write_devnet_genesis`'s own convention
+/// exactly) -- a real, known keypair, not a separately-seeded fixture
+/// account.
+pub fn reserve_keypair() -> Ed25519KeyPair {
+    Ed25519KeyPair::from_seed(KeyRole::AccountSigning, [0xA0; 32])
+}
+
+/// A real, correctly-signed native transfer of `amount` from the
+/// devnet genesis's own Reserve account (comfortably funded above any
+/// amount a test would plausibly use) to `recipient`, at nonce 0 --
+/// only valid as the *first* transaction the Reserve account's own
+/// tests ever apply, since it bootstraps that account's identity.
+pub fn signed_reserve_transfer(recipient: Digest, amount: u128) -> TestResult<TransactionEnvelope> {
+    let keypair = reserve_keypair();
+    let sender = account_address_body(
+        NETWORK_ID,
+        keypair.key_descriptor().algorithm_id(),
+        &keypair.key_descriptor().public_key_bytes(),
+    )?;
+    let payload = TransferPayloadV1 {
+        recipient,
+        asset_id: None,
+        amount,
+    }
+    .encode()?;
+    let mut envelope = TransactionEnvelope {
+        tx_version: TX_VERSION_1,
+        chain_id: hn_core::ChainId::HNCHAIN.get(),
+        network_id: NETWORK_ID,
+        tx_type: TxType::Transfer,
+        sender,
+        bootstrap_key: Some(keypair.key_descriptor()),
+        nonce: AccountNonce::new(0),
+        fee_limit: 100,
+        validity_window: ValidityWindowV1 {
+            min_height: None,
+            max_height: None,
+        },
+        access_list: AccessListV1 {
+            reads: vec![],
+            writes: vec![],
+        },
+        payload,
+        signatures: vec![],
+    };
+    let digest = envelope.signing_payload().signing_digest()?;
+    envelope.signatures = vec![SignatureEnvelope {
+        algorithm_id: keypair.key_descriptor().algorithm_id(),
+        key_reference: None,
+        signature: keypair.sign(&digest).to_vec(),
+    }];
+    Ok(envelope)
 }
 
 /// This test-local protocol version -- matches `hn-node`'s own private

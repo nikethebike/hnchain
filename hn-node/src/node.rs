@@ -1050,12 +1050,26 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
                 .commit_finalized_block(block_hash, &mut ctx.store, &ctx.records)
             {
                 Ok(result) => {
+                    // The real post-commit state_root -- `ctx.store`
+                    // already holds this block's own committed writes
+                    // by this point, so re-enumerating it now (rather
+                    // than threading the proposer's own already-
+                    // computed value through) proves this independently,
+                    // the same "recompute, don't trust" principle
+                    // `verify_proposal` itself already applies.
+                    let empty_table = EmptyHashTable::build()?;
+                    let state_enumerator = ExcludingGenesisMarker {
+                        inner: &ctx.store,
+                        excluded: genesis_marker_key()?,
+                    };
+                    let state_root = compute_post_state_root(&state_enumerator, &[], &empty_table)?;
                     log_line(&format!(
-                        "FINALIZED height={} round={} block={} applied={}",
+                        "FINALIZED height={} round={} block={} applied={} state_root={}",
                         height.get(),
                         round.get(),
                         hex(&block_hash),
-                        result.applied.len()
+                        result.applied.len(),
+                        hex(&state_root)
                     ));
                     ctx.last_block_hash = block_hash;
                     // `pending_headers` mirrors the engine's own
