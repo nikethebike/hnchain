@@ -18,9 +18,9 @@ use hn_network::{
 };
 use hn_state::{
     BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, ConsensusVote,
-    EmptyHashTable, HEADER_VERSION_1, QuorumCertificate, StateCommitter, StateEnumerator,
-    StateReader, ValidatorRecordV1, ValidatorStatus, VoteSigningPayloadV1, VoteTargetType,
-    VoteType, Write, active_key, active_set, apply_block, compute_post_state_root,
+    EmptyHashTable, HEADER_VERSION_1, QuorumCertificate, ReceiptV1, StateCommitter,
+    StateEnumerator, StateReader, ValidatorRecordV1, ValidatorStatus, VoteSigningPayloadV1,
+    VoteTargetType, VoteType, Write, active_key, active_set, apply_block, compute_post_state_root,
     list_empty_root, protocol_parameters_placeholder_hash,
 };
 use hn_storage::RedbStateStore;
@@ -134,16 +134,6 @@ struct Ctx {
     /// `NodeEvent::ConnectionClosed` to decide whether to redial.
     dialed_peers: HashMap<u64, SocketAddr>,
     round_started: bool,
-    /// The current real `hn_state::BlockHeader.state_root` (ADR-0038's
-    /// own `initial_state_root`, computed once at startup and never
-    /// recomputed — ADR-0040, "Decided: Real `block_hash` In `hn-node`":
-    /// every block this devnet finalizes still carries zero
-    /// transactions (ADR-0037's own deliberate scope), so the write-set
-    /// `commit_finalized_block` ever applies is always empty and the
-    /// real state root genuinely never changes block to block — this
-    /// is the actual correct value for every block, not a
-    /// simplification standing in for one.
-    state_root: Digest,
     /// The previous block's own real `block_hash`, chained forward
     /// every time a block finalizes — `[0; 32]` before the first block
     /// (genesis's own `parent_block_hash` semantics remain an open
@@ -215,7 +205,6 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
     std::fs::create_dir_all(&config.data_dir)?;
     let mut store = RedbStateStore::open(config.data_dir.join("state.redb"))?;
     init_genesis(&mut store, &manifest)?;
-    let state_root = manifest.initial_state_root()?;
     let genesis_header = genesis_block_header(&manifest)?;
     let genesis_block_hash = genesis_header.block_hash()?;
 
@@ -341,7 +330,6 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         established: HashSet::new(),
         dialed_peers: HashMap::new(),
         round_started: false,
-        state_root,
         // Genesis's own real, independently-recomputable hash/
         // timestamp (ADR-0043) -- no longer an arbitrary `[0; 32]`/`0`
         // placeholder nothing could actually get wrong.
@@ -685,7 +673,7 @@ fn handle_peer_message(
                     ctx.network_id,
                     &ctx.ordered_ids,
                     &ctx.store,
-                    ctx.state_root,
+                    &ctx.records,
                     chain_position,
                 ) {
                     Ok(block_hash) => {
@@ -853,9 +841,13 @@ fn maybe_sync_forward(ctx: &mut Ctx, observed_height: u64) -> NodeResult<()> {
 /// claim), chain/network binding, proposer eligibility
 /// (`round_proposer`), proposer signature (against that proposer's own
 /// registered consensus key), header-vs-body consistency
-/// (`BlockEnvelope::verify_body_matches_header`), this devnet's own
-/// fixed `state_root`/`consensus_root`/`protocol_parameters_hash`
-/// values, `parent_block_hash`/timestamp monotonicity (only while
+/// (`BlockEnvelope::verify_body_matches_header`), a *real* re-execution
+/// of `body.transactions` against `store` (ADR-0045, "Decided:
+/// Validator Execution") — the body's own claimed `receipts` must
+/// match that execution's real result exactly, and `header.state_root`
+/// must match the real post-block root it produces — this devnet's own
+/// fixed `consensus_root`/`protocol_parameters_hash` values,
+/// `parent_block_hash`/timestamp monotonicity (only while
 /// `chain_position` is `Some` — ADR-0042's own "Decided:
 /// Chain-Position-Gated Checks"), and finally the embedded
 /// `justification` quorum certificate's own signatures, if present.
@@ -873,8 +865,8 @@ fn verify_proposal(
     chain_id: u8,
     network_id: u16,
     ordered_ids: &[Digest],
-    store: &impl StateReader,
-    state_root: Digest,
+    store: &(impl StateReader + StateEnumerator),
+    validator_candidates: &[ValidatorRecordV1],
     chain_position: Option<(Digest, UnixTimeMillis)>,
 ) -> Result<Digest, String> {
     let header = &message.envelope.header;
@@ -907,8 +899,43 @@ fn verify_proposal(
         .verify_body_matches_header()
         .map_err(|error| format!("body does not match header: {error}"))?;
 
-    if header.state_root != state_root {
-        return Err("state_root does not match this devnet's own fixed value".to_string());
+    // ADR-0045, "Decided: Validator Execution" -- actually run the
+    // proposed transactions, rather than trusting the body's own
+    // claimed receipts/state_root: `verify_body_matches_header` above
+    // only checked that the body is internally self-consistent with
+    // the header, not that it reflects what really applying it
+    // produces.
+    let application = apply_block(
+        &message.envelope.body.transactions,
+        store,
+        header.height,
+        validator_candidates,
+    )
+    .map_err(|error| format!("block application failed: {error}"))?;
+    let actual_receipts: Vec<ReceiptV1> = application
+        .applied
+        .iter()
+        .map(|applied| applied.receipt)
+        .collect();
+    if actual_receipts != message.envelope.body.receipts {
+        return Err("receipts do not match the real execution result".to_string());
+    }
+    let write_set: Vec<Write> = application
+        .applied
+        .iter()
+        .flat_map(|applied| applied.write_set.clone())
+        .collect();
+    let empty_table = EmptyHashTable::build()
+        .map_err(|error| format!("could not build the empty-subtree hash table: {error}"))?;
+    let state_enumerator = ExcludingGenesisMarker {
+        inner: store,
+        excluded: genesis_marker_key()
+            .map_err(|error| format!("could not compute the genesis marker key: {error}"))?,
+    };
+    let actual_state_root = compute_post_state_root(&state_enumerator, &write_set, &empty_table)
+        .map_err(|error| format!("could not compute the real post-block state_root: {error}"))?;
+    if header.state_root != actual_state_root {
+        return Err("state_root does not match the real post-block state".to_string());
     }
     if header.consensus_root != DEVNET_VSC {
         return Err("consensus_root does not match this devnet's own fixed value".to_string());
@@ -1045,6 +1072,14 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
                     ctx.pending_headers.clear();
                     ctx.chain_position_verified = true;
                     ctx.last_finalized_height = height;
+                    // ADR-0045, "Decided: Commit" -- once a block is
+                    // actually finalized, every transaction it really
+                    // included is done, successfully or not (a
+                    // `Failed` receipt still consumed its own nonce);
+                    // either way it must never be selected into a
+                    // future block again.
+                    ctx.mempool
+                        .remove_included(result.applied.iter().map(|applied| applied.tx_id));
                     let action = ctx.engine.begin_new_height()?;
                     act_on(ctx, action)?;
                 }
@@ -1406,8 +1441,13 @@ fn log_line(line: &str) {
 
 #[cfg(test)]
 mod tests {
-    use hn_core::{BlockHeight, Round};
-    use hn_state::{StateWriter, ValidatorSection, extra_data_hash, validator_section_state_key};
+    use hn_core::{AccountNonce, BlockHeight, Round};
+    use hn_crypto::account_address_body;
+    use hn_state::{
+        AccessListV1, AccountSection, BalanceValueV1, ReceiptStatus, StateWriter, TX_VERSION_1,
+        TransactionEnvelope, TransferPayloadV1, TxType, ValidatorSection, ValidityWindowV1,
+        account_section_state_key, extra_data_hash, validator_section_state_key,
+    };
     use hn_storage::InMemoryStateStore;
 
     use super::*;
@@ -1415,7 +1455,6 @@ mod tests {
 
     const CHAIN_ID: u8 = 1;
     const NETWORK_ID: u16 = 1;
-    const STATE_ROOT: Digest = [0x02; 32];
     const HEIGHT: u64 = 5;
     const ROUND: u64 = 0;
 
@@ -1457,19 +1496,38 @@ mod tests {
     }
 
     /// A self-consistent, correctly-signed envelope for `proposer_id`/
-    /// `keypair` — every check `verify_proposal` can satisfy without
-    /// external context already holds; callers tamper one field at a
-    /// time to exercise one specific rejection.
+    /// `keypair`, actually executing `transactions` against `store` to
+    /// derive real `receipts`/`state_root` — every check
+    /// `verify_proposal` can satisfy without external context already
+    /// holds; callers tamper one field at a time (or pass a
+    /// `transactions` list that cannot really apply) to exercise one
+    /// specific rejection.
     fn signed_envelope(
+        store: &InMemoryStateStore,
         proposer_id: Digest,
         keypair: &Ed25519KeyPair,
         parent_block_hash: Digest,
         timestamp_millis: u64,
+        transactions: Vec<TransactionEnvelope>,
     ) -> NodeResult<(BlockEnvelope, SignatureEnvelope)> {
+        let application = apply_block(&transactions, store, BlockHeight::new(HEIGHT), &[])?;
+        let receipts: Vec<ReceiptV1> = application
+            .applied
+            .iter()
+            .map(|applied| applied.receipt)
+            .collect();
+        let write_set: Vec<Write> = application
+            .applied
+            .iter()
+            .flat_map(|applied| applied.write_set.clone())
+            .collect();
+        let empty_table = EmptyHashTable::build()?;
+        let state_root = compute_post_state_root(store, &write_set, &empty_table)?;
+
         let body = BlockBody {
             body_version: BODY_VERSION_1,
-            transactions: Vec::new(),
-            receipts: Vec::new(),
+            transactions,
+            receipts,
             evidence: Vec::new(),
             extra_data: Vec::new(),
         };
@@ -1485,7 +1543,7 @@ mod tests {
             proposer: proposer_id,
             timestamp: UnixTimeMillis::from_millis(timestamp_millis),
             transactions_root: body.transactions_root()?,
-            state_root: STATE_ROOT,
+            state_root,
             receipts_root: body.receipts_root()?,
             events_root: list_empty_root()?,
             consensus_root: DEVNET_VSC,
@@ -1508,6 +1566,72 @@ mod tests {
         Ok((envelope, signature))
     }
 
+    const TRANSFER_RECIPIENT: Digest = [0x50; 32];
+
+    /// A real, correctly-signed native transfer from `sender`/
+    /// `keypair` at `nonce` — bootstraps `sender`'s own identity (no
+    /// test fixture ever pre-populates one), so only valid as the
+    /// *first* transaction a given sender's own tests apply.
+    fn signed_transaction(
+        keypair: &Ed25519KeyPair,
+        sender: Digest,
+        nonce: u64,
+    ) -> NodeResult<TransactionEnvelope> {
+        let payload = TransferPayloadV1 {
+            recipient: TRANSFER_RECIPIENT,
+            asset_id: None,
+            amount: 10,
+        }
+        .encode()?;
+        let mut envelope = TransactionEnvelope {
+            tx_version: TX_VERSION_1,
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            tx_type: TxType::Transfer,
+            sender,
+            bootstrap_key: Some(keypair.key_descriptor()),
+            nonce: AccountNonce::new(nonce),
+            fee_limit: 100,
+            validity_window: ValidityWindowV1 {
+                min_height: None,
+                max_height: None,
+            },
+            access_list: AccessListV1 {
+                reads: vec![],
+                writes: vec![],
+            },
+            payload,
+            signatures: vec![],
+        };
+        let digest = envelope.signing_payload().signing_digest()?;
+        envelope.signatures = vec![SignatureEnvelope {
+            algorithm_id: keypair.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: keypair.sign(&digest).to_vec(),
+        }];
+        Ok(envelope)
+    }
+
+    /// A real, derivable sender address funded with `native_balance`
+    /// directly in `store` -- the same bootstrap-key-must-derive-
+    /// sender-address setup [`signed_transaction`]'s own `bootstrap_key`
+    /// relies on.
+    fn funded_sender(
+        store: &mut InMemoryStateStore,
+        seed: u8,
+        native_balance: u128,
+    ) -> NodeResult<(Digest, Ed25519KeyPair)> {
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::AccountSigning, [seed; 32]);
+        let sender = account_address_body(
+            NETWORK_ID,
+            keypair.key_descriptor().algorithm_id(),
+            &keypair.key_descriptor().public_key_bytes(),
+        )?;
+        let key = account_section_state_key(&sender, AccountSection::Balance)?;
+        store.set(key, BalanceValueV1 { native_balance }.encode())?;
+        Ok((sender, keypair))
+    }
+
     const PARENT: Digest = [0x30; 32];
     const PARENT_TIMESTAMP_MS: u64 = 1_000;
     const VALID_TIMESTAMP_MS: u64 = 2_000;
@@ -1516,10 +1640,12 @@ mod tests {
     fn accepts_a_legitimate_proposal_with_a_known_chain_position() -> NodeResult<()> {
         let fixture = fixture()?;
         let (envelope, proposer_signature) = signed_envelope(
+            &fixture.store,
             fixture.legitimate_proposer_id,
             &fixture.legitimate_proposer,
             PARENT,
             VALID_TIMESTAMP_MS,
+            Vec::new(),
         )?;
         let expected_hash = envelope.block_hash()?;
         let message = ConsensusProposalMessageV1 {
@@ -1532,7 +1658,7 @@ mod tests {
             NETWORK_ID,
             &fixture.ordered_ids,
             &fixture.store,
-            STATE_ROOT,
+            &[],
             Some((PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS))),
         );
         assert_eq!(result, Ok(expected_hash));
@@ -1543,10 +1669,12 @@ mod tests {
     fn accepts_any_parent_and_timestamp_while_chain_position_is_unknown() -> NodeResult<()> {
         let fixture = fixture()?;
         let (envelope, proposer_signature) = signed_envelope(
+            &fixture.store,
             fixture.legitimate_proposer_id,
             &fixture.legitimate_proposer,
             [0xff; 32], // not this node's own last_block_hash
             0,          // older than any real parent timestamp
+            Vec::new(),
         )?;
         let expected_hash = envelope.block_hash()?;
         let message = ConsensusProposalMessageV1 {
@@ -1559,7 +1687,7 @@ mod tests {
             NETWORK_ID,
             &fixture.ordered_ids,
             &fixture.store,
-            STATE_ROOT,
+            &[],
             None,
         );
         assert_eq!(result, Ok(expected_hash));
@@ -1574,8 +1702,14 @@ mod tests {
         // not the proposer this exact (height, round) selects.
         let impostor_id = [0x10_u8; 32];
         let impostor_keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, impostor_id);
-        let (envelope, proposer_signature) =
-            signed_envelope(impostor_id, &impostor_keypair, PARENT, VALID_TIMESTAMP_MS)?;
+        let (envelope, proposer_signature) = signed_envelope(
+            &fixture.store,
+            impostor_id,
+            &impostor_keypair,
+            PARENT,
+            VALID_TIMESTAMP_MS,
+            Vec::new(),
+        )?;
         let message = ConsensusProposalMessageV1 {
             envelope,
             proposer_signature,
@@ -1586,7 +1720,7 @@ mod tests {
             NETWORK_ID,
             &fixture.ordered_ids,
             &fixture.store,
-            STATE_ROOT,
+            &[],
             None,
         );
         assert!(result.is_err_and(|reason| reason.contains("legitimate proposer")));
@@ -1597,10 +1731,12 @@ mod tests {
     fn rejects_a_tampered_signature() -> NodeResult<()> {
         let fixture = fixture()?;
         let (envelope, mut proposer_signature) = signed_envelope(
+            &fixture.store,
             fixture.legitimate_proposer_id,
             &fixture.legitimate_proposer,
             PARENT,
             VALID_TIMESTAMP_MS,
+            Vec::new(),
         )?;
         proposer_signature.signature[0] ^= 0xff;
         let message = ConsensusProposalMessageV1 {
@@ -1613,7 +1749,7 @@ mod tests {
             NETWORK_ID,
             &fixture.ordered_ids,
             &fixture.store,
-            STATE_ROOT,
+            &[],
             None,
         );
         assert!(result.is_err_and(|reason| reason.contains("signature invalid")));
@@ -1624,10 +1760,12 @@ mod tests {
     fn rejects_a_header_that_disagrees_with_its_own_body() -> NodeResult<()> {
         let fixture = fixture()?;
         let (mut envelope, _) = signed_envelope(
+            &fixture.store,
             fixture.legitimate_proposer_id,
             &fixture.legitimate_proposer,
             PARENT,
             VALID_TIMESTAMP_MS,
+            Vec::new(),
         )?;
         // Tampered *after* the original signature was computed, then
         // re-signed over the tampered header's own (now different)
@@ -1651,7 +1789,7 @@ mod tests {
             NETWORK_ID,
             &fixture.ordered_ids,
             &fixture.store,
-            STATE_ROOT,
+            &[],
             None,
         );
         assert!(result.is_err_and(|reason| reason.contains("does not match header")));
@@ -1661,12 +1799,26 @@ mod tests {
     #[test]
     fn rejects_a_mismatched_state_root() -> NodeResult<()> {
         let fixture = fixture()?;
-        let (envelope, proposer_signature) = signed_envelope(
+        let (mut envelope, _) = signed_envelope(
+            &fixture.store,
             fixture.legitimate_proposer_id,
             &fixture.legitimate_proposer,
             PARENT,
             VALID_TIMESTAMP_MS,
+            Vec::new(),
         )?;
+        // Tampered *after* the original signature was computed, then
+        // re-signed over the tampered header's own (now different)
+        // hash -- a real proposer could claim any `state_root` it
+        // likes; nothing before this check in `verify_proposal` would
+        // catch it, only the real recomputation this test exercises.
+        envelope.header.state_root = [0xee; 32];
+        let block_hash = envelope.block_hash()?;
+        let proposer_signature = SignatureEnvelope {
+            algorithm_id: fixture.legitimate_proposer.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: fixture.legitimate_proposer.sign(&block_hash).to_vec(),
+        };
         let message = ConsensusProposalMessageV1 {
             envelope,
             proposer_signature,
@@ -1677,7 +1829,7 @@ mod tests {
             NETWORK_ID,
             &fixture.ordered_ids,
             &fixture.store,
-            [0xee; 32], // not this fixture's own STATE_ROOT
+            &[],
             None,
         );
         assert!(result.is_err_and(|reason| reason.contains("state_root")));
@@ -1688,10 +1840,12 @@ mod tests {
     fn rejects_a_wrong_parent_block_hash_when_chain_position_is_known() -> NodeResult<()> {
         let fixture = fixture()?;
         let (envelope, proposer_signature) = signed_envelope(
+            &fixture.store,
             fixture.legitimate_proposer_id,
             &fixture.legitimate_proposer,
             [0xff; 32], // not PARENT
             VALID_TIMESTAMP_MS,
+            Vec::new(),
         )?;
         let message = ConsensusProposalMessageV1 {
             envelope,
@@ -1703,7 +1857,7 @@ mod tests {
             NETWORK_ID,
             &fixture.ordered_ids,
             &fixture.store,
-            STATE_ROOT,
+            &[],
             Some((PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS))),
         );
         assert!(result.is_err_and(|reason| reason.contains("parent_block_hash")));
@@ -1714,10 +1868,12 @@ mod tests {
     fn rejects_a_non_monotonic_timestamp_when_chain_position_is_known() -> NodeResult<()> {
         let fixture = fixture()?;
         let (envelope, proposer_signature) = signed_envelope(
+            &fixture.store,
             fixture.legitimate_proposer_id,
             &fixture.legitimate_proposer,
             PARENT,
             PARENT_TIMESTAMP_MS, // not strictly after the parent's own
+            Vec::new(),
         )?;
         let message = ConsensusProposalMessageV1 {
             envelope,
@@ -1729,7 +1885,7 @@ mod tests {
             NETWORK_ID,
             &fixture.ordered_ids,
             &fixture.store,
-            STATE_ROOT,
+            &[],
             Some((PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS))),
         );
         assert!(result.is_err_and(|reason| reason.contains("timestamp")));
@@ -1740,10 +1896,12 @@ mod tests {
     fn rejects_an_invalid_justification_quorum_certificate() -> NodeResult<()> {
         let fixture = fixture()?;
         let (mut envelope, proposer_signature) = signed_envelope(
+            &fixture.store,
             fixture.legitimate_proposer_id,
             &fixture.legitimate_proposer,
             PARENT,
             VALID_TIMESTAMP_MS,
+            Vec::new(),
         )?;
         envelope.justification = Some(QuorumCertificate {
             certificate_type: VoteType::Prevote,
@@ -1784,10 +1942,159 @@ mod tests {
             NETWORK_ID,
             &fixture.ordered_ids,
             &fixture.store,
-            STATE_ROOT,
+            &[],
             None,
         );
         assert!(result.is_err_and(|reason| reason.contains("justification")));
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_a_legitimate_proposal_with_a_real_transaction() -> NodeResult<()> {
+        let mut fixture = fixture()?;
+        let (sender, keypair) = funded_sender(&mut fixture.store, 0x41, 1_000)?;
+        let transaction = signed_transaction(&keypair, sender, 0)?;
+        let (envelope, proposer_signature) = signed_envelope(
+            &fixture.store,
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            PARENT,
+            VALID_TIMESTAMP_MS,
+            vec![transaction],
+        )?;
+        let expected_hash = envelope.block_hash()?;
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            proposer_signature,
+        };
+        let result = verify_proposal(
+            &message,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            &fixture.store,
+            &[],
+            Some((PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS))),
+        );
+        assert_eq!(result, Ok(expected_hash));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_receipts_that_do_not_match_real_execution() -> NodeResult<()> {
+        let mut fixture = fixture()?;
+        let (sender, keypair) = funded_sender(&mut fixture.store, 0x42, 1_000)?;
+        let transaction = signed_transaction(&keypair, sender, 0)?;
+        let (mut envelope, _) = signed_envelope(
+            &fixture.store,
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            PARENT,
+            VALID_TIMESTAMP_MS,
+            vec![transaction],
+        )?;
+        // Tampered *after* real execution already produced the
+        // correct `Success` receipt -- recomputing `receipts_root`
+        // from this lie keeps the header internally self-consistent
+        // with the body (`verify_body_matches_header` alone cannot
+        // catch this), but real re-execution inside `verify_proposal`
+        // still produces the original, different receipt.
+        envelope.body.receipts[0].status = ReceiptStatus::Failed;
+        envelope.header.receipts_root = envelope.body.receipts_root()?;
+        let block_hash = envelope.block_hash()?;
+        let proposer_signature = SignatureEnvelope {
+            algorithm_id: fixture.legitimate_proposer.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: fixture.legitimate_proposer.sign(&block_hash).to_vec(),
+        };
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            proposer_signature,
+        };
+        let result = verify_proposal(
+            &message,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            &fixture.store,
+            &[],
+            None,
+        );
+        assert!(result.is_err_and(|reason| reason.contains("receipts do not match")));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_a_transaction_that_would_abort_application() -> NodeResult<()> {
+        let mut fixture = fixture()?;
+        let (sender, keypair) = funded_sender(&mut fixture.store, 0x43, 1_000)?;
+        // Nonce 5 while the account's real nonce is 0 (absent) --
+        // `apply_block` must abort on this, so this block cannot be
+        // built via `signed_envelope` (which itself needs real
+        // application to succeed to derive real roots). Built by hand
+        // instead: an internally self-consistent header/body pair
+        // whose claimed receipt is pure fiction, since nothing can
+        // honestly execute this transaction.
+        let transaction = signed_transaction(&keypair, sender, 5)?;
+        let tx_id = hn_state::tx_id(&transaction.encode()?)?;
+        let body = BlockBody {
+            body_version: BODY_VERSION_1,
+            transactions: vec![transaction],
+            receipts: vec![ReceiptV1 {
+                tx_id,
+                status: ReceiptStatus::Success,
+            }],
+            evidence: Vec::new(),
+            extra_data: Vec::new(),
+        };
+        let header = BlockHeader {
+            header_version: HEADER_VERSION_1,
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            height: BlockHeight::new(HEIGHT),
+            round: Round::new(ROUND),
+            epoch: Epoch::new(0),
+            protocol_epoch: ProtocolEpoch::GENESIS,
+            parent_block_hash: PARENT,
+            proposer: fixture.legitimate_proposer_id,
+            timestamp: UnixTimeMillis::from_millis(VALID_TIMESTAMP_MS),
+            transactions_root: body.transactions_root()?,
+            // Never reached -- real application aborts before
+            // `state_root` is ever checked.
+            state_root: [0_u8; 32],
+            receipts_root: body.receipts_root()?,
+            events_root: list_empty_root()?,
+            consensus_root: DEVNET_VSC,
+            evidence_root: body.evidence_root()?,
+            protocol_parameters_hash: protocol_parameters_placeholder_hash()?,
+            extra_data_hash: extra_data_hash(&[])?,
+        };
+        let envelope = BlockEnvelope {
+            block_version: BLOCK_VERSION_1,
+            header,
+            body,
+            justification: None,
+        };
+        let block_hash = envelope.block_hash()?;
+        let proposer_signature = SignatureEnvelope {
+            algorithm_id: fixture.legitimate_proposer.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: fixture.legitimate_proposer.sign(&block_hash).to_vec(),
+        };
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            proposer_signature,
+        };
+        let result = verify_proposal(
+            &message,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            &fixture.store,
+            &[],
+            None,
+        );
+        assert!(result.is_err_and(|reason| reason.contains("block application failed")));
         Ok(())
     }
 
