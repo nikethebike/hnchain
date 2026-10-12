@@ -111,6 +111,7 @@ mod error;
 mod genesis;
 mod hex;
 mod identity;
+mod mempool;
 mod node;
 
 pub use config::{ConfigError, NodeConfig};
@@ -119,6 +120,7 @@ pub use genesis::{
     GENESIS_MANIFEST_VERSION_1, GENESIS_MESSAGE_MAX_LEN, GenesisAccount, GenesisAllocations,
     GenesisError, GenesisManifest, GenesisValidator, MAX_GENESIS_VALIDATORS,
 };
+pub use mempool::{MEMPOOL_MAX_TXS, Mempool, MempoolError};
 pub use node::run;
 
 #[cfg(test)]
