@@ -1,7 +1,11 @@
 use std::collections::BTreeMap;
 
+use hn_core::BlockHeight;
 use hn_crypto::Digest;
-use hn_state::{StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter, Write};
+use hn_state::{
+    BlockStore, FinalizedBlock, StateCommitter, StateEnumerator, StateReader, StateResult,
+    StateWriter, Write,
+};
 
 /// An in-memory [`StateReader`]/[`StateWriter`] implementation.
 ///
@@ -13,6 +17,7 @@ use hn_state::{StateCommitter, StateEnumerator, StateReader, StateResult, StateW
 #[derive(Debug, Default)]
 pub struct InMemoryStateStore {
     values: BTreeMap<Digest, Vec<u8>>,
+    blocks: BTreeMap<u64, FinalizedBlock>,
 }
 
 impl InMemoryStateStore {
@@ -59,10 +64,107 @@ impl StateEnumerator for InMemoryStateStore {
     }
 }
 
+impl BlockStore for InMemoryStateStore {
+    /// A plain pair of inserts is genuinely atomic here, not just
+    /// nominally: a `BTreeMap` insert cannot itself fail, so there is
+    /// no partial-failure mode to guard against beyond a panic, which
+    /// would abort the whole process regardless of how this is written
+    /// (same reasoning as [`StateCommitter::commit`]'s own impl here).
+    fn commit_block(&mut self, writes: &[Write], block: &FinalizedBlock) -> StateResult<()> {
+        for write in writes {
+            self.values.insert(write.state_key, write.value.clone());
+        }
+        self.blocks
+            .insert(block.envelope.header.height.get(), block.clone());
+        Ok(())
+    }
+
+    fn finalized_block_range(
+        &self,
+        from_height: BlockHeight,
+        max_count: u32,
+    ) -> StateResult<Vec<FinalizedBlock>> {
+        Ok(self
+            .blocks
+            .range(from_height.get().saturating_add(1)..)
+            .take(max_count as usize)
+            .map(|(_, block)| block.clone())
+            .collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::InMemoryStateStore;
-    use hn_state::{StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter, Write};
+    use hn_core::{BlockHeight, Epoch, ProtocolEpoch, Round, UnixTimeMillis};
+    use hn_crypto::SignatureEnvelope;
+    use hn_state::{
+        BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, BlockStore,
+        FINALIZED_BLOCK_VERSION_1, FinalizedBlock, HEADER_VERSION_1, QuorumCertificate,
+        StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter, VoteTargetType,
+        VoteType, Write, list_empty_root,
+    };
+
+    fn sample_finalized_block(height: u64) -> StateResult<FinalizedBlock> {
+        let body = BlockBody {
+            body_version: BODY_VERSION_1,
+            transactions: Vec::new(),
+            receipts: Vec::new(),
+            evidence: Vec::new(),
+            extra_data: Vec::new(),
+        };
+        let header = BlockHeader {
+            header_version: HEADER_VERSION_1,
+            chain_id: 1,
+            network_id: 1,
+            height: BlockHeight::new(height),
+            round: Round::new(0),
+            epoch: Epoch::new(0),
+            protocol_epoch: ProtocolEpoch::GENESIS,
+            parent_block_hash: [0_u8; 32],
+            proposer: [0x01_u8; 32],
+            timestamp: UnixTimeMillis::from_millis(height),
+            transactions_root: body.transactions_root()?,
+            state_root: [0x02_u8; 32],
+            receipts_root: body.receipts_root()?,
+            events_root: list_empty_root()?,
+            consensus_root: [0x03_u8; 32],
+            evidence_root: body.evidence_root()?,
+            protocol_parameters_hash: [0x04_u8; 32],
+            extra_data_hash: body.extra_data_hash()?,
+        };
+        let envelope = BlockEnvelope {
+            block_version: BLOCK_VERSION_1,
+            header,
+            body,
+            justification: None,
+        };
+        let block_hash = envelope.block_hash()?;
+        let commit_qc = QuorumCertificate {
+            certificate_type: VoteType::Precommit,
+            chain_id: 1,
+            network_id: 1,
+            epoch: Epoch::new(0),
+            height: BlockHeight::new(height),
+            round: Round::new(0),
+            validator_set_commitment: [0x11_u8; 32],
+            target_type: VoteTargetType::Block,
+            target_hash: block_hash,
+            total_voting_power: 100,
+            signed_voting_power: 100,
+            signer_commitment: vec![0b0000_0001],
+            aggregate_proof: vec![SignatureEnvelope {
+                algorithm_id: 1,
+                key_reference: None,
+                signature: vec![0xaa; 64],
+            }],
+        };
+        Ok(FinalizedBlock {
+            finalized_block_version: FINALIZED_BLOCK_VERSION_1,
+            envelope,
+            commit_qc,
+        })
+    }
 
     #[test]
     fn round_trips_a_stored_value() -> StateResult<()> {
@@ -128,6 +230,52 @@ mod tests {
     fn enumerate_is_empty_for_a_fresh_store() -> StateResult<()> {
         let store = InMemoryStateStore::new();
         assert_eq!(store.enumerate()?, Vec::new());
+        Ok(())
+    }
+
+    #[test]
+    fn commit_block_applies_writes_and_stores_the_block_together() -> StateResult<()> {
+        let mut store = InMemoryStateStore::new();
+        let block = sample_finalized_block(1)?;
+        let writes = vec![Write {
+            state_key: [0x77; 32],
+            value: b"applied".to_vec(),
+        }];
+        store.commit_block(&writes, &block)?;
+
+        assert_eq!(store.get(&[0x77; 32])?, Some(b"applied".to_vec()));
+        assert_eq!(
+            store.finalized_block_range(BlockHeight::new(0), 10)?,
+            vec![block]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn finalized_block_range_returns_an_ascending_contiguous_prefix() -> StateResult<()> {
+        let mut store = InMemoryStateStore::new();
+        for height in 1..=5 {
+            store.commit_block(&[], &sample_finalized_block(height)?)?;
+        }
+
+        let page = store.finalized_block_range(BlockHeight::new(1), 2)?;
+        assert_eq!(
+            page.iter()
+                .map(|block| block.envelope.header.height.get())
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn finalized_block_range_is_empty_past_the_last_stored_height() -> StateResult<()> {
+        let mut store = InMemoryStateStore::new();
+        store.commit_block(&[], &sample_finalized_block(1)?)?;
+        assert_eq!(
+            store.finalized_block_range(BlockHeight::new(5), 10)?,
+            Vec::new()
+        );
         Ok(())
     }
 }

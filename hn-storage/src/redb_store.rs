@@ -1,8 +1,10 @@
 use std::path::Path;
 
+use hn_core::BlockHeight;
 use hn_crypto::Digest;
 use hn_state::{
-    StateCommitter, StateEnumerator, StateError, StateReader, StateResult, StateWriter, Write,
+    BlockStore, FinalizedBlock, StateCommitter, StateEnumerator, StateError, StateReader,
+    StateResult, StateWriter, Write,
 };
 use redb::{ReadableDatabase, ReadableTable, TableDefinition};
 
@@ -14,6 +16,15 @@ use redb::{ReadableDatabase, ReadableTable, TableDefinition};
 /// nothing here since every `state_key` this crate ever sees is already
 /// exactly 32 bytes (ADR-0007).
 const STATE_TABLE: TableDefinition<'_, &[u8], &[u8]> = TableDefinition::new("state");
+
+/// `height -> canonical HNCS [`FinalizedBlock`] bytes` (ADR-0044,
+/// "Decided: Durable Finalized-Block Storage") — a second table in the
+/// same backend, not a new store with its own consistency story.
+/// `u64`, not a fixed-width digest: this table is purely height-
+/// ordered (ADR-0044, "Decided: Wire Protocol"), and `redb`'s built-in
+/// `Key` impl for `u64` orders numerically, exactly what
+/// [`BlockStore::finalized_block_range`] needs.
+const BLOCKS_TABLE: TableDefinition<'_, u64, &[u8]> = TableDefinition::new("finalized_blocks");
 
 /// A `redb`-backed durable [`StateReader`]/[`StateWriter`]/
 /// [`StateCommitter`] implementation (ADR-0019, "Decided: initial
@@ -49,6 +60,7 @@ impl RedbStateStore {
         let database = redb::Database::create(path).map_err(storage_error)?;
         let write_txn = database.begin_write().map_err(storage_error)?;
         write_txn.open_table(STATE_TABLE).map_err(storage_error)?;
+        write_txn.open_table(BLOCKS_TABLE).map_err(storage_error)?;
         write_txn.commit().map_err(storage_error)?;
         Ok(Self { database })
     }
@@ -119,6 +131,54 @@ impl StateEnumerator for RedbStateStore {
     }
 }
 
+impl BlockStore for RedbStateStore {
+    /// One `redb` transaction across both tables: `writes` land in
+    /// [`STATE_TABLE`] and `block` lands in [`BLOCKS_TABLE`] before the
+    /// single `write_txn.commit()` call, so a failure anywhere before
+    /// that point (an `Err` returned, or the process dying) leaves
+    /// `write_txn` dropped without committing — `redb`'s own guarantee
+    /// is that such a transaction has no effect on the database at
+    /// all, exactly [`BlockStore`]'s own atomicity contract (ADR-0044,
+    /// "Decided: Atomic Commit Of Block And State").
+    fn commit_block(&mut self, writes: &[Write], block: &FinalizedBlock) -> StateResult<()> {
+        let height = block.envelope.header.height.get();
+        let encoded_block = block.encode()?;
+        let write_txn = self.database.begin_write().map_err(storage_error)?;
+        {
+            let mut state_table = write_txn.open_table(STATE_TABLE).map_err(storage_error)?;
+            for write in writes {
+                state_table
+                    .insert(write.state_key.as_slice(), write.value.as_slice())
+                    .map_err(storage_error)?;
+            }
+            let mut blocks_table = write_txn.open_table(BLOCKS_TABLE).map_err(storage_error)?;
+            blocks_table
+                .insert(height, encoded_block.as_slice())
+                .map_err(storage_error)?;
+        }
+        write_txn.commit().map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn finalized_block_range(
+        &self,
+        from_height: BlockHeight,
+        max_count: u32,
+    ) -> StateResult<Vec<FinalizedBlock>> {
+        let read_txn = self.database.begin_read().map_err(storage_error)?;
+        let table = read_txn.open_table(BLOCKS_TABLE).map_err(storage_error)?;
+        table
+            .range(from_height.get().saturating_add(1)..)
+            .map_err(storage_error)?
+            .take(max_count as usize)
+            .map(|entry| {
+                let (_, value_guard) = entry.map_err(storage_error)?;
+                FinalizedBlock::decode(value_guard.value())
+            })
+            .collect()
+    }
+}
+
 /// Converts any `redb` error into [`StateError::Storage`] via its own
 /// `Display` output. Backend-agnostic by construction: this crate's
 /// callers see only "a storage operation failed", never a `redb`-typed
@@ -129,12 +189,80 @@ fn storage_error(error: impl Into<redb::Error>) -> StateError {
 
 #[cfg(test)]
 mod tests {
-    use hn_state::{StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter, Write};
+    use hn_core::{BlockHeight, Epoch, ProtocolEpoch, Round, UnixTimeMillis};
+    use hn_crypto::SignatureEnvelope;
+    use hn_state::{
+        BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, BlockStore,
+        FINALIZED_BLOCK_VERSION_1, FinalizedBlock, HEADER_VERSION_1, QuorumCertificate,
+        StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter, VoteTargetType,
+        VoteType, Write, list_empty_root,
+    };
     use tempfile::tempdir;
 
-    use super::{STATE_TABLE, storage_error};
+    use super::{BLOCKS_TABLE, STATE_TABLE, storage_error};
 
     use super::RedbStateStore;
+
+    fn sample_finalized_block(height: u64) -> StateResult<FinalizedBlock> {
+        let body = BlockBody {
+            body_version: BODY_VERSION_1,
+            transactions: Vec::new(),
+            receipts: Vec::new(),
+            evidence: Vec::new(),
+            extra_data: Vec::new(),
+        };
+        let header = BlockHeader {
+            header_version: HEADER_VERSION_1,
+            chain_id: 1,
+            network_id: 1,
+            height: BlockHeight::new(height),
+            round: Round::new(0),
+            epoch: Epoch::new(0),
+            protocol_epoch: ProtocolEpoch::GENESIS,
+            parent_block_hash: [0_u8; 32],
+            proposer: [0x01_u8; 32],
+            timestamp: UnixTimeMillis::from_millis(height),
+            transactions_root: body.transactions_root()?,
+            state_root: [0x02_u8; 32],
+            receipts_root: body.receipts_root()?,
+            events_root: list_empty_root()?,
+            consensus_root: [0x03_u8; 32],
+            evidence_root: body.evidence_root()?,
+            protocol_parameters_hash: [0x04_u8; 32],
+            extra_data_hash: body.extra_data_hash()?,
+        };
+        let envelope = BlockEnvelope {
+            block_version: BLOCK_VERSION_1,
+            header,
+            body,
+            justification: None,
+        };
+        let block_hash = envelope.block_hash()?;
+        let commit_qc = QuorumCertificate {
+            certificate_type: VoteType::Precommit,
+            chain_id: 1,
+            network_id: 1,
+            epoch: Epoch::new(0),
+            height: BlockHeight::new(height),
+            round: Round::new(0),
+            validator_set_commitment: [0x11_u8; 32],
+            target_type: VoteTargetType::Block,
+            target_hash: block_hash,
+            total_voting_power: 100,
+            signed_voting_power: 100,
+            signer_commitment: vec![0b0000_0001],
+            aggregate_proof: vec![SignatureEnvelope {
+                algorithm_id: 1,
+                key_reference: None,
+                signature: vec![0xaa; 64],
+            }],
+        };
+        Ok(FinalizedBlock {
+            finalized_block_version: FINALIZED_BLOCK_VERSION_1,
+            envelope,
+            commit_qc,
+        })
+    }
 
     #[test]
     fn round_trips_a_stored_value() -> StateResult<()> {
@@ -247,6 +375,113 @@ mod tests {
         }
 
         assert_eq!(store.get(&[0x77; 32])?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn commit_block_applies_writes_and_stores_the_block_together() -> StateResult<()> {
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let mut store = RedbStateStore::open(dir.path().join("state.redb"))?;
+        let block = sample_finalized_block(1)?;
+        let writes = vec![Write {
+            state_key: [0x77; 32],
+            value: b"applied".to_vec(),
+        }];
+        store.commit_block(&writes, &block)?;
+
+        assert_eq!(store.get(&[0x77; 32])?, Some(b"applied".to_vec()));
+        assert_eq!(
+            store.finalized_block_range(BlockHeight::new(0), 10)?,
+            vec![block]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn finalized_block_range_returns_an_ascending_contiguous_prefix() -> StateResult<()> {
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let mut store = RedbStateStore::open(dir.path().join("state.redb"))?;
+        for height in 1..=5 {
+            store.commit_block(&[], &sample_finalized_block(height)?)?;
+        }
+
+        let page = store.finalized_block_range(BlockHeight::new(1), 2)?;
+        assert_eq!(
+            page.iter()
+                .map(|block| block.envelope.header.height.get())
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn finalized_block_range_is_empty_past_the_last_stored_height() -> StateResult<()> {
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let mut store = RedbStateStore::open(dir.path().join("state.redb"))?;
+        store.commit_block(&[], &sample_finalized_block(1)?)?;
+        assert_eq!(
+            store.finalized_block_range(BlockHeight::new(5), 10)?,
+            Vec::new()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_block_survives_reopening_the_same_database_file() -> StateResult<()> {
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let path = dir.path().join("state.redb");
+        let block = sample_finalized_block(1)?;
+
+        let mut store = RedbStateStore::open(&path)?;
+        store.commit_block(&[], &block)?;
+        drop(store);
+
+        let reopened = RedbStateStore::open(&path)?;
+        assert_eq!(
+            reopened.finalized_block_range(BlockHeight::new(0), 10)?,
+            vec![block]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_crash_mid_write_leaves_neither_the_state_write_nor_the_block_visible() -> StateResult<()> {
+        // The exact crash window "Decided: Atomic Commit Of Block And
+        // State" (ADR-0044) closes: inserting into both tables under
+        // one open write transaction, then dropping it without ever
+        // calling `.commit()` -- simulating a process death after the
+        // state write but before the block write (or anywhere else
+        // before the single commit point) -- must leave *neither*
+        // visible afterward, never one without the other.
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let store = RedbStateStore::open(dir.path().join("state.redb"))?;
+        let block = sample_finalized_block(1)?;
+        let encoded_block = block.encode()?;
+
+        {
+            let write_txn = store.database.begin_write().map_err(storage_error)?;
+            {
+                let mut state_table = write_txn.open_table(STATE_TABLE).map_err(storage_error)?;
+                state_table
+                    .insert([0x88_u8; 32].as_slice(), b"never-committed".as_slice())
+                    .map_err(storage_error)?;
+            }
+            {
+                let mut blocks_table = write_txn.open_table(BLOCKS_TABLE).map_err(storage_error)?;
+                blocks_table
+                    .insert(1_u64, encoded_block.as_slice())
+                    .map_err(storage_error)?;
+            }
+            // `write_txn` dropped here without `.commit()` -- simulates
+            // a crash anywhere before the single commit point.
+        }
+
+        assert_eq!(store.get(&[0x88; 32])?, None);
+        assert_eq!(
+            store.finalized_block_range(BlockHeight::new(0), 10)?,
+            Vec::new()
+        );
         Ok(())
     }
 }

@@ -1,6 +1,8 @@
+use hn_core::BlockHeight;
 use hn_crypto::Digest;
 
 use crate::error::StateResult;
+use crate::finalized_block::FinalizedBlock;
 
 /// Reads canonical state values by state key (ADR-0019, "Core interfaces":
 /// `StateReader`).
@@ -104,6 +106,37 @@ pub trait StateEnumerator {
     /// particular order — [`crate::compute_state_root`]'s own internal
     /// sort does not care, and nothing calling this should either.
     fn enumerate(&self) -> StateResult<Vec<(Digest, Vec<u8>)>>;
+}
+
+/// Durably persists and retrieves finalized blocks — ADR-0019's own
+/// still-open `BlockStore` interface (one of its nine named conceptual
+/// interfaces, listed since that ADR with no concrete shape), closed
+/// concretely here by ADR-0044 ("Decided: Durable Finalized-Block
+/// Storage" / "Decided: Atomic Commit Of Block And State").
+///
+/// [`BlockStore::commit_block`] supersedes [`StateCommitter::commit`]
+/// for a real finalized block's own commit path specifically: it
+/// commits `writes` (the block's real state effects) together with
+/// the [`FinalizedBlock`] itself in one underlying transaction, so no
+/// caller can ever observe one landing without the other — the real
+/// crash window two separate commits would leave open (ADR-0044).
+/// `StateCommitter::commit` remains the right tool for every other
+/// write-set commit (genesis init, dry-run simulation) that has no
+/// `FinalizedBlock` of its own to pair with.
+pub trait BlockStore {
+    /// Atomically commits `writes` together with `block`, keyed by
+    /// `block.envelope.header.height`.
+    fn commit_block(&mut self, writes: &[Write], block: &FinalizedBlock) -> StateResult<()>;
+
+    /// Returns up to `max_count` finalized blocks starting immediately
+    /// after `from_height`, in ascending height order (ADR-0044,
+    /// "Decided: Wire Protocol") — a prefix of what was asked for if
+    /// fewer than `max_count` blocks exist above `from_height`.
+    fn finalized_block_range(
+        &self,
+        from_height: BlockHeight,
+        max_count: u32,
+    ) -> StateResult<Vec<FinalizedBlock>>;
 }
 
 /// One `(state_key, value)` write-set entry — every `apply_*` function

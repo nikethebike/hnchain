@@ -471,7 +471,9 @@ pub use proposal_vote_record::{PROPOSAL_VOTE_RECORD_VERSION_1, ProposalVoteRecor
 pub use protocol_parameters::protocol_parameters_placeholder_hash;
 pub use receipt::{RECEIPT_VERSION_1, ReceiptStatus, ReceiptV1};
 pub use stake_payload::{STAKE_PAYLOAD_VERSION_1, StakePayloadV1};
-pub use state_store::{StateCommitter, StateEnumerator, StateReader, StateWriter, Write};
+pub use state_store::{
+    BlockStore, StateCommitter, StateEnumerator, StateReader, StateWriter, Write,
+};
 pub use transaction_envelope::{
     MAX_SIGNATURES, MAX_TRANSACTION_SIZE, TX_VERSION_1, TransactionEnvelope, TransactionPayload,
     TransactionSigningPayload, TxType, decode_transaction_payload,
