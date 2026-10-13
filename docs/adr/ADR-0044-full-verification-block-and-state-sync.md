@@ -140,6 +140,28 @@ its hash) is available to persist as a `FinalizedBlock` at the moment
 `act_on`'s `Finalized` branch succeeds, using the very `commit_qc`
 that action already carries.
 
+### Decided: Atomic Commit Of Block And State
+
+Committing a finalized block's state writes and persisting its own
+`FinalizedBlock` entry happen in a single redb transaction, not two
+separate ones. Two separate commits leave a real crash window between
+them: a failure after the state write but before the `FinalizedBlock`
+write leaves this node's own `state_root` already at height `h` with
+no `FinalizedBlock` for `h` to ever serve a lagging peer; the reverse
+order leaves a `FinalizedBlock` for `h` whose state this node has not
+actually reached. `hn_storage::StateCommitter` extends to accept both
+the write-set and the `FinalizedBlock` for the same height, writing
+both tables inside one `WriteTransaction` — one commit, one failure
+mode (the whole transaction lands or none of it does), not two
+commits whose relative ordering a crash can expose.
+
+Rejected alternative: write the block first, then the state, with
+idempotent replay on restart to detect and finish an interrupted
+commit. This would need `commit_finalized_block`'s own startup path to
+re-derive whether a given height's state writes already landed — a
+second, parallel source of truth about commit progress that a single
+atomic transaction has no need for at all.
+
 ### Decided: Wire Protocol
 
 Two new `MessageType` values under the already-reserved `Channel::Sync
@@ -216,7 +238,13 @@ A fetched `FinalizedBlock` is accepted only if, in order:
    proposer proposed something, never that `2f+1` of the active set
    actually finalized it. Without a real, verified `commit_qc`, a
    single dishonest peer could serve an entire fabricated history that
-   no honest validator ever actually finalized.
+   no honest validator ever actually finalized. "The active set at
+   that height" resolves, today, to this devnet's own static
+   genesis-derived `ctx.records` — there is no validator-set rotation
+   to resolve a *historical* active set against yet (see "Security
+   Considerations"); a real rotating active set needs
+   active-set-at-height (ADR-0010, unresolved) before this step can be
+   implemented for anything but a devnet with a fixed set from genesis.
 5. The block's transactions are replayed via the existing
    `apply_and_commit_block` (ADR-0030, unchanged) against this node's
    own current state. The resulting `transactions_root`/
@@ -236,7 +264,12 @@ peer — logged, not fatal to the process (the same "externally-
 triggerable input must not crash this process" principle ADR-0042
 already established) — and the node tries a different peer, the same
 general resilience posture `hn-node`'s own dialer/reconnection logic
-(ADR-0039) already has for connections.
+(ADR-0039) already has for connections. How long to wait for a
+response before giving up on a peer, and how many peers to try before
+giving up on the whole attempt, are real implementation parameters
+this mechanism needs (the same class of decision as this codebase's
+own `base_timeout_ms`/`MEMPOOL_MAX_TXS`) — named here as a fact this
+protocol depends on, not fixed to a value by this ADR.
 
 ### Decided: Replacing The Passive Jump For Real Catch-Up
 
@@ -254,6 +287,23 @@ its own escape hatch for this case at all once sync genuinely replays
 every intervening block instead of skipping them) — the real chain of
 custody back to genesis is exactly as unbroken for a node that just
 caught up as for one that was running the whole time.
+
+While this fetch-and-replay is in progress (a new, explicit `Syncing`
+mode), `ConsensusEngine` is not driven by live traffic at all: any
+`Proposal`/`Vote`/`QuorumCertificateMessage` arriving during this
+window is dropped — logged, not queued for later — the same way
+`handle_peer_message` already drops anything that does not match the
+engine's current exact `(height, round, step)` (ADR-0042). Once every
+block up to the height originally observed has been fetched and
+replayed, the engine resumes ordinary operation at `last_synced + 1`
+and begins a real round there. If the live network advanced further
+while this fetch was running (an ordinary race, not a failure), the
+next `maybe_sync_forward` observation — driven by the very vote/QC/
+proposal traffic arriving the whole time — simply finds a new, smaller
+gap, and the identical fetch-and-replay loop runs again. Each pass can
+only shrink the remaining gap, never grow it, so this converges by
+construction rather than needing a separate "did the network move"
+check.
 
 ADR-0039's own connection-drop reconnection decision is untouched —
 only its passive-jump catch-up mechanism is replaced, and only once
@@ -367,6 +417,9 @@ Validator-set evolution during the synced range:
   — this ADR assumes every node retains everything)
 - `BlockRequestV1`/`BlockResponseV1`'s own stale doc comments and
   whether to wire or retire them (named above, not attempted here)
+- the concrete per-peer request timeout and peer-retry-count values
+  (named as implementation constants this mechanism needs, in
+  "Decided: Verification Procedure," not fixed to a value by this ADR)
 
 ## Related Specifications
 
