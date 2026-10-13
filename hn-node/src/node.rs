@@ -13,12 +13,13 @@ use hn_core::{BlockHeight, Epoch, ProtocolEpoch, ProtocolVersion, Round, UnixTim
 use hn_crypto::{Digest, Ed25519KeyPair, KeyRole, SignatureEnvelope, hash_profile_0x0001};
 use hn_network::{
     Channel, ConsensusProposalMessageV1, HandshakeAction, HandshakeEvent, HandshakeParams,
-    HandshakeState, Hello, MessageType, P2PMessageEnvelopeV1, PeerLink, TransactionAnnounceV1,
+    HandshakeState, Hello, MAX_SYNC_BLOCKS_PER_RESPONSE, MessageType, P2PMessageEnvelopeV1,
+    PeerLink, SyncBlockRangeRequestV1, SyncBlockRangeResponseV1, TransactionAnnounceV1,
     TransactionRequestV1, TransactionResponseV1, spawn_peer_link,
 };
 use hn_state::{
-    BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, ConsensusVote,
-    EmptyHashTable, HEADER_VERSION_1, QuorumCertificate, ReceiptV1, StateCommitter,
+    BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, BlockStore,
+    ConsensusVote, EmptyHashTable, HEADER_VERSION_1, QuorumCertificate, ReceiptV1, StateCommitter,
     StateEnumerator, StateReader, ValidatorRecordV1, ValidatorStatus, VoteSigningPayloadV1,
     VoteTargetType, VoteType, Write, active_key, active_set, apply_block, compute_post_state_root,
     list_empty_root, protocol_parameters_placeholder_hash,
@@ -769,6 +770,28 @@ fn handle_peer_message(
                     log_line(&format!("REJECTED transaction reason=\"{reason}\""));
                 }
             }
+        }
+        // ADR-0044, "Decided: Wire Protocol" -- answers from this
+        // node's own durable `FinalizedBlock` table directly, as
+        // whatever contiguous prefix it actually has (never a gap or
+        // reordering): `request.max_count` is clamped down to
+        // `MAX_SYNC_BLOCKS_PER_RESPONSE` first so a requester asking
+        // for more than one response may ever carry can never turn
+        // into a response `SyncBlockRangeResponseV1::encode` itself
+        // then has to reject.
+        (Channel::Sync, MessageType::SyncBlockRangeRequest) => {
+            let request = SyncBlockRangeRequestV1::decode(&envelope.payload)?;
+            let max_count = request.max_count.min(MAX_SYNC_BLOCKS_PER_RESPONSE);
+            let blocks = ctx
+                .store
+                .finalized_block_range(request.from_height, max_count)?;
+            send_to(
+                ctx,
+                conn_id,
+                Channel::Sync,
+                MessageType::SyncBlockRangeResponse,
+                SyncBlockRangeResponseV1 { blocks }.encode()?,
+            )?;
         }
         _ => {}
     }
