@@ -20,14 +20,15 @@
 //! covers.
 
 use hn_consensus::{ConsensusAction, ConsensusEngine, ConsensusTarget};
-use hn_core::{AccountNonce, BlockHeight, Epoch, Round};
+use hn_core::{AccountNonce, BlockHeight, Epoch, ProtocolEpoch, Round, UnixTimeMillis};
 use hn_crypto::{Ed25519KeyPair, KeyRole, SignatureEnvelope, account_address_body};
 use hn_state::{
-    AccessListV1, AccountSection, BalanceValueV1, BlockApplicationResult, QuorumCertificate,
-    ReceiptStatus, StateCommitter, StateReader, StateWriter, TX_VERSION_1, TransactionEnvelope,
+    AccessListV1, AccountSection, BLOCK_VERSION_1, BODY_VERSION_1, BalanceValueV1,
+    BlockApplicationResult, BlockBody, BlockEnvelope, BlockHeader, BlockStore, HEADER_VERSION_1,
+    QuorumCertificate, ReceiptStatus, StateReader, StateWriter, TX_VERSION_1, TransactionEnvelope,
     TransferPayloadV1, TxType, ValidatorRecordV1, ValidatorSection, ValidatorStatus,
     ValidityWindowV1, VoteSigningPayloadV1, VoteTargetType, VoteType, account_section_state_key,
-    tx_id, validator_section_state_key,
+    list_empty_root, tx_id, validator_section_state_key,
 };
 use hn_storage::InMemoryStateStore;
 
@@ -132,7 +133,51 @@ fn signed_qc(
 /// single-validator case trivial: one vote already carries all 100% of
 /// voting power, so `verify_signatures` against a one-entry active set
 /// is already a real, genuine quorum check, not a stub.
-fn produce_block<S: StateReader + StateCommitter>(
+/// A self-consistent envelope carrying `transactions`, for a test that
+/// cares about the real state-commit chain across blocks, not about
+/// real block-hash derivation (`block_hash` here, and throughout this
+/// file, is a synthetic placeholder -- see its own call sites).
+fn placeholder_envelope(
+    height: BlockHeight,
+    round: Round,
+    transactions: Vec<TransactionEnvelope>,
+) -> TestResult<BlockEnvelope> {
+    let body = BlockBody {
+        body_version: BODY_VERSION_1,
+        transactions,
+        receipts: Vec::new(),
+        evidence: Vec::new(),
+        extra_data: Vec::new(),
+    };
+    let header = BlockHeader {
+        header_version: HEADER_VERSION_1,
+        chain_id: 1,
+        network_id: NETWORK_ID,
+        height,
+        round,
+        epoch: Epoch::new(0),
+        protocol_epoch: ProtocolEpoch::GENESIS,
+        parent_block_hash: [0_u8; 32],
+        proposer: [0x01_u8; 32],
+        timestamp: UnixTimeMillis::from_millis(height.get()),
+        transactions_root: body.transactions_root()?,
+        state_root: [0x02_u8; 32],
+        receipts_root: body.receipts_root()?,
+        events_root: list_empty_root()?,
+        consensus_root: VSC,
+        evidence_root: body.evidence_root()?,
+        protocol_parameters_hash: [0x04_u8; 32],
+        extra_data_hash: body.extra_data_hash()?,
+    };
+    Ok(BlockEnvelope {
+        block_version: BLOCK_VERSION_1,
+        header,
+        body,
+        justification: None,
+    })
+}
+
+fn produce_block<S: StateReader + BlockStore>(
     engine: &mut ConsensusEngine,
     store: &mut S,
     validator_id: [u8; 32],
@@ -145,6 +190,7 @@ fn produce_block<S: StateReader + StateCommitter>(
     let height = engine.state().height;
     let round = engine.state().round;
     let ordered_active_set = vec![validator_id];
+    let envelope = placeholder_envelope(height, round, transactions.clone())?;
 
     let action = engine.handle_proposal(block_hash, transactions, None)?;
     assert_eq!(
@@ -174,12 +220,13 @@ fn produce_block<S: StateReader + StateCommitter>(
         round,
         block_hash,
     )?;
-    let action = engine.handle_quorum_certificate(precommit_qc, store, &ordered_active_set)?;
+    let action =
+        engine.handle_quorum_certificate(precommit_qc.clone(), store, &ordered_active_set)?;
     assert!(
         matches!(action, ConsensusAction::Finalized { block_hash: hash, .. } if hash == block_hash)
     );
 
-    let result = engine.commit_finalized_block(block_hash, store, &[])?;
+    let result = engine.commit_finalized_block(block_hash, envelope, precommit_qc, store, &[])?;
 
     let next_height = height.checked_next()?;
     assert_eq!(

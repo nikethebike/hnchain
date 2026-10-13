@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use hn_core::BlockHeight;
 use hn_crypto::Digest;
 use hn_state::{
-    BlockApplicationResult, ConsensusVote, QuorumCertificate, StateCommitter, StateReader,
-    TransactionEnvelope, ValidatorRecordV1, VoteType, apply_and_commit_block,
-    fetch_validator_record, is_eligible_signer,
+    BlockApplicationResult, BlockEnvelope, BlockStore, ConsensusVote, FINALIZED_BLOCK_VERSION_1,
+    FinalizedBlock, QuorumCertificate, StateReader, TransactionEnvelope, ValidatorRecordV1,
+    VoteType, Write, apply_block, fetch_validator_record, is_eligible_signer,
 };
 
 use crate::action::ConsensusAction;
@@ -226,20 +226,29 @@ impl ConsensusEngine {
     /// needs the height that just finalized, only well-defined at that
     /// step), looks up `block_hash`'s cached transactions
     /// ([`ConsensusError::UnknownProposedBlock`] if this engine never
-    /// saw that proposal) and actually applies and commits them via
-    /// [`apply_and_commit_block`] — the first real connection from this
-    /// crate's own state machine into a durable backend.
+    /// saw that proposal), applies them, and commits the result
+    /// together with `envelope`/`commit_qc` — packaged here into a real
+    /// [`FinalizedBlock`] — via [`BlockStore::commit_block`] (ADR-0044,
+    /// "Decided: Atomic Commit Of Block And State"): one transaction for
+    /// both the state writes and the durable block record, never two
+    /// separate ones a crash could observe only one half of.
     ///
     /// Clears every other cached proposal for this height afterward:
     /// only one block can ever finalize per height, so the rest were
     /// competing, now-irrelevant round attempts.
     ///
     /// `validator_candidates` is passed straight through to
-    /// [`apply_and_commit_block`] — see its own documentation for why
-    /// this crate cannot supply it itself.
-    pub fn commit_finalized_block<S: StateReader + StateCommitter>(
+    /// [`apply_block`] — see its own documentation for why this crate
+    /// cannot supply it itself. `envelope`/`commit_qc` are the caller's
+    /// own already-verified values (this crate never re-verifies a
+    /// proposal or a certificate it is handed here) — the caller's job
+    /// is finding them (its own envelope cache, the `Finalized` action's
+    /// own `commit_qc` field), not this one's.
+    pub fn commit_finalized_block<S: StateReader + BlockStore>(
         &mut self,
         block_hash: Digest,
+        envelope: BlockEnvelope,
+        commit_qc: QuorumCertificate,
         store: &mut S,
         validator_candidates: &[ValidatorRecordV1],
     ) -> ConsensusResult<BlockApplicationResult> {
@@ -253,13 +262,26 @@ impl ConsensusEngine {
             .remove(&block_hash)
             .ok_or(ConsensusError::UnknownProposedBlock { block_hash })?;
 
-        let result = apply_and_commit_block(
+        let result = apply_block(
             &transactions,
             store,
             self.state.height,
             validator_candidates,
         )
         .map_err(ConsensusError::StateApplication)?;
+        let writes: Vec<Write> = result
+            .applied
+            .iter()
+            .flat_map(|applied| applied.write_set.clone())
+            .collect();
+        let finalized_block = FinalizedBlock {
+            finalized_block_version: FINALIZED_BLOCK_VERSION_1,
+            envelope,
+            commit_qc,
+        };
+        store
+            .commit_block(&writes, &finalized_block)
+            .map_err(ConsensusError::StateApplication)?;
 
         self.proposed_blocks.clear();
         Ok(result)
@@ -274,11 +296,13 @@ impl ConsensusEngine {
 
 #[cfg(test)]
 mod tests {
-    use hn_core::{BlockHeight, Epoch, Round};
+    use hn_core::{BlockHeight, Epoch, ProtocolEpoch, Round, UnixTimeMillis};
     use hn_crypto::{Ed25519KeyPair, KeyRole, SignatureEnvelope};
     use hn_state::{
-        ConsensusVote, StateCommitter, StateReader, StateResult, ValidatorSection, ValidatorStatus,
-        VoteSigningPayloadV1, VoteTargetType, VoteType, Write, validator_section_state_key,
+        BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, BlockStore,
+        ConsensusVote, FinalizedBlock, HEADER_VERSION_1, StateReader, StateResult,
+        ValidatorSection, ValidatorStatus, VoteSigningPayloadV1, VoteTargetType, VoteType, Write,
+        list_empty_root, validator_section_state_key,
     };
 
     use super::{ConsensusEngine, QuorumCertificate, ValidatorRecordV1};
@@ -291,6 +315,67 @@ mod tests {
     const BLOCK_B: [u8; 32] = [0xbb; 32];
     const VSC: [u8; 32] = [0x11; 32];
 
+    /// A self-consistent envelope/QC pair for `commit_finalized_block`
+    /// tests that fail before ever examining either value's own
+    /// content (step mismatch, unknown `block_hash`) -- their real
+    /// content is irrelevant to those two checks, only their presence.
+    fn placeholder_finalized_block_inputs() -> StateResult<(BlockEnvelope, QuorumCertificate)> {
+        let body = BlockBody {
+            body_version: BODY_VERSION_1,
+            transactions: Vec::new(),
+            receipts: Vec::new(),
+            evidence: Vec::new(),
+            extra_data: Vec::new(),
+        };
+        let header = BlockHeader {
+            header_version: HEADER_VERSION_1,
+            chain_id: 1,
+            network_id: 1,
+            height: BlockHeight::new(1),
+            round: Round::new(0),
+            epoch: Epoch::new(0),
+            protocol_epoch: ProtocolEpoch::GENESIS,
+            parent_block_hash: [0_u8; 32],
+            proposer: [0x01_u8; 32],
+            timestamp: UnixTimeMillis::from_millis(1),
+            transactions_root: body.transactions_root()?,
+            state_root: [0x02_u8; 32],
+            receipts_root: body.receipts_root()?,
+            events_root: list_empty_root()?,
+            consensus_root: VSC,
+            evidence_root: body.evidence_root()?,
+            protocol_parameters_hash: [0x04_u8; 32],
+            extra_data_hash: body.extra_data_hash()?,
+        };
+        let envelope = BlockEnvelope {
+            block_version: BLOCK_VERSION_1,
+            header,
+            body,
+            justification: None,
+        };
+        let block_hash = envelope.block_hash()?;
+        let commit_qc = QuorumCertificate {
+            certificate_type: VoteType::Precommit,
+            chain_id: 1,
+            network_id: 1,
+            epoch: Epoch::new(0),
+            height: BlockHeight::new(1),
+            round: Round::new(0),
+            validator_set_commitment: VSC,
+            target_type: VoteTargetType::Block,
+            target_hash: block_hash,
+            total_voting_power: 100,
+            signed_voting_power: 100,
+            signer_commitment: vec![0b0000_0001],
+            aggregate_proof: vec![SignatureEnvelope {
+                algorithm_id: 1,
+                key_reference: None,
+                signature: vec![0xaa; 64],
+            }],
+        };
+        Ok((envelope, commit_qc))
+    }
+
     struct MapStore(std::collections::BTreeMap<[u8; 32], Vec<u8>>);
 
     impl StateReader for MapStore {
@@ -299,12 +384,20 @@ mod tests {
         }
     }
 
-    impl StateCommitter for MapStore {
-        fn commit(&mut self, writes: &[Write]) -> StateResult<()> {
+    impl BlockStore for MapStore {
+        fn commit_block(&mut self, writes: &[Write], _block: &FinalizedBlock) -> StateResult<()> {
             for write in writes {
                 self.0.insert(write.state_key, write.value.clone());
             }
             Ok(())
+        }
+
+        fn finalized_block_range(
+            &self,
+            _from_height: BlockHeight,
+            _max_count: u32,
+        ) -> StateResult<Vec<FinalizedBlock>> {
+            Ok(Vec::new())
         }
     }
 
@@ -487,15 +580,18 @@ mod tests {
     }
 
     #[test]
-    fn commit_finalized_block_rejects_when_not_at_finalize_step() {
+    fn commit_finalized_block_rejects_when_not_at_finalize_step() -> Result<(), ConsensusError> {
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         let mut store = MapStore(std::collections::BTreeMap::new());
+        let (envelope, commit_qc) =
+            placeholder_finalized_block_inputs().map_err(ConsensusError::StateApplication)?;
         assert_eq!(
-            engine.commit_finalized_block(BLOCK_A, &mut store, &[]),
+            engine.commit_finalized_block(BLOCK_A, envelope, commit_qc, &mut store, &[]),
             Err(ConsensusError::HeightNotFinalized {
                 step: ConsensusStep::NewHeight
             })
         );
+        Ok(())
     }
 
     #[test]
@@ -532,8 +628,10 @@ mod tests {
         assert_eq!(engine.state().step, ConsensusStep::Finalize);
 
         let mut store = MapStore(std::collections::BTreeMap::new());
+        let (envelope, commit_qc) =
+            placeholder_finalized_block_inputs().map_err(ConsensusError::StateApplication)?;
         assert_eq!(
-            engine.commit_finalized_block(BLOCK_B, &mut store, &[]),
+            engine.commit_finalized_block(BLOCK_B, envelope, commit_qc, &mut store, &[]),
             Err(ConsensusError::UnknownProposedBlock {
                 block_hash: BLOCK_B
             })

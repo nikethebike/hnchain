@@ -3,11 +3,12 @@
 //! "Wiring The Consensus Engine To `hn-state`"). Every unit test in
 //! `hn-consensus`'s own `src/` uses a minimal in-memory `MapStore`;
 //! this test runs the same sequence against `hn-storage::InMemoryStateStore`
-//! — a real, if non-durable, `StateReader`/`StateWriter`/`StateCommitter`
+//! — a real, if non-durable, `StateReader`/`StateWriter`/`BlockStore`
 //! implementation — and, critically, actually calls
-//! `ConsensusEngine::commit_finalized_block`, which is
-//! `apply_and_commit_block`'s own first real caller anywhere in this
-//! codebase outside `hn-storage`'s own tests.
+//! `ConsensusEngine::commit_finalized_block`, which applies and
+//! atomically commits the block's own state effects together with its
+//! `FinalizedBlock` record (ADR-0044, "Decided: Atomic Commit Of Block
+//! And State").
 //!
 //! `block_hash` here is an arbitrary placeholder, not derived from any
 //! real `BlockHeader` — there is no concrete `BlockHeader` type
@@ -18,13 +19,14 @@
 //! distinct, later piece of work.
 
 use hn_consensus::{ConsensusAction, ConsensusEngine, ConsensusTarget};
-use hn_core::{AccountNonce, BlockHeight, Epoch, Round};
+use hn_core::{AccountNonce, BlockHeight, Epoch, ProtocolEpoch, Round, UnixTimeMillis};
 use hn_crypto::{Ed25519KeyPair, KeyRole, SignatureEnvelope, account_address_body};
 use hn_state::{
-    AccessListV1, AccountSection, BalanceValueV1, QuorumCertificate, ReceiptStatus, StateReader,
+    AccessListV1, AccountSection, BLOCK_VERSION_1, BODY_VERSION_1, BalanceValueV1, BlockBody,
+    BlockEnvelope, BlockHeader, HEADER_VERSION_1, QuorumCertificate, ReceiptStatus, StateReader,
     StateWriter, TX_VERSION_1, TransactionEnvelope, TransferPayloadV1, TxType, ValidatorRecordV1,
     ValidatorSection, ValidatorStatus, ValidityWindowV1, VoteSigningPayloadV1, VoteTargetType,
-    VoteType, account_section_state_key, validator_section_state_key,
+    VoteType, account_section_state_key, list_empty_root, validator_section_state_key,
 };
 use hn_storage::InMemoryStateStore;
 
@@ -142,6 +144,46 @@ fn signed_qc(
     })
 }
 
+/// A self-consistent envelope carrying `transactions`, for a test that
+/// cares about the real state-commit path, not about real block-hash
+/// derivation -- `BLOCK_HASH` here is an arbitrary placeholder, not
+/// derived from this (or any) `BlockHeader`.
+fn placeholder_block_envelope(transactions: Vec<TransactionEnvelope>) -> TestResult<BlockEnvelope> {
+    let body = BlockBody {
+        body_version: BODY_VERSION_1,
+        transactions,
+        receipts: Vec::new(),
+        evidence: Vec::new(),
+        extra_data: Vec::new(),
+    };
+    let header = BlockHeader {
+        header_version: HEADER_VERSION_1,
+        chain_id: 1,
+        network_id: NETWORK_ID,
+        height: BlockHeight::GENESIS,
+        round: Round::new(0),
+        epoch: Epoch::new(0),
+        protocol_epoch: ProtocolEpoch::GENESIS,
+        parent_block_hash: [0_u8; 32],
+        proposer: [0x01_u8; 32],
+        timestamp: UnixTimeMillis::from_millis(1),
+        transactions_root: body.transactions_root()?,
+        state_root: [0x02_u8; 32],
+        receipts_root: body.receipts_root()?,
+        events_root: list_empty_root()?,
+        consensus_root: VSC,
+        evidence_root: body.evidence_root()?,
+        protocol_parameters_hash: [0x04_u8; 32],
+        extra_data_hash: body.extra_data_hash()?,
+    };
+    Ok(BlockEnvelope {
+        block_version: BLOCK_VERSION_1,
+        header,
+        body,
+        justification: None,
+    })
+}
+
 #[test]
 fn engine_finalizes_and_really_commits_a_transfer_through_a_real_backend() -> TestResult {
     let validator_keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [0x21; 32]);
@@ -166,6 +208,7 @@ fn engine_finalizes_and_really_commits_a_transfer_through_a_real_backend() -> Te
     )?;
 
     let envelope = signed_bootstrap_transfer(&sender_keypair, recipient)?;
+    let block_envelope = placeholder_block_envelope(vec![envelope.clone()])?;
     let ordered_active_set = vec![validator_id];
 
     let mut engine = ConsensusEngine::new_height(BlockHeight::GENESIS);
@@ -186,13 +229,14 @@ fn engine_finalizes_and_really_commits_a_transfer_through_a_real_backend() -> Te
     assert_eq!(engine.state().locked_block, Some(BLOCK_HASH));
 
     let precommit_qc = signed_qc(VoteType::Precommit, validator_id, &validator_keypair, 0)?;
-    let action = engine.handle_quorum_certificate(precommit_qc, &store, &ordered_active_set)?;
+    let action =
+        engine.handle_quorum_certificate(precommit_qc.clone(), &store, &ordered_active_set)?;
     assert!(
         matches!(action, ConsensusAction::Finalized { block_hash, .. } if block_hash == BLOCK_HASH)
     );
 
-    // The real connection: commit_finalized_block -> apply_and_commit_block
-    // -> a real StateCommitter -> the actual backend.
+    // The real connection: commit_finalized_block -> apply_block -> a
+    // real BlockStore -> the actual backend.
     let validator_records = vec![ValidatorRecordV1 {
         validator_id,
         consensus_key: validator_keypair.key_descriptor(),
@@ -201,7 +245,13 @@ fn engine_finalizes_and_really_commits_a_transfer_through_a_real_backend() -> Te
         status: ValidatorStatus::Active,
         pending_unbonding: None,
     }];
-    let result = engine.commit_finalized_block(BLOCK_HASH, &mut store, &validator_records)?;
+    let result = engine.commit_finalized_block(
+        BLOCK_HASH,
+        block_envelope,
+        precommit_qc,
+        &mut store,
+        &validator_records,
+    )?;
     assert_eq!(result.applied.len(), 1);
     assert_eq!(result.applied[0].receipt.status, ReceiptStatus::Success);
 

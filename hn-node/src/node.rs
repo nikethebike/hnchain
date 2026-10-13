@@ -162,16 +162,20 @@ struct Ctx {
     /// while this is `false` — every other check it performs needs no
     /// chain-position context at all.
     chain_position_verified: bool,
-    /// `block_hash -> that proposal's own verified `BlockHeader``,
-    /// mirroring `ConsensusEngine`'s own internal `proposed_blocks`
-    /// cache (the engine caches `transactions`; this node-layer cache
-    /// exists because the engine has no field for `timestamp` at all,
-    /// and `last_timestamp` needs the just-finalized block's own real
-    /// value, not a recomputed one). Populated at the same two call
-    /// sites as every `ConsensusEngine::handle_proposal` call
-    /// (self-propose and verified-receive), and cleared the same way
-    /// on a successful finalize — see [`act_on`]'s `Finalized` branch.
-    pending_headers: HashMap<Digest, BlockHeader>,
+    /// `block_hash -> that proposal's own verified `BlockEnvelope``
+    /// (ADR-0044, "Decided: Durable Finalized-Block Storage" —
+    /// generalized from a header-only cache so the full envelope is
+    /// available to persist as a [`FinalizedBlock`] the moment it
+    /// finalizes), mirroring `ConsensusEngine`'s own internal
+    /// `proposed_blocks` cache (the engine caches `transactions`; this
+    /// node-layer cache exists because the engine has no field for
+    /// `timestamp` at all, and `last_timestamp` needs the just-
+    /// finalized block's own real value, not a recomputed one).
+    /// Populated at the same two call sites as every
+    /// `ConsensusEngine::handle_proposal` call (self-propose and
+    /// verified-receive), and cleared the same way on a successful
+    /// finalize — see [`act_on`]'s `Finalized` branch.
+    pending_envelopes: HashMap<Digest, BlockEnvelope>,
     /// This node's own local transaction pool (ADR-0045, "Decided:
     /// Mempool Is Local Policy, Not Consensus") — never read by
     /// consensus logic itself yet (block building/validation are
@@ -336,7 +340,7 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         last_block_hash: genesis_block_hash,
         last_timestamp: genesis_header.timestamp,
         chain_position_verified: true,
-        pending_headers: HashMap::new(),
+        pending_envelopes: HashMap::new(),
         mempool: Mempool::new(),
         // Genesis is the last thing every node has "finalized" before
         // any real round begins (ADR-0043) -- the first real
@@ -677,8 +681,8 @@ fn handle_peer_message(
                     chain_position,
                 ) {
                     Ok(block_hash) => {
-                        ctx.pending_headers
-                            .insert(block_hash, message.envelope.header.clone());
+                        ctx.pending_envelopes
+                            .insert(block_hash, message.envelope.clone());
                         let action = ctx.engine.handle_proposal(
                             block_hash,
                             message.envelope.body.transactions,
@@ -1042,77 +1046,27 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
         ConsensusAction::None => maybe_start_propose_stage(ctx)?,
         ConsensusAction::Prevote(target) => cast_vote(ctx, VoteType::Prevote, target)?,
         ConsensusAction::Precommit(target) => cast_vote(ctx, VoteType::Precommit, target)?,
-        ConsensusAction::Finalized { block_hash, .. } => {
+        ConsensusAction::Finalized {
+            block_hash,
+            commit_qc,
+        } => {
             let height = ctx.engine.state().height;
             let round = ctx.engine.state().round;
-            match ctx
-                .engine
-                .commit_finalized_block(block_hash, &mut ctx.store, &ctx.records)
-            {
-                Ok(result) => {
-                    // The real post-commit state_root -- `ctx.store`
-                    // already holds this block's own committed writes
-                    // by this point, so re-enumerating it now (rather
-                    // than threading the proposer's own already-
-                    // computed value through) proves this independently,
-                    // the same "recompute, don't trust" principle
-                    // `verify_proposal` itself already applies.
-                    let empty_table = EmptyHashTable::build()?;
-                    let state_enumerator = ExcludingGenesisMarker {
-                        inner: &ctx.store,
-                        excluded: genesis_marker_key()?,
-                    };
-                    let state_root = compute_post_state_root(&state_enumerator, &[], &empty_table)?;
-                    log_line(&format!(
-                        "FINALIZED height={} round={} block={} applied={} state_root={}",
-                        height.get(),
-                        round.get(),
-                        hex(&block_hash),
-                        result.applied.len(),
-                        hex(&state_root)
-                    ));
-                    ctx.last_block_hash = block_hash;
-                    // `pending_headers` mirrors the engine's own
-                    // `proposed_blocks` cache (ADR-0042) -- the just-
-                    // finalized block's own real `timestamp` becomes
-                    // the new monotonicity floor, and every other
-                    // cached header was for a competing, now-
-                    // irrelevant round at this same height, exactly
-                    // like `commit_finalized_block`'s own
-                    // `proposed_blocks.clear()`.
-                    if let Some(header) = ctx.pending_headers.remove(&block_hash) {
-                        ctx.last_timestamp = header.timestamp;
-                    }
-                    ctx.pending_headers.clear();
-                    ctx.chain_position_verified = true;
-                    ctx.last_finalized_height = height;
-                    // ADR-0045, "Decided: Commit" -- once a block is
-                    // actually finalized, every transaction it really
-                    // included is done, successfully or not (a
-                    // `Failed` receipt still consumed its own nonce);
-                    // either way it must never be selected into a
-                    // future block again.
-                    ctx.mempool
-                        .remove_included(result.applied.iter().map(|applied| applied.tx_id));
-                    let action = ctx.engine.begin_new_height()?;
-                    act_on(ctx, action)?;
-                }
-                // A real, already-named race in ADR-0039's own passive
-                // height-observation catch-up: a jump straight to
-                // `observed_height` (`maybe_sync_forward`) starts a
-                // fresh `ConsensusEngine` with no cached proposal, so a
-                // quorum certificate this node never itself saw
-                // `Proposal` for (only its votes/QC) cannot be applied
-                // here -- doing so would need real block/state sync
-                // (ADR-0016, unchanged), not this pass's scope. Rather
-                // than exit the whole process over one missed height,
-                // log and leave the engine at `Finalize` for this
-                // height/round; the next `maybe_sync_forward` jump
-                // (driven by the very QC/vote traffic that keeps
-                // arriving from peers already past this height) already
-                // replaces the engine wholesale, self-healing past the
-                // gap without any new mechanism.
-                Err(ConsensusError::UnknownProposedBlock { block_hash }) => {
+            // `pending_envelopes` and the engine's own `proposed_blocks`
+            // cache are populated together at the exact same call site,
+            // both in the proposer branch (`maybe_start_propose_stage`)
+            // and the receiver branch (`handle_peer_message`'s
+            // `ConsensusProposal` arm) -- neither ever has an entry the
+            // other lacks. A miss here is the same real, already-named
+            // race ADR-0039's own passive height-observation catch-up
+            // describes: a jump straight to `observed_height`
+            // (`maybe_sync_forward`) starts a fresh `ConsensusEngine`
+            // with no cached proposal for a quorum certificate this node
+            // never itself saw `Proposal` for -- doing so would need
+            // real block/state sync (ADR-0016, unchanged), not this
+            // pass's scope.
+            match ctx.pending_envelopes.get(&block_hash).cloned() {
+                None => {
                     log_line(&format!(
                         "SKIPPED finalizing height={} round={} block={} (no cached proposal -- passive catch-up gap, ADR-0016)",
                         height.get(),
@@ -1120,7 +1074,78 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
                         hex(&block_hash),
                     ));
                 }
-                Err(error) => return Err(error.into()),
+                Some(envelope) => {
+                    match ctx.engine.commit_finalized_block(
+                        block_hash,
+                        envelope,
+                        commit_qc,
+                        &mut ctx.store,
+                        &ctx.records,
+                    ) {
+                        Ok(result) => {
+                            // The real post-commit state_root --
+                            // `ctx.store` already holds this block's own
+                            // committed writes by this point, so
+                            // re-enumerating it now (rather than
+                            // threading the proposer's own already-
+                            // computed value through) proves this
+                            // independently, the same "recompute, don't
+                            // trust" principle `verify_proposal` itself
+                            // already applies.
+                            let empty_table = EmptyHashTable::build()?;
+                            let state_enumerator = ExcludingGenesisMarker {
+                                inner: &ctx.store,
+                                excluded: genesis_marker_key()?,
+                            };
+                            let state_root =
+                                compute_post_state_root(&state_enumerator, &[], &empty_table)?;
+                            log_line(&format!(
+                                "FINALIZED height={} round={} block={} applied={} state_root={}",
+                                height.get(),
+                                round.get(),
+                                hex(&block_hash),
+                                result.applied.len(),
+                                hex(&state_root)
+                            ));
+                            ctx.last_block_hash = block_hash;
+                            // `pending_envelopes` mirrors the engine's
+                            // own `proposed_blocks` cache (ADR-0042) --
+                            // the just-finalized block's own real
+                            // `timestamp` becomes the new monotonicity
+                            // floor, and every other cached envelope was
+                            // for a competing, now-irrelevant round at
+                            // this same height, exactly like
+                            // `commit_finalized_block`'s own
+                            // `proposed_blocks.clear()`.
+                            if let Some(envelope) = ctx.pending_envelopes.remove(&block_hash) {
+                                ctx.last_timestamp = envelope.header.timestamp;
+                            }
+                            ctx.pending_envelopes.clear();
+                            ctx.chain_position_verified = true;
+                            ctx.last_finalized_height = height;
+                            // ADR-0045, "Decided: Commit" -- once a block
+                            // is actually finalized, every transaction it
+                            // really included is done, successfully or
+                            // not (a `Failed` receipt still consumed its
+                            // own nonce); either way it must never be
+                            // selected into a future block again.
+                            ctx.mempool.remove_included(
+                                result.applied.iter().map(|applied| applied.tx_id),
+                            );
+                            let action = ctx.engine.begin_new_height()?;
+                            act_on(ctx, action)?;
+                        }
+                        Err(ConsensusError::UnknownProposedBlock { block_hash }) => {
+                            log_line(&format!(
+                                "SKIPPED finalizing height={} round={} block={} (no cached proposal -- passive catch-up gap, ADR-0016)",
+                                height.get(),
+                                round.get(),
+                                hex(&block_hash),
+                            ));
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                }
             }
         }
         ConsensusAction::RoundAdvanced { .. } | ConsensusAction::NewHeight { .. } => {
@@ -1182,7 +1207,6 @@ fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<()> {
         };
         let header = build_block_header(ctx, height, round, &body, state_root)?;
         let block_hash = header.block_hash()?;
-        ctx.pending_headers.insert(block_hash, header.clone());
         // `body` moves into `envelope` just below; the engine's own
         // `proposed_blocks` cache (consulted later by
         // `commit_finalized_block`, once this block actually
@@ -1200,6 +1224,7 @@ fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<()> {
             // gap this ADR does not attempt to close.
             justification: None,
         };
+        ctx.pending_envelopes.insert(block_hash, envelope.clone());
         let proposer_signature = SignatureEnvelope {
             algorithm_id: ctx.consensus_keypair.key_descriptor().algorithm_id(),
             key_reference: None,
