@@ -356,6 +356,7 @@ mod envelope_value;
 mod error;
 mod evidence_digest;
 mod extra_data;
+mod finalized_block;
 mod governance;
 mod governance_payload;
 mod governance_transition;
@@ -422,6 +423,10 @@ pub use envelope_value::{AccountType, ENVELOPE_VERSION_1, EnvelopeValueV1, Secti
 pub use error::{StateError, StateResult};
 pub use evidence_digest::evidence_digest;
 pub use extra_data::{MAX_EXTRA_DATA_LEN, extra_data_hash};
+pub use finalized_block::{
+    FINALIZED_BLOCK_VERSION_1, FinalizedBlock, MAX_FINALIZED_BLOCK_ENVELOPE_BLOB_LEN,
+    MAX_FINALIZED_BLOCK_QC_BLOB_LEN,
+};
 pub use governance::{
     DOMAIN_GOVERNANCE, GovernanceSection, proposal_record_state_key, proposal_vote_record_state_key,
 };

@@ -528,6 +528,13 @@ pub enum StateError {
         /// `"extra_data_hash"`).
         field: &'static str,
     },
+    /// A decoded `FinalizedBlock.finalized_block_version` does not
+    /// match [`crate::finalized_block::FINALIZED_BLOCK_VERSION_1`], the
+    /// only shape this implementation understands.
+    UnsupportedFinalizedBlockVersion {
+        /// The rejected version.
+        value: u16,
+    },
 }
 
 impl From<HashError> for StateError {
@@ -797,6 +804,9 @@ impl core::fmt::Display for StateError {
                     formatter,
                     "header.{field} does not match the body it was sent with"
                 )
+            }
+            Self::UnsupportedFinalizedBlockVersion { value } => {
+                write!(formatter, "unsupported finalized_block_version {value}")
             }
         }
     }
