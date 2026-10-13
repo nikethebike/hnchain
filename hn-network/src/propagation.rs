@@ -1,6 +1,7 @@
+use hn_core::BlockHeight;
 use hn_crypto::{Digest, SignatureEnvelope};
-use hn_hncs::{Decoder, validate_count, write_bytes, write_fixed_bytes, write_u32};
-use hn_state::{BlockEnvelope, TransactionEnvelope};
+use hn_hncs::{Decoder, validate_count, write_bytes, write_fixed_bytes, write_u32, write_u64};
+use hn_state::{BlockEnvelope, FinalizedBlock, TransactionEnvelope};
 
 use crate::error::NetworkResult;
 
@@ -256,6 +257,96 @@ impl ConsensusProposalMessageV1 {
     }
 }
 
+/// Maximum number of `FinalizedBlock` entries in one
+/// `SyncBlockRangeResponseV1` (ADR-0044, "Decided: Wire Protocol") — a
+/// large gap is fetched across several bounded requests in sequence,
+/// never one unbounded message.
+pub const MAX_SYNC_BLOCKS_PER_RESPONSE: u32 = 64;
+
+/// Maximum length, in bytes, of one embedded `FinalizedBlock` blob —
+/// generous headroom over the sum of `hn_state`'s own
+/// `MAX_FINALIZED_BLOCK_ENVELOPE_BLOB_LEN`/
+/// `MAX_FINALIZED_BLOCK_QC_BLOB_LEN` (`FinalizedBlock::encode`'s own
+/// two internal bounds) — a wire-frame safety cap, not a second,
+/// independently chosen policy value.
+pub const MAX_FINALIZED_BLOCK_BLOB_LEN: usize = 21_000_000;
+
+/// "Send me finalized blocks starting after `from_height`, up to
+/// `max_count` of them" (ADR-0044, "Decided: Wire Protocol") — a
+/// receiver that knows only that it is behind, not which hashes it is
+/// missing, the opposite shape of `BlockRequestV1`'s own by-hash
+/// lookup for a receiver that already knows what it wants.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SyncBlockRangeRequestV1 {
+    /// Send blocks starting immediately *after* this height.
+    pub from_height: BlockHeight,
+    /// Never send more than this many blocks in the response.
+    pub max_count: u32,
+}
+
+impl SyncBlockRangeRequestV1 {
+    /// Encodes this value as canonical HNCS bytes.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        write_u64(&mut out, self.from_height.get());
+        write_u32(&mut out, self.max_count);
+        out
+    }
+
+    /// Decodes and validates canonical HNCS bytes produced by
+    /// [`SyncBlockRangeRequestV1::encode`].
+    pub fn decode(bytes: &[u8]) -> NetworkResult<Self> {
+        let mut decoder = Decoder::new(bytes);
+        let from_height = BlockHeight::new(decoder.read_u64()?);
+        let max_count = decoder.read_u32()?;
+        decoder.finish()?;
+        Ok(Self {
+            from_height,
+            max_count,
+        })
+    }
+}
+
+/// A bounded, height-ordered run of [`FinalizedBlock`]s, starting
+/// immediately after the request's own `from_height` (ADR-0044,
+/// "Decided: Wire Protocol") — a prefix of what was asked for if the
+/// responder does not have (or will not send) the full range.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncBlockRangeResponseV1 {
+    /// The returned blocks, in ascending height order.
+    pub blocks: Vec<FinalizedBlock>,
+}
+
+impl SyncBlockRangeResponseV1 {
+    /// Encodes this value as canonical HNCS bytes.
+    pub fn encode(&self) -> NetworkResult<Vec<u8>> {
+        let mut out = Vec::new();
+        validate_count(self.blocks.len(), MAX_SYNC_BLOCKS_PER_RESPONSE as usize)?;
+        write_u32(&mut out, self.blocks.len() as u32);
+        for block in &self.blocks {
+            let bytes = block.encode()?;
+            write_bytes(&mut out, &bytes, MAX_FINALIZED_BLOCK_BLOB_LEN)?;
+        }
+        Ok(out)
+    }
+
+    /// Decodes and validates canonical HNCS bytes produced by
+    /// [`SyncBlockRangeResponseV1::encode`].
+    pub fn decode(bytes: &[u8]) -> NetworkResult<Self> {
+        let mut decoder = Decoder::new(bytes);
+        let count = decoder.read_u32()? as usize;
+        validate_count(count, MAX_SYNC_BLOCKS_PER_RESPONSE as usize)?;
+        let mut blocks = Vec::with_capacity(count);
+        for _ in 0..count {
+            let block_bytes = decoder.read_bytes(MAX_FINALIZED_BLOCK_BLOB_LEN)?;
+            blocks.push(FinalizedBlock::decode(block_bytes)?);
+        }
+        decoder.finish()?;
+        Ok(Self { blocks })
+    }
+}
+
 /// Hand-rolled `u32 count || elements` encoding, each element itself a
 /// length-prefixed blob — not `hn_hncs::write_list`/`read_list`:
 /// `TransactionEnvelope::decode` can fail with a domain-specific
@@ -299,9 +390,11 @@ mod tests {
 
     use super::{
         BlockAnnounceV1, BlockRequestV1, BlockResponseV1, ConsensusProposalMessageV1,
+        MAX_SYNC_BLOCKS_PER_RESPONSE, SyncBlockRangeRequestV1, SyncBlockRangeResponseV1,
         TransactionAnnounceV1, TransactionRequestV1, TransactionResponseV1,
     };
     use crate::error::NetworkResult;
+    use hn_state::{FINALIZED_BLOCK_VERSION_1, FinalizedBlock};
 
     const TX_ID: [u8; 32] = [0x11; 32];
     const BLOCK_HASH: [u8; 32] = [0x22; 32];
@@ -506,5 +599,61 @@ mod tests {
         let decoded = ConsensusProposalMessageV1::decode(&message.encode()?)?;
         assert_eq!(decoded, message);
         Ok(())
+    }
+
+    fn sample_finalized_block() -> NetworkResult<FinalizedBlock> {
+        Ok(FinalizedBlock {
+            finalized_block_version: FINALIZED_BLOCK_VERSION_1,
+            envelope: sample_block_envelope(vec![], None)?,
+            commit_qc: sample_qc(0),
+        })
+    }
+
+    #[test]
+    fn sync_block_range_request_round_trips_through_decode() -> NetworkResult<()> {
+        let request = SyncBlockRangeRequestV1 {
+            from_height: BlockHeight::new(5),
+            max_count: 10,
+        };
+        let decoded = SyncBlockRangeRequestV1::decode(&request.encode())?;
+        assert_eq!(decoded, request);
+        Ok(())
+    }
+
+    #[test]
+    fn sync_block_range_response_round_trips_several_blocks() -> NetworkResult<()> {
+        let response = SyncBlockRangeResponseV1 {
+            blocks: vec![sample_finalized_block()?, sample_finalized_block()?],
+        };
+        let decoded = SyncBlockRangeResponseV1::decode(&response.encode()?)?;
+        assert_eq!(decoded, response);
+        Ok(())
+    }
+
+    #[test]
+    fn sync_block_range_response_round_trips_with_no_blocks() -> NetworkResult<()> {
+        let response = SyncBlockRangeResponseV1 { blocks: vec![] };
+        let decoded = SyncBlockRangeResponseV1::decode(&response.encode()?)?;
+        assert_eq!(decoded, response);
+        Ok(())
+    }
+
+    #[test]
+    fn sync_block_range_response_encode_rejects_more_than_the_per_response_limit()
+    -> NetworkResult<()> {
+        let mut blocks = Vec::new();
+        for _ in 0..=MAX_SYNC_BLOCKS_PER_RESPONSE {
+            blocks.push(sample_finalized_block()?);
+        }
+        let response = SyncBlockRangeResponseV1 { blocks };
+        assert!(response.encode().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn sync_block_range_response_decode_rejects_a_claimed_count_over_the_limit() {
+        let mut bytes = Vec::new();
+        hn_hncs::write_u32(&mut bytes, MAX_SYNC_BLOCKS_PER_RESPONSE + 1);
+        assert!(SyncBlockRangeResponseV1::decode(&bytes).is_err());
     }
 }

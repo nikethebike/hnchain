@@ -22,7 +22,10 @@ pub enum Channel {
     Consensus = 0x05,
     /// Reserved: blocked on ADR-0015's own evidence message design.
     Evidence = 0x06,
-    /// Reserved: blocked on ADR-0016's own sync packet design.
+    /// `SyncBlockRangeRequest`/`SyncBlockRangeResponse` (ADR-0044,
+    /// "Decided: Wire Protocol" — Full Verification Mode's own height-
+    /// ranged block fetch; ADR-0016's other sync modes, checkpoint/
+    /// snapshot-assisted, remain unresolved).
     Sync = 0x07,
     /// Reserved: blocked on ADR-0016's own snapshot packet design.
     Snapshot = 0x08,
@@ -120,6 +123,12 @@ pub enum MessageType {
     LightClientProofRequest = 0x0017,
     /// Reserved: blocked on ADR-0017's own light-client proof design.
     LightClientProofResponse = 0x0018,
+    /// "Send me finalized blocks starting after `from_height`, up to
+    /// `max_count` of them" (ADR-0044, "Decided: Wire Protocol").
+    SyncBlockRangeRequest = 0x0019,
+    /// A bounded, height-ordered run of `FinalizedBlock`s (ADR-0044,
+    /// "Decided: Wire Protocol").
+    SyncBlockRangeResponse = 0x001A,
 }
 
 impl MessageType {
@@ -157,6 +166,8 @@ impl MessageType {
             0x0016 => Ok(Self::SnapshotChunkResponse),
             0x0017 => Ok(Self::LightClientProofRequest),
             0x0018 => Ok(Self::LightClientProofResponse),
+            0x0019 => Ok(Self::SyncBlockRangeRequest),
+            0x001A => Ok(Self::SyncBlockRangeResponse),
             _ => Err(NetworkError::UnsupportedMessageType { value }),
         }
     }
@@ -224,6 +235,8 @@ mod tests {
             MessageType::SnapshotChunkResponse,
             MessageType::LightClientProofRequest,
             MessageType::LightClientProofResponse,
+            MessageType::SyncBlockRangeRequest,
+            MessageType::SyncBlockRangeResponse,
         ] {
             assert_eq!(
                 MessageType::from_u16(message_type.as_u16()),

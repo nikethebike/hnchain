@@ -109,8 +109,9 @@ pub use handshake::{
 pub use identity::peer_id;
 pub use propagation::{
     BlockAnnounceV1, BlockRequestV1, BlockResponseV1, ConsensusProposalMessageV1,
-    MAX_BLOCK_ENVELOPE_BLOB_LEN, MAX_TRANSACTION_BLOB_LEN, MAX_TRANSACTIONS_PER_MESSAGE,
-    TransactionAnnounceV1, TransactionRequestV1, TransactionResponseV1,
+    MAX_BLOCK_ENVELOPE_BLOB_LEN, MAX_FINALIZED_BLOCK_BLOB_LEN, MAX_SYNC_BLOCKS_PER_RESPONSE,
+    MAX_TRANSACTION_BLOB_LEN, MAX_TRANSACTIONS_PER_MESSAGE, SyncBlockRangeRequestV1,
+    SyncBlockRangeResponseV1, TransactionAnnounceV1, TransactionRequestV1, TransactionResponseV1,
 };
 pub use registry::{Channel, MessageType};
 pub use transport::{MAX_FRAME_LEN, PeerLink, read_frame, spawn_peer_link, write_frame};
