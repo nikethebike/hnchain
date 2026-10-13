@@ -307,10 +307,17 @@ pub fn reserve_keypair() -> Ed25519KeyPair {
 
 /// A real, correctly-signed native transfer of `amount` from the
 /// devnet genesis's own Reserve account (comfortably funded above any
-/// amount a test would plausibly use) to `recipient`, at nonce 0 --
-/// only valid as the *first* transaction the Reserve account's own
-/// tests ever apply, since it bootstraps that account's identity.
-pub fn signed_reserve_transfer(recipient: Digest, amount: u128) -> TestResult<TransactionEnvelope> {
+/// amount a test would plausibly use) to `recipient`, at `nonce` --
+/// `bootstrap_key` is only present at `nonce == 0`: the Reserve
+/// account's own identity is bootstrapped by its first-ever
+/// transaction, and a later one claiming the key again would be
+/// rejected (`UnexpectedBootstrapKey`) since the identity already
+/// exists by then.
+pub fn signed_reserve_transfer(
+    recipient: Digest,
+    amount: u128,
+    nonce: u64,
+) -> TestResult<TransactionEnvelope> {
     let keypair = reserve_keypair();
     let sender = account_address_body(
         NETWORK_ID,
@@ -329,8 +336,8 @@ pub fn signed_reserve_transfer(recipient: Digest, amount: u128) -> TestResult<Tr
         network_id: NETWORK_ID,
         tx_type: TxType::Transfer,
         sender,
-        bootstrap_key: Some(keypair.key_descriptor()),
-        nonce: AccountNonce::new(0),
+        bootstrap_key: (nonce == 0).then(|| keypair.key_descriptor()),
+        nonce: AccountNonce::new(nonce),
         fee_limit: 100,
         validity_window: ValidityWindowV1 {
             min_height: None,

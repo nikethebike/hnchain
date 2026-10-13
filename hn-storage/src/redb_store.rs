@@ -177,6 +177,16 @@ impl BlockStore for RedbStateStore {
             })
             .collect()
     }
+
+    fn latest_finalized_block(&self) -> StateResult<Option<FinalizedBlock>> {
+        let read_txn = self.database.begin_read().map_err(storage_error)?;
+        let table = read_txn.open_table(BLOCKS_TABLE).map_err(storage_error)?;
+        table
+            .last()
+            .map_err(storage_error)?
+            .map(|(_, value_guard)| FinalizedBlock::decode(value_guard.value()))
+            .transpose()
+    }
 }
 
 /// Converts any `redb` error into [`StateError::Storage`] via its own
@@ -424,6 +434,28 @@ mod tests {
             store.finalized_block_range(BlockHeight::new(5), 10)?,
             Vec::new()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn latest_finalized_block_is_none_for_a_fresh_database() -> StateResult<()> {
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let store = RedbStateStore::open(dir.path().join("state.redb"))?;
+        assert_eq!(store.latest_finalized_block()?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn latest_finalized_block_returns_the_highest_height() -> StateResult<()> {
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let mut store = RedbStateStore::open(dir.path().join("state.redb"))?;
+        for height in 1..=5 {
+            store.commit_block(&[], &sample_finalized_block(height)?)?;
+        }
+        let latest = store
+            .latest_finalized_block()?
+            .ok_or_else(|| hn_state::StateError::Storage("expected a block".into()))?;
+        assert_eq!(latest.envelope.header.height.get(), 5);
         Ok(())
     }
 

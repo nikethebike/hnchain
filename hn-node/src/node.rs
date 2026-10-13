@@ -240,6 +240,27 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
     let genesis_header = genesis_block_header(&manifest)?;
     let genesis_block_hash = genesis_header.block_hash()?;
 
+    // ADR-0044, "Decided: Durable Finalized-Block Storage" -- a
+    // restarting node's own data-dir may already hold real progress
+    // from before it was killed. Resume from there, never
+    // unconditionally from genesis: any real remaining gap to the
+    // rest of the network (this node was down longer than its own
+    // last real height) is what Syncing (`observe_height`) exists to
+    // close, not something `run` should ever paper over by pretending
+    // genesis is still the starting point.
+    let (starting_height, last_block_hash, last_timestamp) = match store.latest_finalized_block()? {
+        Some(block) => (
+            block.envelope.header.height,
+            block.envelope.block_hash()?,
+            block.envelope.header.timestamp,
+        ),
+        None => (
+            BlockHeight::GENESIS,
+            genesis_block_hash,
+            genesis_header.timestamp,
+        ),
+    };
+
     let records: Vec<ValidatorRecordV1> = manifest
         .validators
         .iter()
@@ -339,10 +360,13 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
     );
 
     let mut ctx = Ctx {
-        // Genesis is height 0 (ADR-0043); the first real
-        // consensus-produced block starts at height 1, keeping
-        // `height = parent.height + 1` true across that boundary too.
-        engine: ConsensusEngine::new_height(BlockHeight::new(1)),
+        // One past whatever this node's own durable store says it
+        // already really reached (genesis, height 0, if nothing --
+        // ADR-0043), keeping `height = parent.height + 1` true across
+        // both a genesis start and a real restart alike.
+        engine: ConsensusEngine::new_height(BlockHeight::new(
+            starting_height.get().saturating_add(1),
+        )),
         store,
         records,
         ordered_ids,
@@ -362,18 +386,16 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         established: HashSet::new(),
         dialed_peers: HashMap::new(),
         round_started: false,
-        // Genesis's own real, independently-recomputable hash/
-        // timestamp (ADR-0043) -- no longer an arbitrary `[0; 32]`/`0`
-        // placeholder nothing could actually get wrong.
-        last_block_hash: genesis_block_hash,
-        last_timestamp: genesis_header.timestamp,
+        last_block_hash,
+        last_timestamp,
         syncing: None,
         pending_envelopes: HashMap::new(),
         mempool: Mempool::new(),
-        // Genesis is the last thing every node has "finalized" before
-        // any real round begins (ADR-0043) -- the first real
-        // transaction is admitted against `last_finalized_height + 1`.
-        last_finalized_height: BlockHeight::GENESIS,
+        // Whatever this node's own durable store says it already
+        // really reached -- the last thing it has "finalized" before
+        // any round begins this run; the first real transaction is
+        // admitted against `last_finalized_height + 1`.
+        last_finalized_height: starting_height,
     };
 
     drive(&mut ctx, event_rx, config.peers.len())
@@ -1433,72 +1455,104 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
             let height = ctx.engine.state().height;
             let round = ctx.engine.state().round;
             // `pending_envelopes` and the engine's own `proposed_blocks`
-            // cache are populated together at the exact same two call
-            // sites (the proposer branch and the receiver branch's
-            // verified-proposal path) -- neither ever has an entry the
-            // other lacks. ADR-0039's own passive height-observation
-            // catch-up used to make a miss here a real, named race (a
-            // jump straight to `observed_height` with no cached
-            // proposal); ADR-0044's real historical sync replaces that
-            // jump entirely, so this engine now only ever reaches
-            // `Finalize` by having actually gone through `Propose` for
-            // this exact block first -- a miss would be a genuine,
-            // unexpected bug, not an environmental race, so it is
-            // allowed to propagate rather than silently logged past.
-            let envelope = ctx
-                .pending_envelopes
-                .get(&block_hash)
-                .cloned()
-                .ok_or(ConsensusError::UnknownProposedBlock { block_hash })?;
-            let result = ctx.engine.commit_finalized_block(
+            // cache are populated together at the same two call sites
+            // (the proposer branch and the receiver branch's verified-
+            // proposal path), so they agree for as long as one
+            // `ConsensusEngine` lives through an uninterrupted
+            // sequence of rounds. But a node that just finished a real
+            // sync attempt can still miss the very first live proposal
+            // at its own resumption height: that proposal may have
+            // been broadcast *while* this node was still busy fetching
+            // and replaying its own sync batch, not listening for
+            // ordinary consensus gossip at all -- yet it can perfectly
+            // well catch that same round's own `precommit` quorum
+            // certificate afterward, which carries no proposal content
+            // of its own. This is the exact race ADR-0039's own passive
+            // catch-up used to name; real sync narrows the window a lot
+            // (most of this node's own history is now genuinely
+            // verified, not merely assumed) but does not close this
+            // one specific edge entirely, so it is still a dropped,
+            // logged event here, never a fatal error.
+            let Some(envelope) = ctx.pending_envelopes.get(&block_hash).cloned() else {
+                log_line(&format!(
+                    "SKIPPED finalizing height={} round={} block={} (no cached proposal)",
+                    height.get(),
+                    round.get(),
+                    hex(&block_hash),
+                ));
+                return Ok(());
+            };
+            match ctx.engine.commit_finalized_block(
                 block_hash,
                 envelope,
                 commit_qc,
                 &mut ctx.store,
                 &ctx.records,
-            )?;
-            // The real post-commit state_root -- `ctx.store` already
-            // holds this block's own committed writes by this point,
-            // so re-enumerating it now (rather than threading the
-            // proposer's own already-computed value through) proves
-            // this independently, the same "recompute, don't trust"
-            // principle `verify_proposal` itself already applies.
-            let empty_table = EmptyHashTable::build()?;
-            let state_enumerator = ExcludingGenesisMarker {
-                inner: &ctx.store,
-                excluded: genesis_marker_key()?,
-            };
-            let state_root = compute_post_state_root(&state_enumerator, &[], &empty_table)?;
-            log_line(&format!(
-                "FINALIZED height={} round={} block={} applied={} state_root={}",
-                height.get(),
-                round.get(),
-                hex(&block_hash),
-                result.applied.len(),
-                hex(&state_root)
-            ));
-            ctx.last_block_hash = block_hash;
-            // `pending_envelopes` mirrors the engine's own
-            // `proposed_blocks` cache (ADR-0042) -- the just-finalized
-            // block's own real `timestamp` becomes the new
-            // monotonicity floor, and every other cached envelope was
-            // for a competing, now-irrelevant round at this same
-            // height, exactly like `commit_finalized_block`'s own
-            // `proposed_blocks.clear()`.
-            if let Some(envelope) = ctx.pending_envelopes.remove(&block_hash) {
-                ctx.last_timestamp = envelope.header.timestamp;
+            ) {
+                Ok(result) => {
+                    // The real post-commit state_root -- `ctx.store`
+                    // already holds this block's own committed writes
+                    // by this point, so re-enumerating it now (rather
+                    // than threading the proposer's own already-
+                    // computed value through) proves this
+                    // independently, the same "recompute, don't trust"
+                    // principle `verify_proposal` itself already
+                    // applies.
+                    let empty_table = EmptyHashTable::build()?;
+                    let state_enumerator = ExcludingGenesisMarker {
+                        inner: &ctx.store,
+                        excluded: genesis_marker_key()?,
+                    };
+                    let state_root = compute_post_state_root(&state_enumerator, &[], &empty_table)?;
+                    log_line(&format!(
+                        "FINALIZED height={} round={} block={} applied={} state_root={}",
+                        height.get(),
+                        round.get(),
+                        hex(&block_hash),
+                        result.applied.len(),
+                        hex(&state_root)
+                    ));
+                    ctx.last_block_hash = block_hash;
+                    // `pending_envelopes` mirrors the engine's own
+                    // `proposed_blocks` cache (ADR-0042) -- the just-
+                    // finalized block's own real `timestamp` becomes
+                    // the new monotonicity floor, and every other
+                    // cached envelope was for a competing, now-
+                    // irrelevant round at this same height, exactly
+                    // like `commit_finalized_block`'s own
+                    // `proposed_blocks.clear()`.
+                    if let Some(envelope) = ctx.pending_envelopes.remove(&block_hash) {
+                        ctx.last_timestamp = envelope.header.timestamp;
+                    }
+                    ctx.pending_envelopes.clear();
+                    ctx.last_finalized_height = height;
+                    // ADR-0045, "Decided: Commit" -- once a block is
+                    // actually finalized, every transaction it really
+                    // included is done, successfully or not (a
+                    // `Failed` receipt still consumed its own nonce);
+                    // either way it must never be selected into a
+                    // future block again.
+                    ctx.mempool
+                        .remove_included(result.applied.iter().map(|applied| applied.tx_id));
+                    let action = ctx.engine.begin_new_height()?;
+                    act_on(ctx, action)?;
+                }
+                // The engine's own `proposed_blocks` cache can miss
+                // this exact same way, for the exact same reason, even
+                // when `pending_envelopes` itself did not -- a node's
+                // own `handle_proposal` call is what populates both
+                // together, so if that call itself never happened for
+                // this block, neither cache has it.
+                Err(ConsensusError::UnknownProposedBlock { block_hash }) => {
+                    log_line(&format!(
+                        "SKIPPED finalizing height={} round={} block={} (no cached proposal)",
+                        height.get(),
+                        round.get(),
+                        hex(&block_hash),
+                    ));
+                }
+                Err(error) => return Err(error.into()),
             }
-            ctx.pending_envelopes.clear();
-            ctx.last_finalized_height = height;
-            // ADR-0045, "Decided: Commit" -- once a block is actually
-            // finalized, every transaction it really included is done,
-            // successfully or not (a `Failed` receipt still consumed
-            // its own nonce); either way it must never be selected
-            // into a future block again.
-            ctx.mempool
-                .remove_included(result.applied.iter().map(|applied| applied.tx_id));
-            let action = ctx.engine.begin_new_height()?;
-            act_on(ctx, action)?;
         }
         ConsensusAction::RoundAdvanced { .. } | ConsensusAction::NewHeight { .. } => {
             let action = ctx.engine.begin_round()?;

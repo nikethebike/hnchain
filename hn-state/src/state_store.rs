@@ -137,6 +137,15 @@ pub trait BlockStore {
         from_height: BlockHeight,
         max_count: u32,
     ) -> StateResult<Vec<FinalizedBlock>>;
+
+    /// Returns the highest-height [`FinalizedBlock`] this store
+    /// durably holds, or `None` if it holds none at all (a brand-new
+    /// store, genesis only). A node resuming after a restart needs
+    /// this to resume its own real progress from wherever it actually
+    /// left off — never from genesis unconditionally — before
+    /// `finalized_block_range`/historical sync takes over for any real
+    /// remaining gap to the rest of the network.
+    fn latest_finalized_block(&self) -> StateResult<Option<FinalizedBlock>>;
 }
 
 /// One `(state_key, value)` write-set entry — every `apply_*` function

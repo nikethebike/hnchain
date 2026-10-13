@@ -399,6 +399,10 @@ mod tests {
         ) -> StateResult<Vec<FinalizedBlock>> {
             Ok(Vec::new())
         }
+
+        fn latest_finalized_block(&self) -> StateResult<Option<FinalizedBlock>> {
+            Ok(None)
+        }
     }
 
     fn keypair(seed: u8) -> Ed25519KeyPair {

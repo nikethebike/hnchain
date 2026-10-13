@@ -71,7 +71,7 @@ fn a_real_transaction_finalizes_identically_across_four_validators() -> TestResu
         "all four validators must already agree on height=1's own state_root: {genesis_lines:?}"
     );
 
-    let envelope = signed_reserve_transfer(RECIPIENT, 100)?;
+    let envelope = signed_reserve_transfer(RECIPIENT, 100, 0)?;
     let node0_addr = support::listen_addr(BASE_PORT, 0);
     let _stream = connect_handshake_and_send(
         node0_addr,

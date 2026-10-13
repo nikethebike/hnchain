@@ -66,7 +66,7 @@ fn a_transaction_injected_into_one_node_gossips_to_another() -> TestResult {
         )?;
     }
 
-    let envelope = signed_reserve_transfer(RECIPIENT, 100)?;
+    let envelope = signed_reserve_transfer(RECIPIENT, 100, 0)?;
     let expected_tx_id = hex(&hn_state::tx_id(&envelope.encode()?)?);
 
     // Inject directly into node 0 only -- as a bare TransactionResponse,
