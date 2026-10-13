@@ -15,11 +15,14 @@
 //! restarted process reconnects to its former peers (ADR-0039's own
 //! connection-drop redial -- nothing else would ever contact it again
 //! otherwise), observes their real current height from ordinary
-//! gossiped consensus traffic, jumps forward to it (at least one
-//! `SYNCED` log line), and goes on to independently finalize a height
-//! at or beyond where its peers already were at the moment it rejoined
-//! -- genuinely caught up, not stuck replaying from height 1 forever
-//! alongside a network that has long since moved on.
+//! gossiped consensus traffic, and really fetches, verifies, and
+//! replays every real intervening block from them (ADR-0044's own
+//! historical sync, superseding ADR-0039's original passive-jump
+//! shortcut -- at least one `SYNC COMPLETE` log line), going on to
+//! independently finalize a height at or beyond where its peers
+//! already were at the moment it rejoined -- genuinely caught up, not
+//! stuck replaying from height 1 forever alongside a network that has
+//! long since moved on.
 
 mod support;
 
@@ -115,12 +118,13 @@ fn a_killed_validator_restarts_and_catches_up_to_the_networks_real_height() -> T
     )?;
     nodes.push(restarted);
 
-    // It must observe the network's real height and jump forward, not
-    // silently replay from height 1 forever.
+    // It must observe the network's real height and actually fetch,
+    // verify, and replay its way there, not silently replay from
+    // height 1 forever with no sync at all.
     let restarted_ref = nodes.last().ok_or("restarted node missing")?;
     wait_until_all_log(
         &[restarted_ref],
-        |line| line.starts_with("SYNCED to height="),
+        |line| line.starts_with("SYNC COMPLETE height="),
         WAIT,
     )?;
 

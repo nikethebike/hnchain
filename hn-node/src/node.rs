@@ -19,10 +19,10 @@ use hn_network::{
 };
 use hn_state::{
     BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, BlockStore,
-    ConsensusVote, EmptyHashTable, HEADER_VERSION_1, QuorumCertificate, ReceiptV1, StateCommitter,
-    StateEnumerator, StateReader, ValidatorRecordV1, ValidatorStatus, VoteSigningPayloadV1,
-    VoteTargetType, VoteType, Write, active_key, active_set, apply_block, compute_post_state_root,
-    list_empty_root, protocol_parameters_placeholder_hash,
+    ConsensusVote, EmptyHashTable, FinalizedBlock, HEADER_VERSION_1, QuorumCertificate, ReceiptV1,
+    StateCommitter, StateEnumerator, StateReader, ValidatorRecordV1, ValidatorStatus,
+    VoteSigningPayloadV1, VoteTargetType, VoteType, Write, active_key, active_set, apply_block,
+    compute_post_state_root, list_empty_root, protocol_parameters_placeholder_hash,
 };
 use hn_storage::RedbStateStore;
 
@@ -107,6 +107,13 @@ enum NodeEvent {
         height: u64,
         round: u64,
     },
+    /// No `SyncBlockRangeResponse` arrived in time for the request
+    /// `request_next_sync_range` sent to `peer_conn_id` starting at
+    /// `from_height` (ADR-0044's own addendum on request timeouts).
+    SyncRequestTimeout {
+        peer_conn_id: u64,
+        from_height: u64,
+    },
     StartupGraceElapsed,
 }
 
@@ -146,23 +153,24 @@ struct Ctx {
     /// forward the same way as `last_block_hash` — `UnixTimeMillis::
     /// from_millis(0)` before the first block, the same class of
     /// sentinel. Used by [`verify_proposal`]'s timestamp-monotonicity
-    /// check (ADR-0042), only when [`Ctx::chain_position_verified`].
+    /// check (ADR-0042). Always correct now (ADR-0044, "Decided:
+    /// Replacing The Passive Jump For Real Catch-Up"): every height
+    /// this node ever reaches is either locally finalized while live,
+    /// or reached via [`verify_and_commit_synced_block`]'s own full,
+    /// verified replay, which maintains this field block by block —
+    /// there is no longer a passive jump that could leave it stale, so
+    /// (unlike before ADR-0044) nothing ever needs to gate this check
+    /// on whether chain position is "known."
     last_timestamp: UnixTimeMillis,
-    /// Whether `last_block_hash`/`last_timestamp` are actually known
-    /// to be correct for this engine's *current* height (ADR-0042,
-    /// "Decided: Chain-Position-Gated Checks") — `true` for a node
-    /// that has never needed [`maybe_sync_forward`]'s passive
-    /// catch-up jump (every height it has ever reached, it reached by
-    /// locally finalizing the one before it); set `false` by that
-    /// jump itself (the jumped-to height's real parent is unknown —
-    /// real block/state sync, ADR-0016, remains out of scope) and back
-    /// to `true` the next time this node locally finalizes a block
-    /// (from that point forward, `last_block_hash`/`last_timestamp`
-    /// are correct again). `verify_proposal` skips the
-    /// `parent_block_hash`/`timestamp` checks specifically (and only)
-    /// while this is `false` — every other check it performs needs no
-    /// chain-position context at all.
-    chain_position_verified: bool,
+    /// The in-progress historical sync attempt, if any (ADR-0044,
+    /// "Decided: Replacing The Passive Jump For Real Catch-Up") —
+    /// `Some` exactly while this node is fetching and verifying blocks
+    /// it was not present for. While `Some`, `handle_peer_message`
+    /// never feeds `ConsensusEngine` any live `Proposal`/`Vote`/
+    /// `QuorumCertificateMessage` traffic at all (dropped, not
+    /// queued) — this node has no business attempting a live round at
+    /// a height it has not actually verified its way to yet.
+    syncing: Option<SyncState>,
     /// `block_hash -> that proposal's own verified `BlockEnvelope``
     /// (ADR-0044, "Decided: Durable Finalized-Block Storage" —
     /// generalized from a header-only cache so the full envelope is
@@ -186,13 +194,32 @@ struct Ctx {
     /// This node's own last *finalized* height — distinct from
     /// `ctx.engine.state().height`, which is the height currently
     /// being contested (one past the last finalized one, once a round
-    /// is under way). `Mempool::admit`'s own validity-window/dry-run
-    /// checks need "the height a transaction would actually be
-    /// considered for next" (`last_finalized_height + 1`), tracked
-    /// here explicitly rather than inferred from the engine's own
-    /// current position, which a passive catch-up jump (ADR-0039) can
-    /// otherwise make momentarily ambiguous.
+    /// is under way) and, while [`Ctx::syncing`] is `Some`, frozen at
+    /// whatever it was before the sync attempt started. `Mempool::
+    /// admit`'s own validity-window/dry-run checks need "the height a
+    /// transaction would actually be considered for next"
+    /// (`last_finalized_height + 1`); the real historical sync
+    /// machinery (ADR-0044) uses it as the one true measure of how far
+    /// this node has actually, verifiably gotten, independent of
+    /// whatever `ctx.engine` currently reflects.
     last_finalized_height: BlockHeight,
+}
+
+/// One in-progress historical sync attempt (ADR-0044, "Decided:
+/// Replacing The Passive Jump For Real Catch-Up").
+struct SyncState {
+    /// The peer currently being asked for the next range — a
+    /// `SyncBlockRangeResponse` from any other connection is
+    /// unsolicited (this node did not ask it for anything) and
+    /// ignored.
+    peer_conn_id: u64,
+    /// The highest height observed so far that started or extended
+    /// this attempt. Keep requesting more ranges until this node's
+    /// own `last_finalized_height` reaches it, or the peer currently
+    /// being asked says it has nothing further to give — whichever
+    /// comes first; a peer that is itself behind this value is not a
+    /// failure, just a shorter attempt than originally hoped for.
+    target_height: u64,
 }
 
 /// Runs this validator's node process until killed (ADR-0038,
@@ -340,7 +367,7 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         // placeholder nothing could actually get wrong.
         last_block_hash: genesis_block_hash,
         last_timestamp: genesis_header.timestamp,
-        chain_position_verified: true,
+        syncing: None,
         pending_envelopes: HashMap::new(),
         mempool: Mempool::new(),
         // Genesis is the last thing every node has "finalized" before
@@ -477,7 +504,10 @@ fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) ->
             }
             NodeEvent::PeerMessage { conn_id, envelope } => {
                 handle_peer_message(ctx, conn_id, envelope)?;
-                if !ctx.round_started && ctx.established.len() >= required_peers {
+                if !ctx.round_started
+                    && ctx.syncing.is_none()
+                    && ctx.established.len() >= required_peers
+                {
                     ctx.round_started = true;
                     let action = ctx.engine.begin_round()?;
                     act_on(ctx, action)?;
@@ -505,7 +535,8 @@ fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) ->
                 }
             }
             NodeEvent::ProposeTimeout { height, round } => {
-                if is_current(ctx, height, round)
+                if ctx.syncing.is_none()
+                    && is_current(ctx, height, round)
                     && ctx.engine.state().step == hn_consensus::ConsensusStep::Propose
                 {
                     let action = ctx.engine.propose_timeout()?;
@@ -513,7 +544,8 @@ fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) ->
                 }
             }
             NodeEvent::PrevoteTimeout { height, round } => {
-                if is_current(ctx, height, round)
+                if ctx.syncing.is_none()
+                    && is_current(ctx, height, round)
                     && ctx.engine.state().step == hn_consensus::ConsensusStep::Prevote
                 {
                     let action = ctx.engine.prevote_timeout()?;
@@ -521,15 +553,36 @@ fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) ->
                 }
             }
             NodeEvent::PrecommitTimeout { height, round } => {
-                if is_current(ctx, height, round)
+                if ctx.syncing.is_none()
+                    && is_current(ctx, height, round)
                     && ctx.engine.state().step == hn_consensus::ConsensusStep::Precommit
                 {
                     let action = ctx.engine.precommit_timeout()?;
                     act_on(ctx, action)?;
                 }
             }
+            NodeEvent::SyncRequestTimeout {
+                peer_conn_id,
+                from_height,
+            } => {
+                // Stale unless still syncing, still waiting on this
+                // exact peer, and still at this exact height -- a
+                // response that already arrived (or a peer switch
+                // from some other cause) means this timer's own
+                // request was already resolved, and firing it now
+                // would otherwise wrongly abandon a perfectly good,
+                // already-in-progress newer request.
+                let is_current_wait = ctx
+                    .syncing
+                    .as_ref()
+                    .is_some_and(|state| state.peer_conn_id == peer_conn_id)
+                    && ctx.last_finalized_height.get() == from_height;
+                if is_current_wait {
+                    retry_sync_with_different_peer(ctx, peer_conn_id)?;
+                }
+            }
             NodeEvent::StartupGraceElapsed => {
-                if !ctx.round_started {
+                if !ctx.round_started && ctx.syncing.is_none() {
                     ctx.round_started = true;
                     let action = ctx.engine.begin_round()?;
                     act_on(ctx, action)?;
@@ -616,7 +669,10 @@ fn handle_peer_message(
     match (envelope.channel, envelope.message_type) {
         (Channel::Consensus, MessageType::ConsensusVote) => {
             let vote = ConsensusVote::decode(&envelope.payload)?;
-            maybe_sync_forward(ctx, vote.payload.height.get())?;
+            observe_height(ctx, vote.payload.height.get(), conn_id)?;
+            if ctx.syncing.is_some() {
+                return Ok(());
+            }
             if let Some(qc) = ctx.engine.record_vote(&vote, &ctx.store, &ctx.records)? {
                 broadcast(
                     ctx,
@@ -634,7 +690,10 @@ fn handle_peer_message(
         }
         (Channel::Consensus, MessageType::QuorumCertificateMessage) => {
             let qc = QuorumCertificate::decode(&envelope.payload)?;
-            maybe_sync_forward(ctx, qc.height.get())?;
+            observe_height(ctx, qc.height.get(), conn_id)?;
+            if ctx.syncing.is_some() {
+                return Ok(());
+            }
             if expects_qc(ctx, &qc) {
                 let action =
                     ctx.engine
@@ -645,21 +704,23 @@ fn handle_peer_message(
         (Channel::Consensus, MessageType::ConsensusProposal) => {
             let message = ConsensusProposalMessageV1::decode(&envelope.payload)?;
             let header = &message.envelope.header;
-            maybe_sync_forward(ctx, header.height.get())?;
+            observe_height(ctx, header.height.get(), conn_id)?;
+            if ctx.syncing.is_some() {
+                return Ok(());
+            }
             // A proposal that does not target this engine's own exact
             // current (height, round, step) is either stale (a round
-            // already left behind) or ahead of what
-            // `maybe_sync_forward` just caught up to (round > 0 at the
-            // new height) -- either way it has no defined transition
-            // from wherever the engine actually is right now, so it is
-            // silently dropped rather than fed to
-            // `ConsensusEngine::handle_proposal` (ADR-0034's own closed,
-            // total `apply` would reject it as `UnexpectedEvent`).
-            // `BlockHeader.height`/`.round` (ADR-0039's own reason for
-            // self-describing height/round survives the move from a
-            // bare top-level field into the header itself, ADR-0042)
-            // make this an exact check, not the weaker step-only guard
-            // this branch used before ADR-0039.
+            // already left behind) or ahead of it -- either way it has
+            // no defined transition from wherever the engine actually
+            // is right now, so it is silently dropped rather than fed
+            // to `ConsensusEngine::handle_proposal` (ADR-0034's own
+            // closed, total `apply` would reject it as
+            // `UnexpectedEvent`). `BlockHeader.height`/`.round`
+            // (ADR-0039's own reason for self-describing height/round
+            // survives the move from a bare top-level field into the
+            // header itself, ADR-0042) make this an exact check, not
+            // the weaker step-only guard this branch used before
+            // ADR-0039.
             if header.height.get() == ctx.engine.state().height.get()
                 && header.round.get() == ctx.engine.state().round.get()
                 && ctx.engine.state().step == hn_consensus::ConsensusStep::Propose
@@ -669,9 +730,6 @@ fn handle_peer_message(
                 // is a dropped, logged message, never a fatal error:
                 // this is externally-triggerable network input, and no
                 // externally-triggerable input may crash this process.
-                let chain_position = ctx
-                    .chain_position_verified
-                    .then_some((ctx.last_block_hash, ctx.last_timestamp));
                 match verify_proposal(
                     &message,
                     ctx.chain_id,
@@ -679,7 +737,7 @@ fn handle_peer_message(
                     &ctx.ordered_ids,
                     &ctx.store,
                     &ctx.records,
-                    chain_position,
+                    (ctx.last_block_hash, ctx.last_timestamp),
                 ) {
                     Ok(block_hash) => {
                         ctx.pending_envelopes
@@ -793,56 +851,227 @@ fn handle_peer_message(
                 SyncBlockRangeResponseV1 { blocks }.encode()?,
             )?;
         }
+        (Channel::Sync, MessageType::SyncBlockRangeResponse) => {
+            let Some(sync_state) = ctx.syncing.as_ref() else {
+                // Not currently syncing at all -- unsolicited, ignore.
+                return Ok(());
+            };
+            if sync_state.peer_conn_id != conn_id {
+                // Not from the peer this node is currently waiting on
+                // -- stale (already switched peers) or unsolicited,
+                // either way ignore it rather than letting a second
+                // peer's reply race the first.
+                return Ok(());
+            }
+            let target_height = sync_state.target_height;
+            let response = SyncBlockRangeResponseV1::decode(&envelope.payload)?;
+
+            if response.blocks.is_empty() {
+                // This peer has nothing further to give right now --
+                // not a failure (it may simply be behind too), but
+                // nothing was gained either; try a different peer in
+                // case one exists with more.
+                return retry_sync_with_different_peer(ctx, conn_id);
+            }
+
+            for block in &response.blocks {
+                let last_accepted = (ctx.last_finalized_height, ctx.last_block_hash);
+                match verify_and_commit_synced_block(
+                    block,
+                    ctx.chain_id,
+                    ctx.network_id,
+                    &ctx.ordered_ids,
+                    last_accepted,
+                    &mut ctx.store,
+                    &ctx.records,
+                ) {
+                    Ok(block_hash) => {
+                        ctx.last_finalized_height = block.envelope.header.height;
+                        ctx.last_block_hash = block_hash;
+                        ctx.last_timestamp = block.envelope.header.timestamp;
+                        log_line(&format!(
+                            "SYNCED height={} block={}",
+                            ctx.last_finalized_height.get(),
+                            hex(&block_hash),
+                        ));
+                    }
+                    Err(reason) => {
+                        log_line(&format!(
+                            "REJECTED synced block height={} reason=\"{reason}\"",
+                            block.envelope.header.height.get(),
+                        ));
+                        // This peer gave us something invalid -- never
+                        // trust it again this attempt; try a different
+                        // one starting from wherever this node
+                        // genuinely got to.
+                        return retry_sync_with_different_peer(ctx, conn_id);
+                    }
+                }
+            }
+
+            finish_or_continue_sync(ctx, conn_id, target_height)?;
+        }
         _ => {}
     }
     Ok(())
 }
 
-/// If `observed_height` is strictly ahead of this engine's own current
-/// height, this node has fallen behind the network's actual progress —
-/// most realistically after restarting while its peers kept finalizing
-/// without it (ADR-0039, "Decided: Passive Height-Observation
-/// Catch-Up"). No dedicated sync request/response message exists (or
-/// is needed): `ConsensusVote`/`QuorumCertificate` already self-report
-/// their own `height`, and a rejoining node starts observing them as
-/// soon as any connection's handshake completes and the network's
-/// already-constant vote gossip reaches it. Jumps straight to
-/// `observed_height` at round 0 (no lock — exactly what
-/// `ConsensusEngine::new_height` already gives a fresh height) rather
-/// than replaying every intermediate height's content: this pass's own
-/// blocks are always empty (proving liveness/view-change/restart-
-/// recovery is the goal, not state transitions), so there is no actual
-/// application state to reconstruct height-by-height — a real future
-/// pass with real transactions would need real block/state sync
-/// (ADR-0016's own still-entirely-open territory), not this shortcut.
-/// If the jump lands mid-round relative to what peers have actually
-/// reached (they are past round 0 by the time this node catches up),
-/// this node's own round-0 attempt simply times out through the normal
-/// propose/prevote/precommit cycle like any other failed round,
-/// catching up the rest of the way a round at a time — slower than
-/// jumping straight to the right round, but reuses every existing
-/// mechanism with no new one needed.
+/// If `observed_height` is strictly ahead of this engine's own
+/// current height (the height it is actively trying to reach, one
+/// past the last one it finalized, exactly `maybe_sync_forward`'s own
+/// original trigger — same-height gossip about a round already in
+/// progress is ordinary live consensus, not a gap), this node has
+/// fallen behind the network's actual progress — most realistically
+/// after restarting while its peers kept finalizing without it.
+/// Unlike ADR-0039's own original "Decided: Passive Height-Observation
+/// Catch-Up" (superseded, see ADR-0044's own "Decided: Replacing The
+/// Passive Jump For Real Catch-Up"), this never jumps
+/// `ConsensusEngine` straight to `observed_height` and never fakes a
+/// chain position: it starts (or extends, if already in progress) a
+/// real historical sync attempt, fetching and verifying every real
+/// intervening block from `from_conn_id` — the peer whose own gossip
+/// (`ConsensusVote`/`QuorumCertificate`/`ConsensusProposal` all
+/// self-report `height`) revealed the gap in the first place.
+/// `ctx.engine` itself is never touched while a sync attempt is in
+/// progress (frozen at whatever height it was already at), so this
+/// same comparison keeps working for a second, higher observation
+/// that arrives mid-attempt.
 ///
 /// Never triggered by an already-caught-up or genuinely stale (at or
-/// behind current) observation — `observed_height` must be strictly
-/// greater, so every jump this function performs is monotonically
-/// forward.
-fn maybe_sync_forward(ctx: &mut Ctx, observed_height: u64) -> NodeResult<()> {
+/// behind this engine's own current height) observation —
+/// `observed_height` must be strictly greater.
+fn observe_height(ctx: &mut Ctx, observed_height: u64, from_conn_id: u64) -> NodeResult<()> {
     if observed_height <= ctx.engine.state().height.get() {
         return Ok(());
     }
+    match &mut ctx.syncing {
+        Some(state) => {
+            // Already fetching -- just remember the higher target, if
+            // any; the in-flight request/response cycle (or its own
+            // timeout) is what actually drives this forward, not a
+            // second, redundant request fired on every single gossip
+            // message that happens to arrive while busy.
+            state.target_height = state.target_height.max(observed_height);
+            Ok(())
+        }
+        None => start_sync(ctx, from_conn_id, observed_height),
+    }
+}
+
+/// Starts a brand-new historical sync attempt (ADR-0044, "Decided:
+/// Replacing The Passive Jump For Real Catch-Up") against
+/// `peer_conn_id`, from this node's own current `last_finalized_height`
+/// toward `target_height`.
+fn start_sync(ctx: &mut Ctx, peer_conn_id: u64, target_height: u64) -> NodeResult<()> {
     log_line(&format!(
-        "SYNCED to height={observed_height} (observed from a peer)"
+        "SYNCING from height={} toward observed_height={target_height} (peer_conn_id={peer_conn_id})",
+        ctx.last_finalized_height.get(),
     ));
-    ctx.engine = ConsensusEngine::new_height(BlockHeight::new(observed_height));
-    ctx.round_started = true;
-    // This jump's own target height's real parent/timestamp are
-    // unknown (ADR-0042) -- `verify_proposal` must not check either
-    // against `last_block_hash`/`last_timestamp` until this node
-    // locally finalizes a block again.
-    ctx.chain_position_verified = false;
-    let action = ctx.engine.begin_round()?;
-    act_on(ctx, action)
+    ctx.syncing = Some(SyncState {
+        peer_conn_id,
+        target_height,
+    });
+    request_next_sync_range(ctx, peer_conn_id)
+}
+
+/// A per-peer request timeout, and how many times to keep retrying
+/// against whichever peer is currently being asked, before giving up
+/// on *that* peer and switching to another one (ADR-0044's own
+/// addendum, "Плюс тайм-ауты запросов и смена пира при ошибке" —
+/// named here as the real implementation constants that decision
+/// calls for, not a value the ADR itself fixes). A generous multiple
+/// of `base_timeout_ms`: fetching and verifying a real batch of
+/// blocks genuinely takes longer than one consensus round's own
+/// propose/prevote/precommit timeout.
+const SYNC_REQUEST_TIMEOUT_MULTIPLIER: u64 = 20;
+
+/// Sends one `SyncBlockRangeRequestV1` to `peer_conn_id`, starting
+/// immediately after this node's own current `last_finalized_height`,
+/// and schedules the timeout that fires if no matching
+/// `SyncBlockRangeResponse` ever arrives.
+fn request_next_sync_range(ctx: &mut Ctx, peer_conn_id: u64) -> NodeResult<()> {
+    let from_height = ctx.last_finalized_height;
+    send_to(
+        ctx,
+        peer_conn_id,
+        Channel::Sync,
+        MessageType::SyncBlockRangeRequest,
+        SyncBlockRangeRequestV1 {
+            from_height,
+            max_count: MAX_SYNC_BLOCKS_PER_RESPONSE,
+        }
+        .encode(),
+    )?;
+    spawn_after(
+        ctx.event_tx.clone(),
+        Duration::from_millis(
+            ctx.base_timeout_ms
+                .saturating_mul(SYNC_REQUEST_TIMEOUT_MULTIPLIER),
+        ),
+        NodeEvent::SyncRequestTimeout {
+            peer_conn_id,
+            from_height: from_height.get(),
+        },
+    );
+    Ok(())
+}
+
+/// Picks any currently-established peer other than `exclude` to try
+/// next — falls back to retrying `exclude` itself if it is genuinely
+/// the only peer currently established (a small devnet has no one
+/// else to ask), rather than stalling forever waiting for a second
+/// peer that may not exist.
+fn pick_sync_peer(ctx: &Ctx, exclude: u64) -> Option<u64> {
+    ctx.established
+        .iter()
+        .copied()
+        .find(|&conn_id| conn_id != exclude)
+        .or_else(|| ctx.established.contains(&exclude).then_some(exclude))
+}
+
+/// The peer currently being asked failed this attempt (an invalid
+/// block, a decode error, or its own request timing out) — per
+/// ADR-0044's own "Decided: Verification Procedure," per-peer failure
+/// is never fatal to the sync attempt as a whole: try a different
+/// established peer, continuing from wherever this node's own
+/// `last_finalized_height` genuinely got to. If no other peer is even
+/// established right now, the attempt simply pauses (`ctx.syncing =
+/// None`) rather than retrying nothing forever; the next real gossip
+/// message from any peer (once one exists) re-triggers
+/// [`observe_height`] and starts over.
+fn retry_sync_with_different_peer(ctx: &mut Ctx, failed_conn_id: u64) -> NodeResult<()> {
+    let Some(next_peer) = pick_sync_peer(ctx, failed_conn_id) else {
+        ctx.syncing = None;
+        return Ok(());
+    };
+    if let Some(state) = &mut ctx.syncing {
+        state.peer_conn_id = next_peer;
+    }
+    request_next_sync_range(ctx, next_peer)
+}
+
+/// After a successful `SyncBlockRangeResponse` batch: if this node's
+/// own `last_finalized_height` has reached `target_height`, the
+/// attempt is complete — leave `Syncing` and begin a real round at the
+/// next height, the exact same way `run()` itself starts one at
+/// startup. Otherwise, there is more to fetch and `peer_conn_id` is
+/// responding correctly, so simply ask it for the next range.
+fn finish_or_continue_sync(ctx: &mut Ctx, peer_conn_id: u64, target_height: u64) -> NodeResult<()> {
+    if ctx.last_finalized_height.get() >= target_height {
+        ctx.syncing = None;
+        log_line(&format!(
+            "SYNC COMPLETE height={}",
+            ctx.last_finalized_height.get()
+        ));
+        ctx.engine = ConsensusEngine::new_height(BlockHeight::new(
+            ctx.last_finalized_height.get().saturating_add(1),
+        ));
+        ctx.round_started = true;
+        let action = ctx.engine.begin_round()?;
+        act_on(ctx, action)
+    } else {
+        request_next_sync_range(ctx, peer_conn_id)
+    }
 }
 
 /// Verifies an incoming [`ConsensusProposalMessageV1`] before it is
@@ -850,18 +1079,15 @@ fn maybe_sync_forward(ctx: &mut Ctx, observed_height: u64) -> NodeResult<()> {
 /// "Decided: Receiver-Side Verification Rules") — returns the
 /// envelope's own, independently recomputed `block_hash` on success.
 ///
-/// A failure here is a dropped message, not a fatal error: unlike this
-/// crate's own internal passive-catch-up race
-/// (`ConsensusError::UnknownProposedBlock`, handled in `act_on`'s
-/// `Finalized` branch), this is externally-triggerable network input —
-/// no externally-triggerable input may ever crash this process, the
-/// same principle ADR-0038's own "no-panic discipline" already applies
-/// at the process boundary, now applied one layer in, at the
-/// message-verification boundary. (Decoding `envelope.payload` itself
-/// can still propagate a fatal error on malformed bytes, same as every
-/// other message type already does in `handle_peer_message` — a real,
-/// separate, broader decode-resilience gap this ADR does not attempt
-/// to close.)
+/// A failure here is a dropped message, not a fatal error: this is
+/// externally-triggerable network input — no externally-triggerable
+/// input may ever crash this process, the same principle ADR-0038's
+/// own "no-panic discipline" already applies at the process boundary,
+/// now applied one layer in, at the message-verification boundary.
+/// (Decoding `envelope.payload` itself can still propagate a fatal
+/// error on malformed bytes, same as every other message type already
+/// does in `handle_peer_message` — a real, separate, broader decode-
+/// resilience gap this ADR does not attempt to close.)
 ///
 /// Checks, in order: header hash recomputation (implicit —
 /// `block_hash` is derived, never trusted as a separately-carried
@@ -874,19 +1100,18 @@ fn maybe_sync_forward(ctx: &mut Ctx, observed_height: u64) -> NodeResult<()> {
 /// match that execution's real result exactly, and `header.state_root`
 /// must match the real post-block root it produces — this devnet's own
 /// fixed `consensus_root`/`protocol_parameters_hash` values,
-/// `parent_block_hash`/timestamp monotonicity (only while
-/// `chain_position` is `Some` — ADR-0042's own "Decided:
-/// Chain-Position-Gated Checks"), and finally the embedded
+/// `parent_block_hash`/timestamp monotonicity against
+/// `last_block_hash`/`last_timestamp` (unconditional now, ADR-0044:
+/// there is no longer a passive jump that could leave those stale —
+/// every height this node reaches is either locally finalized or
+/// reached via full verified replay), and finally the embedded
 /// `justification` quorum certificate's own signatures, if present.
 ///
 /// Takes only the specific pieces of [`Ctx`] this check actually
 /// needs, rather than the whole context, so it can be exercised
 /// directly in a unit test without constructing a full `Ctx`'s own
 /// sockets/channels/handshake state — none of which this function
-/// touches. `chain_position` is `Some((last_block_hash,
-/// last_timestamp))` exactly when the caller's own
-/// `Ctx::chain_position_verified` is `true`; `None` skips the two
-/// checks that need it.
+/// touches.
 fn verify_proposal(
     message: &ConsensusProposalMessageV1,
     chain_id: u8,
@@ -894,8 +1119,9 @@ fn verify_proposal(
     ordered_ids: &[Digest],
     store: &(impl StateReader + StateEnumerator),
     validator_candidates: &[ValidatorRecordV1],
-    chain_position: Option<(Digest, UnixTimeMillis)>,
+    last_accepted: (Digest, UnixTimeMillis),
 ) -> Result<Digest, String> {
+    let (last_block_hash, last_timestamp) = last_accepted;
     let header = &message.envelope.header;
     let block_hash = message
         .envelope
@@ -973,21 +1199,152 @@ fn verify_proposal(
         return Err("protocol_parameters_hash does not match the expected placeholder".to_string());
     }
 
-    if let Some((last_block_hash, last_timestamp)) = chain_position {
-        if header.parent_block_hash != last_block_hash {
-            return Err(
-                "parent_block_hash does not match this node's own last finalized block".to_string(),
-            );
-        }
-        if header.timestamp.as_millis() <= last_timestamp.as_millis() {
-            return Err("timestamp does not strictly advance past the parent's own".to_string());
-        }
+    if header.parent_block_hash != last_block_hash {
+        return Err(
+            "parent_block_hash does not match this node's own last finalized block".to_string(),
+        );
+    }
+    if header.timestamp.as_millis() <= last_timestamp.as_millis() {
+        return Err("timestamp does not strictly advance past the parent's own".to_string());
     }
 
     if let Some(qc) = &message.envelope.justification {
         qc.verify_signatures(store, ordered_ids)
             .map_err(|error| format!("justification quorum certificate invalid: {error}"))?;
     }
+
+    Ok(block_hash)
+}
+
+/// Verifies a [`FinalizedBlock`] fetched during historical sync
+/// (ADR-0044, "Decided: Verification Procedure") against this node's
+/// own last accepted `(height, block_hash)` and the active set at that
+/// height, replays it for real, and — only on full success — commits
+/// it atomically together with its own record via
+/// [`BlockStore::commit_block`], the exact same one-transaction
+/// guarantee a live-consensus-produced block already gets
+/// ([`hn_consensus::ConsensusEngine::commit_finalized_block`],
+/// ADR-0044 step 3). Returns the block's own `block_hash` on success.
+///
+/// Checks, in order: header hash recomputation (implicit, same
+/// principle as [`verify_proposal`]), chain/network binding, sequential
+/// height with a matching `parent_block_hash` (checked unconditionally
+/// — full replay from genesis means this chain of equalities is never
+/// skipped), header-vs-body consistency
+/// (`BlockEnvelope::verify_body_matches_header`), `commit_qc` itself
+/// (a real `precommit` targeting exactly this block/height, verified
+/// via `QuorumCertificate::verify_signatures` against the active set —
+/// the one requirement live proposal verification does not have: a
+/// node fetching history was never there to watch real-time votes
+/// accumulate into a quorum, so the certificate itself is the only
+/// proof available), and finally a real re-execution of
+/// `envelope.body.transactions` whose `receipts`/`state_root` must
+/// match the header's own claimed values exactly (the same
+/// "recompute, don't trust" check [`verify_proposal`] already applies
+/// to a live proposal).
+///
+/// A failure here is a dropped, logged sync attempt against that
+/// specific peer, never a fatal error — the same externally-
+/// triggerable-input principle ADR-0042 already established, now
+/// applied to historical rather than live data; the caller tries a
+/// different peer for the remaining range (ADR-0044, "Decided:
+/// Verification Procedure").
+fn verify_and_commit_synced_block<S: StateReader + StateEnumerator + BlockStore>(
+    block: &FinalizedBlock,
+    chain_id: u8,
+    network_id: u16,
+    ordered_ids: &[Digest],
+    last_accepted: (BlockHeight, Digest),
+    store: &mut S,
+    validator_candidates: &[ValidatorRecordV1],
+) -> Result<Digest, String> {
+    let header = &block.envelope.header;
+    let block_hash = block
+        .envelope
+        .block_hash()
+        .map_err(|error| format!("header hash computation failed: {error}"))?;
+
+    if header.chain_id != chain_id || header.network_id != network_id {
+        return Err("header chain_id/network_id does not match this node's own".to_string());
+    }
+
+    let (last_height, last_block_hash) = last_accepted;
+    let expected_height = BlockHeight::new(last_height.get().saturating_add(1));
+    if header.height != expected_height {
+        return Err(format!(
+            "expected the next sequential height {}, found {}",
+            expected_height.get(),
+            header.height.get()
+        ));
+    }
+    if header.parent_block_hash != last_block_hash {
+        return Err(
+            "parent_block_hash does not match this node's own last accepted block (foreign chain)"
+                .to_string(),
+        );
+    }
+
+    block
+        .envelope
+        .verify_body_matches_header()
+        .map_err(|error| format!("body does not match header: {error}"))?;
+
+    let commit_qc = &block.commit_qc;
+    if commit_qc.certificate_type != VoteType::Precommit {
+        return Err("commit_qc is not a precommit certificate".to_string());
+    }
+    if commit_qc.target_type != VoteTargetType::Block || commit_qc.target_hash != block_hash {
+        return Err("commit_qc does not target this exact block".to_string());
+    }
+    if commit_qc.height != header.height {
+        return Err("commit_qc does not target this exact height".to_string());
+    }
+    commit_qc
+        .verify_signatures(store, ordered_ids)
+        .map_err(|error| format!("commit_qc invalid: {error}"))?;
+
+    // ADR-0044, "Decided: Verification Procedure", step 5 -- a real
+    // re-execution, not merely a re-check of internal consistency
+    // (the `verify_body_matches_header` call above already did that
+    // against the body's own *claimed* receipts/roots).
+    let application = apply_block(
+        &block.envelope.body.transactions,
+        store,
+        header.height,
+        validator_candidates,
+    )
+    .map_err(|error| format!("block application failed: {error}"))?;
+    let actual_receipts: Vec<ReceiptV1> = application
+        .applied
+        .iter()
+        .map(|applied| applied.receipt)
+        .collect();
+    if actual_receipts != block.envelope.body.receipts {
+        return Err("receipts do not match the real execution result".to_string());
+    }
+    let writes: Vec<Write> = application
+        .applied
+        .iter()
+        .flat_map(|applied| applied.write_set.clone())
+        .collect();
+    let empty_table = EmptyHashTable::build()
+        .map_err(|error| format!("could not build the empty-subtree hash table: {error}"))?;
+    let actual_state_root = {
+        let state_enumerator = ExcludingGenesisMarker {
+            inner: &*store,
+            excluded: genesis_marker_key()
+                .map_err(|error| format!("could not compute the genesis marker key: {error}"))?,
+        };
+        compute_post_state_root(&state_enumerator, &writes, &empty_table)
+            .map_err(|error| format!("could not compute the real post-block state_root: {error}"))?
+    };
+    if header.state_root != actual_state_root {
+        return Err("state_root does not match the real post-block state".to_string());
+    }
+
+    store
+        .commit_block(&writes, block)
+        .map_err(|error| format!("could not durably commit the synced block: {error}"))?;
 
     Ok(block_hash)
 }
@@ -1076,100 +1433,72 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
             let height = ctx.engine.state().height;
             let round = ctx.engine.state().round;
             // `pending_envelopes` and the engine's own `proposed_blocks`
-            // cache are populated together at the exact same call site,
-            // both in the proposer branch (`maybe_start_propose_stage`)
-            // and the receiver branch (`handle_peer_message`'s
-            // `ConsensusProposal` arm) -- neither ever has an entry the
-            // other lacks. A miss here is the same real, already-named
-            // race ADR-0039's own passive height-observation catch-up
-            // describes: a jump straight to `observed_height`
-            // (`maybe_sync_forward`) starts a fresh `ConsensusEngine`
-            // with no cached proposal for a quorum certificate this node
-            // never itself saw `Proposal` for -- doing so would need
-            // real block/state sync (ADR-0016, unchanged), not this
-            // pass's scope.
-            match ctx.pending_envelopes.get(&block_hash).cloned() {
-                None => {
-                    log_line(&format!(
-                        "SKIPPED finalizing height={} round={} block={} (no cached proposal -- passive catch-up gap, ADR-0016)",
-                        height.get(),
-                        round.get(),
-                        hex(&block_hash),
-                    ));
-                }
-                Some(envelope) => {
-                    match ctx.engine.commit_finalized_block(
-                        block_hash,
-                        envelope,
-                        commit_qc,
-                        &mut ctx.store,
-                        &ctx.records,
-                    ) {
-                        Ok(result) => {
-                            // The real post-commit state_root --
-                            // `ctx.store` already holds this block's own
-                            // committed writes by this point, so
-                            // re-enumerating it now (rather than
-                            // threading the proposer's own already-
-                            // computed value through) proves this
-                            // independently, the same "recompute, don't
-                            // trust" principle `verify_proposal` itself
-                            // already applies.
-                            let empty_table = EmptyHashTable::build()?;
-                            let state_enumerator = ExcludingGenesisMarker {
-                                inner: &ctx.store,
-                                excluded: genesis_marker_key()?,
-                            };
-                            let state_root =
-                                compute_post_state_root(&state_enumerator, &[], &empty_table)?;
-                            log_line(&format!(
-                                "FINALIZED height={} round={} block={} applied={} state_root={}",
-                                height.get(),
-                                round.get(),
-                                hex(&block_hash),
-                                result.applied.len(),
-                                hex(&state_root)
-                            ));
-                            ctx.last_block_hash = block_hash;
-                            // `pending_envelopes` mirrors the engine's
-                            // own `proposed_blocks` cache (ADR-0042) --
-                            // the just-finalized block's own real
-                            // `timestamp` becomes the new monotonicity
-                            // floor, and every other cached envelope was
-                            // for a competing, now-irrelevant round at
-                            // this same height, exactly like
-                            // `commit_finalized_block`'s own
-                            // `proposed_blocks.clear()`.
-                            if let Some(envelope) = ctx.pending_envelopes.remove(&block_hash) {
-                                ctx.last_timestamp = envelope.header.timestamp;
-                            }
-                            ctx.pending_envelopes.clear();
-                            ctx.chain_position_verified = true;
-                            ctx.last_finalized_height = height;
-                            // ADR-0045, "Decided: Commit" -- once a block
-                            // is actually finalized, every transaction it
-                            // really included is done, successfully or
-                            // not (a `Failed` receipt still consumed its
-                            // own nonce); either way it must never be
-                            // selected into a future block again.
-                            ctx.mempool.remove_included(
-                                result.applied.iter().map(|applied| applied.tx_id),
-                            );
-                            let action = ctx.engine.begin_new_height()?;
-                            act_on(ctx, action)?;
-                        }
-                        Err(ConsensusError::UnknownProposedBlock { block_hash }) => {
-                            log_line(&format!(
-                                "SKIPPED finalizing height={} round={} block={} (no cached proposal -- passive catch-up gap, ADR-0016)",
-                                height.get(),
-                                round.get(),
-                                hex(&block_hash),
-                            ));
-                        }
-                        Err(error) => return Err(error.into()),
-                    }
-                }
+            // cache are populated together at the exact same two call
+            // sites (the proposer branch and the receiver branch's
+            // verified-proposal path) -- neither ever has an entry the
+            // other lacks. ADR-0039's own passive height-observation
+            // catch-up used to make a miss here a real, named race (a
+            // jump straight to `observed_height` with no cached
+            // proposal); ADR-0044's real historical sync replaces that
+            // jump entirely, so this engine now only ever reaches
+            // `Finalize` by having actually gone through `Propose` for
+            // this exact block first -- a miss would be a genuine,
+            // unexpected bug, not an environmental race, so it is
+            // allowed to propagate rather than silently logged past.
+            let envelope = ctx
+                .pending_envelopes
+                .get(&block_hash)
+                .cloned()
+                .ok_or(ConsensusError::UnknownProposedBlock { block_hash })?;
+            let result = ctx.engine.commit_finalized_block(
+                block_hash,
+                envelope,
+                commit_qc,
+                &mut ctx.store,
+                &ctx.records,
+            )?;
+            // The real post-commit state_root -- `ctx.store` already
+            // holds this block's own committed writes by this point,
+            // so re-enumerating it now (rather than threading the
+            // proposer's own already-computed value through) proves
+            // this independently, the same "recompute, don't trust"
+            // principle `verify_proposal` itself already applies.
+            let empty_table = EmptyHashTable::build()?;
+            let state_enumerator = ExcludingGenesisMarker {
+                inner: &ctx.store,
+                excluded: genesis_marker_key()?,
+            };
+            let state_root = compute_post_state_root(&state_enumerator, &[], &empty_table)?;
+            log_line(&format!(
+                "FINALIZED height={} round={} block={} applied={} state_root={}",
+                height.get(),
+                round.get(),
+                hex(&block_hash),
+                result.applied.len(),
+                hex(&state_root)
+            ));
+            ctx.last_block_hash = block_hash;
+            // `pending_envelopes` mirrors the engine's own
+            // `proposed_blocks` cache (ADR-0042) -- the just-finalized
+            // block's own real `timestamp` becomes the new
+            // monotonicity floor, and every other cached envelope was
+            // for a competing, now-irrelevant round at this same
+            // height, exactly like `commit_finalized_block`'s own
+            // `proposed_blocks.clear()`.
+            if let Some(envelope) = ctx.pending_envelopes.remove(&block_hash) {
+                ctx.last_timestamp = envelope.header.timestamp;
             }
+            ctx.pending_envelopes.clear();
+            ctx.last_finalized_height = height;
+            // ADR-0045, "Decided: Commit" -- once a block is actually
+            // finalized, every transaction it really included is done,
+            // successfully or not (a `Failed` receipt still consumed
+            // its own nonce); either way it must never be selected
+            // into a future block again.
+            ctx.mempool
+                .remove_included(result.applied.iter().map(|applied| applied.tx_id));
+            let action = ctx.engine.begin_new_height()?;
+            act_on(ctx, action)?;
         }
         ConsensusAction::RoundAdvanced { .. } | ConsensusAction::NewHeight { .. } => {
             let action = ctx.engine.begin_round()?;
@@ -1506,9 +1835,10 @@ mod tests {
     use hn_core::{AccountNonce, BlockHeight, Round};
     use hn_crypto::account_address_body;
     use hn_state::{
-        AccessListV1, AccountSection, BalanceValueV1, ReceiptStatus, StateWriter, TX_VERSION_1,
-        TransactionEnvelope, TransferPayloadV1, TxType, ValidatorSection, ValidityWindowV1,
-        account_section_state_key, extra_data_hash, validator_section_state_key,
+        AccessListV1, AccountSection, BalanceValueV1, FINALIZED_BLOCK_VERSION_1, ReceiptStatus,
+        StateWriter, TX_VERSION_1, TransactionEnvelope, TransferPayloadV1, TxType,
+        ValidatorSection, ValidityWindowV1, account_section_state_key, extra_data_hash,
+        validator_section_state_key,
     };
     use hn_storage::InMemoryStateStore;
 
@@ -1721,36 +2051,7 @@ mod tests {
             &fixture.ordered_ids,
             &fixture.store,
             &[],
-            Some((PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS))),
-        );
-        assert_eq!(result, Ok(expected_hash));
-        Ok(())
-    }
-
-    #[test]
-    fn accepts_any_parent_and_timestamp_while_chain_position_is_unknown() -> NodeResult<()> {
-        let fixture = fixture()?;
-        let (envelope, proposer_signature) = signed_envelope(
-            &fixture.store,
-            fixture.legitimate_proposer_id,
-            &fixture.legitimate_proposer,
-            [0xff; 32], // not this node's own last_block_hash
-            0,          // older than any real parent timestamp
-            Vec::new(),
-        )?;
-        let expected_hash = envelope.block_hash()?;
-        let message = ConsensusProposalMessageV1 {
-            envelope,
-            proposer_signature,
-        };
-        let result = verify_proposal(
-            &message,
-            CHAIN_ID,
-            NETWORK_ID,
-            &fixture.ordered_ids,
-            &fixture.store,
-            &[],
-            None,
+            (PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS)),
         );
         assert_eq!(result, Ok(expected_hash));
         Ok(())
@@ -1783,7 +2084,7 @@ mod tests {
             &fixture.ordered_ids,
             &fixture.store,
             &[],
-            None,
+            (PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS)),
         );
         assert!(result.is_err_and(|reason| reason.contains("legitimate proposer")));
         Ok(())
@@ -1812,7 +2113,7 @@ mod tests {
             &fixture.ordered_ids,
             &fixture.store,
             &[],
-            None,
+            (PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS)),
         );
         assert!(result.is_err_and(|reason| reason.contains("signature invalid")));
         Ok(())
@@ -1852,7 +2153,7 @@ mod tests {
             &fixture.ordered_ids,
             &fixture.store,
             &[],
-            None,
+            (PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS)),
         );
         assert!(result.is_err_and(|reason| reason.contains("does not match header")));
         Ok(())
@@ -1892,7 +2193,7 @@ mod tests {
             &fixture.ordered_ids,
             &fixture.store,
             &[],
-            None,
+            (PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS)),
         );
         assert!(result.is_err_and(|reason| reason.contains("state_root")));
         Ok(())
@@ -1920,7 +2221,7 @@ mod tests {
             &fixture.ordered_ids,
             &fixture.store,
             &[],
-            Some((PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS))),
+            (PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS)),
         );
         assert!(result.is_err_and(|reason| reason.contains("parent_block_hash")));
         Ok(())
@@ -1948,7 +2249,7 @@ mod tests {
             &fixture.ordered_ids,
             &fixture.store,
             &[],
-            Some((PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS))),
+            (PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS)),
         );
         assert!(result.is_err_and(|reason| reason.contains("timestamp")));
         Ok(())
@@ -2005,7 +2306,7 @@ mod tests {
             &fixture.ordered_ids,
             &fixture.store,
             &[],
-            None,
+            (PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS)),
         );
         assert!(result.is_err_and(|reason| reason.contains("justification")));
         Ok(())
@@ -2036,7 +2337,7 @@ mod tests {
             &fixture.ordered_ids,
             &fixture.store,
             &[],
-            Some((PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS))),
+            (PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS)),
         );
         assert_eq!(result, Ok(expected_hash));
         Ok(())
@@ -2080,7 +2381,7 @@ mod tests {
             &fixture.ordered_ids,
             &fixture.store,
             &[],
-            None,
+            (PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS)),
         );
         assert!(result.is_err_and(|reason| reason.contains("receipts do not match")));
         Ok(())
@@ -2154,9 +2455,264 @@ mod tests {
             &fixture.ordered_ids,
             &fixture.store,
             &[],
-            None,
+            (PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS)),
         );
         assert!(result.is_err_and(|reason| reason.contains("block application failed")));
+        Ok(())
+    }
+
+    /// A real, verifiable `precommit` certificate for `block_hash`,
+    /// signed by the one validator at `signer_bit_position` in
+    /// `fixture.ordered_ids` -- every check
+    /// `verify_and_commit_synced_block` can satisfy without external
+    /// context already holds; callers tamper one field at a time to
+    /// exercise one specific rejection.
+    fn sample_commit_qc(
+        block_hash: Digest,
+        signer_id: Digest,
+        keypair: &Ed25519KeyPair,
+        signer_bit_position: usize,
+    ) -> NodeResult<QuorumCertificate> {
+        let payload = VoteSigningPayloadV1 {
+            vote_type: VoteType::Precommit,
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            epoch: Epoch::new(0),
+            height: BlockHeight::new(HEIGHT),
+            round: Round::new(ROUND),
+            validator_set_commitment: DEVNET_VSC,
+            validator_id: signer_id,
+            target_type: VoteTargetType::Block,
+            target_hash: block_hash,
+            vote_metadata: Vec::new(),
+        };
+        let digest = payload.signing_digest()?;
+        let signature = SignatureEnvelope {
+            algorithm_id: keypair.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: keypair.sign(&digest).to_vec(),
+        };
+        Ok(QuorumCertificate {
+            certificate_type: VoteType::Precommit,
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            epoch: Epoch::new(0),
+            height: BlockHeight::new(HEIGHT),
+            round: Round::new(ROUND),
+            validator_set_commitment: DEVNET_VSC,
+            target_type: VoteTargetType::Block,
+            target_hash: block_hash,
+            total_voting_power: 100,
+            signed_voting_power: 100,
+            signer_commitment: vec![1_u8 << signer_bit_position],
+            aggregate_proof: vec![signature],
+        })
+    }
+
+    /// `fixture.legitimate_proposer_id`'s own position in
+    /// `fixture.ordered_ids` (`[id_a, id_b]`, see `fixture`'s own doc
+    /// comment) -- validator B, bit position 1.
+    const SIGNER_BIT_POSITION: usize = 1;
+
+    #[test]
+    fn accepts_a_valid_synced_block() -> NodeResult<()> {
+        let fixture = fixture()?;
+        let (envelope, _) = signed_envelope(
+            &fixture.store,
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            PARENT,
+            VALID_TIMESTAMP_MS,
+            Vec::new(),
+        )?;
+        let block_hash = envelope.block_hash()?;
+        let commit_qc = sample_commit_qc(
+            block_hash,
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            SIGNER_BIT_POSITION,
+        )?;
+        let block = FinalizedBlock {
+            finalized_block_version: FINALIZED_BLOCK_VERSION_1,
+            envelope,
+            commit_qc,
+        };
+        let mut store = fixture.store;
+        let result = verify_and_commit_synced_block(
+            &block,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            (BlockHeight::new(HEIGHT - 1), PARENT),
+            &mut store,
+            &[],
+        );
+        assert_eq!(result, Ok(block_hash));
+        assert_eq!(
+            store.finalized_block_range(BlockHeight::new(HEIGHT - 1), 10)?,
+            vec![block]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_a_forged_commit_qc() -> NodeResult<()> {
+        let fixture = fixture()?;
+        let (envelope, _) = signed_envelope(
+            &fixture.store,
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            PARENT,
+            VALID_TIMESTAMP_MS,
+            Vec::new(),
+        )?;
+        let block_hash = envelope.block_hash()?;
+        let mut commit_qc = sample_commit_qc(
+            block_hash,
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            SIGNER_BIT_POSITION,
+        )?;
+        commit_qc.aggregate_proof[0].signature[0] ^= 0xff;
+        let block = FinalizedBlock {
+            finalized_block_version: FINALIZED_BLOCK_VERSION_1,
+            envelope,
+            commit_qc,
+        };
+        let mut store = fixture.store;
+        let result = verify_and_commit_synced_block(
+            &block,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            (BlockHeight::new(HEIGHT - 1), PARENT),
+            &mut store,
+            &[],
+        );
+        assert!(result.is_err_and(|reason| reason.contains("commit_qc invalid")));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_a_height_that_skips_ahead() -> NodeResult<()> {
+        let fixture = fixture()?;
+        let (envelope, _) = signed_envelope(
+            &fixture.store,
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            PARENT,
+            VALID_TIMESTAMP_MS,
+            Vec::new(),
+        )?;
+        let block_hash = envelope.block_hash()?;
+        let commit_qc = sample_commit_qc(
+            block_hash,
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            SIGNER_BIT_POSITION,
+        )?;
+        let block = FinalizedBlock {
+            finalized_block_version: FINALIZED_BLOCK_VERSION_1,
+            envelope,
+            commit_qc,
+        };
+        let mut store = fixture.store;
+        // The envelope's own real height is `HEIGHT` (5); claiming
+        // this node's own last accepted height is `HEIGHT - 2` (3)
+        // skips height 4 entirely.
+        let result = verify_and_commit_synced_block(
+            &block,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            (BlockHeight::new(HEIGHT - 2), PARENT),
+            &mut store,
+            &[],
+        );
+        assert!(result.is_err_and(|reason| reason.contains("expected the next sequential height")));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_a_synced_block_with_a_mismatched_state_root() -> NodeResult<()> {
+        let fixture = fixture()?;
+        let (mut envelope, _) = signed_envelope(
+            &fixture.store,
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            PARENT,
+            VALID_TIMESTAMP_MS,
+            Vec::new(),
+        )?;
+        // Tampered *after* real execution already produced the
+        // correct `state_root` -- `verify_body_matches_header` does
+        // not check `state_root` at all (it is not derived from
+        // `body`), so only the real re-execution this test exercises
+        // can catch it.
+        envelope.header.state_root = [0xee; 32];
+        let block_hash = envelope.block_hash()?;
+        let commit_qc = sample_commit_qc(
+            block_hash,
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            SIGNER_BIT_POSITION,
+        )?;
+        let block = FinalizedBlock {
+            finalized_block_version: FINALIZED_BLOCK_VERSION_1,
+            envelope,
+            commit_qc,
+        };
+        let mut store = fixture.store;
+        let result = verify_and_commit_synced_block(
+            &block,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            (BlockHeight::new(HEIGHT - 1), PARENT),
+            &mut store,
+            &[],
+        );
+        assert!(result.is_err_and(|reason| reason.contains("state_root")));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_a_block_from_a_foreign_chain() -> NodeResult<()> {
+        let fixture = fixture()?;
+        let (envelope, _) = signed_envelope(
+            &fixture.store,
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            PARENT,
+            VALID_TIMESTAMP_MS,
+            Vec::new(),
+        )?;
+        let block_hash = envelope.block_hash()?;
+        let commit_qc = sample_commit_qc(
+            block_hash,
+            fixture.legitimate_proposer_id,
+            &fixture.legitimate_proposer,
+            SIGNER_BIT_POSITION,
+        )?;
+        let block = FinalizedBlock {
+            finalized_block_version: FINALIZED_BLOCK_VERSION_1,
+            envelope,
+            commit_qc,
+        };
+        let mut store = fixture.store;
+        // This node's own real last-accepted block hash is not
+        // `PARENT` -- the synced block does not attach to this node's
+        // own chain at all.
+        let result = verify_and_commit_synced_block(
+            &block,
+            CHAIN_ID,
+            NETWORK_ID,
+            &fixture.ordered_ids,
+            (BlockHeight::new(HEIGHT - 1), [0xff; 32]),
+            &mut store,
+            &[],
+        );
+        assert!(result.is_err_and(|reason| reason.contains("foreign chain")));
         Ok(())
     }
 
