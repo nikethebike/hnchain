@@ -42,6 +42,7 @@
 
 mod in_memory;
 mod redb_store;
+mod tx_index;
 
 pub use in_memory::InMemoryStateStore;
 pub use redb_store::RedbStateStore;

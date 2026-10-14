@@ -146,6 +146,24 @@ pub trait BlockStore {
     /// `finalized_block_range`/historical sync takes over for any real
     /// remaining gap to the rest of the network.
     fn latest_finalized_block(&self) -> StateResult<Option<FinalizedBlock>>;
+
+    /// Returns the `(height, index)` a finalized transaction with this
+    /// `tx_id` was included at, or `None` if no committed block
+    /// contains it (ADR-0046, "Decided: Transaction Index"). `index` is
+    /// this transaction's position in that block's own
+    /// `BlockBody.transactions`/`.receipts` (the two lists share the
+    /// same order, ADR-0008).
+    ///
+    /// This index is derived data: every implementor derives it from
+    /// `block.envelope.body.transactions` at the same point
+    /// [`BlockStore::commit_block`] already commits the block itself
+    /// (never a separate write path), and it is fully rebuildable by
+    /// replaying every [`FinalizedBlock`] this store holds — its
+    /// absence or loss never affects consensus (ADR-0044's own
+    /// "Decided: Durable Finalized-Block Storage" already establishes
+    /// this for the block table itself; this index is just as
+    /// reconstructible from it).
+    fn tx_location(&self, tx_id: &Digest) -> StateResult<Option<(BlockHeight, u32)>>;
 }
 
 /// One `(state_key, value)` write-set entry — every `apply_*` function

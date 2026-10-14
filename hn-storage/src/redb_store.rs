@@ -26,6 +26,16 @@ const STATE_TABLE: TableDefinition<'_, &[u8], &[u8]> = TableDefinition::new("sta
 /// [`BlockStore::finalized_block_range`] needs.
 const BLOCKS_TABLE: TableDefinition<'_, u64, &[u8]> = TableDefinition::new("finalized_blocks");
 
+/// `tx_id -> (height, index)` (ADR-0046, "Decided: Transaction
+/// Index"), encoded as a fixed 12-byte value (`height` big-endian
+/// `u64` then `index` big-endian `u32`) — plain `&[u8]` on both sides,
+/// the same choice [`STATE_TABLE`] already makes, rather than relying
+/// on `redb`'s own tuple-`Value` support: this value is never hashed
+/// or sent over the wire (it is derived, rebuildable data, per
+/// [`hn_state::BlockStore::tx_location`]'s own documentation), so it
+/// needs no canonical HNCS encoding, only a fixed, explicit one.
+const TX_INDEX_TABLE: TableDefinition<'_, &[u8], &[u8]> = TableDefinition::new("tx_index");
+
 /// A `redb`-backed durable [`StateReader`]/[`StateWriter`]/
 /// [`StateCommitter`] implementation (ADR-0019, "Decided: initial
 /// storage backend" — `redb`, a pure-Rust embedded ACID key-value store,
@@ -61,6 +71,7 @@ impl RedbStateStore {
         let write_txn = database.begin_write().map_err(storage_error)?;
         write_txn.open_table(STATE_TABLE).map_err(storage_error)?;
         write_txn.open_table(BLOCKS_TABLE).map_err(storage_error)?;
+        write_txn.open_table(TX_INDEX_TABLE).map_err(storage_error)?;
         write_txn.commit().map_err(storage_error)?;
         Ok(Self { database })
     }
@@ -143,6 +154,7 @@ impl BlockStore for RedbStateStore {
     fn commit_block(&mut self, writes: &[Write], block: &FinalizedBlock) -> StateResult<()> {
         let height = block.envelope.header.height.get();
         let encoded_block = block.encode()?;
+        let tx_locations = crate::tx_index::tx_locations_for_block(block)?;
         let write_txn = self.database.begin_write().map_err(storage_error)?;
         {
             let mut state_table = write_txn.open_table(STATE_TABLE).map_err(storage_error)?;
@@ -155,6 +167,13 @@ impl BlockStore for RedbStateStore {
             blocks_table
                 .insert(height, encoded_block.as_slice())
                 .map_err(storage_error)?;
+            let mut tx_index_table =
+                write_txn.open_table(TX_INDEX_TABLE).map_err(storage_error)?;
+            for (tx_id, tx_height, index) in &tx_locations {
+                tx_index_table
+                    .insert(tx_id.as_slice(), encode_tx_location(*tx_height, *index).as_slice())
+                    .map_err(storage_error)?;
+            }
         }
         write_txn.commit().map_err(storage_error)?;
         Ok(())
@@ -187,6 +206,42 @@ impl BlockStore for RedbStateStore {
             .map(|(_, value_guard)| FinalizedBlock::decode(value_guard.value()))
             .transpose()
     }
+
+    fn tx_location(&self, tx_id: &Digest) -> StateResult<Option<(BlockHeight, u32)>> {
+        let read_txn = self.database.begin_read().map_err(storage_error)?;
+        let table = read_txn.open_table(TX_INDEX_TABLE).map_err(storage_error)?;
+        table
+            .get(tx_id.as_slice())
+            .map_err(storage_error)?
+            .map(|guard| decode_tx_location(guard.value()))
+            .transpose()
+    }
+}
+
+/// Encodes `(height, index)` as the fixed 12-byte value [`TX_INDEX_TABLE`]
+/// stores — big-endian `u64` then big-endian `u32`, matching
+/// [`decode_tx_location`]'s own exact inverse.
+fn encode_tx_location(height: BlockHeight, index: u32) -> [u8; 12] {
+    let mut encoded = [0_u8; 12];
+    encoded[0..8].copy_from_slice(&height.get().to_be_bytes());
+    encoded[8..12].copy_from_slice(&index.to_be_bytes());
+    encoded
+}
+
+/// Decodes a [`TX_INDEX_TABLE`] value produced by [`encode_tx_location`].
+fn decode_tx_location(bytes: &[u8]) -> StateResult<(BlockHeight, u32)> {
+    if bytes.len() != 12 {
+        return Err(StateError::Storage(
+            "tx_index value has the wrong length".into(),
+        ));
+    }
+    let height = u64::from_be_bytes(bytes[0..8].try_into().map_err(|_| {
+        StateError::Storage("tx_index value's height could not be read".into())
+    })?);
+    let index = u32::from_be_bytes(bytes[8..12].try_into().map_err(|_| {
+        StateError::Storage("tx_index value's index could not be read".into())
+    })?);
+    Ok((BlockHeight::new(height), index))
 }
 
 /// Converts any `redb` error into [`StateError::Storage`] via its own
@@ -199,24 +254,74 @@ fn storage_error(error: impl Into<redb::Error>) -> StateError {
 
 #[cfg(test)]
 mod tests {
-    use hn_core::{BlockHeight, Epoch, ProtocolEpoch, Round, UnixTimeMillis};
-    use hn_crypto::SignatureEnvelope;
+    use hn_core::{AccountNonce, BlockHeight, Epoch, ProtocolEpoch, Round, UnixTimeMillis};
+    use hn_crypto::{Ed25519KeyPair, KeyRole, SignatureEnvelope, account_address_body};
     use hn_state::{
-        BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, BlockStore,
-        FINALIZED_BLOCK_VERSION_1, FinalizedBlock, HEADER_VERSION_1, QuorumCertificate,
-        StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter, VoteTargetType,
-        VoteType, Write, list_empty_root,
+        AccessListV1, BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader,
+        BlockStore, FINALIZED_BLOCK_VERSION_1, FinalizedBlock, HEADER_VERSION_1,
+        QuorumCertificate, StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter,
+        TX_VERSION_1, TransactionEnvelope, TransferPayloadV1, TxType, ValidityWindowV1,
+        VoteTargetType, VoteType, Write, list_empty_root,
     };
     use tempfile::tempdir;
 
-    use super::{BLOCKS_TABLE, STATE_TABLE, storage_error};
+    use super::{BLOCKS_TABLE, STATE_TABLE, TX_INDEX_TABLE, storage_error};
 
     use super::RedbStateStore;
 
+    fn signed_transfer(seed: u8, nonce: u64) -> StateResult<TransactionEnvelope> {
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::AccountSigning, [seed; 32]);
+        let sender = account_address_body(
+            1,
+            keypair.key_descriptor().algorithm_id(),
+            &keypair.key_descriptor().public_key_bytes(),
+        )?;
+        let payload = TransferPayloadV1 {
+            recipient: [0x99; 32],
+            asset_id: None,
+            amount: 1,
+        }
+        .encode()?;
+        let mut envelope = TransactionEnvelope {
+            tx_version: TX_VERSION_1,
+            chain_id: 1,
+            network_id: 1,
+            tx_type: TxType::Transfer,
+            sender,
+            bootstrap_key: Some(keypair.key_descriptor()),
+            nonce: AccountNonce::new(nonce),
+            fee_limit: 100,
+            validity_window: ValidityWindowV1 {
+                min_height: None,
+                max_height: None,
+            },
+            access_list: AccessListV1 {
+                reads: vec![],
+                writes: vec![],
+            },
+            payload,
+            signatures: vec![],
+        };
+        let digest = envelope.signing_payload().signing_digest()?;
+        envelope.signatures = vec![SignatureEnvelope {
+            algorithm_id: keypair.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: keypair.sign(&digest).to_vec(),
+        }];
+        Ok(envelope)
+    }
+
     fn sample_finalized_block(height: u64) -> StateResult<FinalizedBlock> {
+        sample_finalized_block_with_transactions(height, Vec::new())
+    }
+
+    fn sample_finalized_block_with_transactions(
+        height: u64,
+        transactions: Vec<TransactionEnvelope>,
+    ) -> StateResult<FinalizedBlock> {
         let body = BlockBody {
             body_version: BODY_VERSION_1,
-            transactions: Vec::new(),
+            transactions,
             receipts: Vec::new(),
             evidence: Vec::new(),
             extra_data: Vec::new(),
@@ -480,15 +585,18 @@ mod tests {
     #[test]
     fn a_crash_mid_write_leaves_neither_the_state_write_nor_the_block_visible() -> StateResult<()> {
         // The exact crash window "Decided: Atomic Commit Of Block And
-        // State" (ADR-0044) closes: inserting into both tables under
-        // one open write transaction, then dropping it without ever
+        // State" (ADR-0044, extended by ADR-0046's own `tx_index`
+        // table) closes: inserting into all three tables under one
+        // open write transaction, then dropping it without ever
         // calling `.commit()` -- simulating a process death after the
-        // state write but before the block write (or anywhere else
-        // before the single commit point) -- must leave *neither*
-        // visible afterward, never one without the other.
+        // state write but before the block/index write (or anywhere
+        // else before the single commit point) -- must leave *none*
+        // of them visible afterward, never one without the others.
         let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
         let store = RedbStateStore::open(dir.path().join("state.redb"))?;
-        let block = sample_finalized_block(1)?;
+        let transaction = signed_transfer(0x20, 0)?;
+        let tx_id = hn_state::tx_id(&transaction.encode()?)?;
+        let block = sample_finalized_block_with_transactions(1, vec![transaction])?;
         let encoded_block = block.encode()?;
 
         {
@@ -505,6 +613,16 @@ mod tests {
                     .insert(1_u64, encoded_block.as_slice())
                     .map_err(storage_error)?;
             }
+            {
+                let mut tx_index_table =
+                    write_txn.open_table(TX_INDEX_TABLE).map_err(storage_error)?;
+                tx_index_table
+                    .insert(
+                        tx_id.as_slice(),
+                        super::encode_tx_location(BlockHeight::new(1), 0).as_slice(),
+                    )
+                    .map_err(storage_error)?;
+            }
             // `write_txn` dropped here without `.commit()` -- simulates
             // a crash anywhere before the single commit point.
         }
@@ -514,6 +632,78 @@ mod tests {
             store.finalized_block_range(BlockHeight::new(0), 10)?,
             Vec::new()
         );
+        assert_eq!(store.tx_location(&tx_id)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn tx_location_is_none_for_an_unknown_tx_id() -> StateResult<()> {
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let store = RedbStateStore::open(dir.path().join("state.redb"))?;
+        assert_eq!(store.tx_location(&[0x99; 32])?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn tx_location_matches_each_transactions_own_position() -> StateResult<()> {
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let mut store = RedbStateStore::open(dir.path().join("state.redb"))?;
+        let tx_a = signed_transfer(0x21, 0)?;
+        let tx_b = signed_transfer(0x22, 0)?;
+        let id_a = hn_state::tx_id(&tx_a.encode()?)?;
+        let id_b = hn_state::tx_id(&tx_b.encode()?)?;
+
+        store.commit_block(&[], &sample_finalized_block_with_transactions(3, vec![tx_a, tx_b])?)?;
+
+        assert_eq!(store.tx_location(&id_a)?, Some((BlockHeight::new(3), 0)));
+        assert_eq!(store.tx_location(&id_b)?, Some((BlockHeight::new(3), 1)));
+        Ok(())
+    }
+
+    #[test]
+    fn tx_location_survives_reopening_the_same_database_file() -> StateResult<()> {
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let path = dir.path().join("state.redb");
+        let tx = signed_transfer(0x23, 0)?;
+        let id = hn_state::tx_id(&tx.encode()?)?;
+
+        let mut store = RedbStateStore::open(&path)?;
+        store.commit_block(&[], &sample_finalized_block_with_transactions(1, vec![tx])?)?;
+        drop(store);
+
+        let reopened = RedbStateStore::open(&path)?;
+        assert_eq!(reopened.tx_location(&id)?, Some((BlockHeight::new(1), 0)));
+        Ok(())
+    }
+
+    #[test]
+    fn tx_location_rebuilt_from_replaying_every_block_equals_what_commit_block_recorded()
+    -> StateResult<()> {
+        let dir = tempdir().map_err(|error| hn_state::StateError::Storage(error.to_string()))?;
+        let mut recorded_live = RedbStateStore::open(dir.path().join("live.redb"))?;
+        let tx_1 = signed_transfer(0x24, 0)?;
+        let tx_2 = signed_transfer(0x25, 0)?;
+        let block_1 = sample_finalized_block_with_transactions(1, vec![tx_1])?;
+        let block_2 = sample_finalized_block_with_transactions(2, vec![tx_2])?;
+        recorded_live.commit_block(&[], &block_1)?;
+        recorded_live.commit_block(&[], &block_2)?;
+
+        // Replay: a fresh store fed only the already-finalized blocks,
+        // as a restarting node restoring this index from scratch would
+        // (ADR-0046, "Decided: Transaction Index" — "rebuildable by
+        // replaying FinalizedBlocks").
+        let mut rebuilt = RedbStateStore::open(dir.path().join("rebuilt.redb"))?;
+        for block in recorded_live.finalized_block_range(BlockHeight::new(0), 10)? {
+            rebuilt.commit_block(&[], &block)?;
+        }
+
+        for tx in [
+            &block_1.envelope.body.transactions[0],
+            &block_2.envelope.body.transactions[0],
+        ] {
+            let id = hn_state::tx_id(&tx.encode()?)?;
+            assert_eq!(recorded_live.tx_location(&id)?, rebuilt.tx_location(&id)?);
+        }
         Ok(())
     }
 }

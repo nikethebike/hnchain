@@ -18,6 +18,7 @@ use hn_state::{
 pub struct InMemoryStateStore {
     values: BTreeMap<Digest, Vec<u8>>,
     blocks: BTreeMap<u64, FinalizedBlock>,
+    tx_index: BTreeMap<Digest, (u64, u32)>,
 }
 
 impl InMemoryStateStore {
@@ -74,6 +75,9 @@ impl BlockStore for InMemoryStateStore {
         for write in writes {
             self.values.insert(write.state_key, write.value.clone());
         }
+        for (tx_id, height, index) in crate::tx_index::tx_locations_for_block(block)? {
+            self.tx_index.insert(tx_id, (height.get(), index));
+        }
         self.blocks
             .insert(block.envelope.header.height.get(), block.clone());
         Ok(())
@@ -95,24 +99,81 @@ impl BlockStore for InMemoryStateStore {
     fn latest_finalized_block(&self) -> StateResult<Option<FinalizedBlock>> {
         Ok(self.blocks.last_key_value().map(|(_, block)| block.clone()))
     }
+
+    fn tx_location(&self, tx_id: &Digest) -> StateResult<Option<(BlockHeight, u32)>> {
+        Ok(self
+            .tx_index
+            .get(tx_id)
+            .map(|&(height, index)| (BlockHeight::new(height), index)))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::InMemoryStateStore;
-    use hn_core::{BlockHeight, Epoch, ProtocolEpoch, Round, UnixTimeMillis};
-    use hn_crypto::SignatureEnvelope;
+    use hn_core::{AccountNonce, BlockHeight, Epoch, ProtocolEpoch, Round, UnixTimeMillis};
+    use hn_crypto::{Ed25519KeyPair, KeyRole, SignatureEnvelope, account_address_body};
     use hn_state::{
-        BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, BlockStore,
-        FINALIZED_BLOCK_VERSION_1, FinalizedBlock, HEADER_VERSION_1, QuorumCertificate,
-        StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter, VoteTargetType,
-        VoteType, Write, list_empty_root,
+        AccessListV1, BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader,
+        BlockStore, FINALIZED_BLOCK_VERSION_1, FinalizedBlock, HEADER_VERSION_1,
+        QuorumCertificate, StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter,
+        TX_VERSION_1, TransactionEnvelope, TransferPayloadV1, TxType, ValidityWindowV1,
+        VoteTargetType, VoteType, Write, list_empty_root,
     };
 
+    fn signed_transfer(seed: u8, nonce: u64) -> StateResult<TransactionEnvelope> {
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::AccountSigning, [seed; 32]);
+        let sender = account_address_body(
+            1,
+            keypair.key_descriptor().algorithm_id(),
+            &keypair.key_descriptor().public_key_bytes(),
+        )?;
+        let payload = TransferPayloadV1 {
+            recipient: [0x99; 32],
+            asset_id: None,
+            amount: 1,
+        }
+        .encode()?;
+        let mut envelope = TransactionEnvelope {
+            tx_version: TX_VERSION_1,
+            chain_id: 1,
+            network_id: 1,
+            tx_type: TxType::Transfer,
+            sender,
+            bootstrap_key: Some(keypair.key_descriptor()),
+            nonce: AccountNonce::new(nonce),
+            fee_limit: 100,
+            validity_window: ValidityWindowV1 {
+                min_height: None,
+                max_height: None,
+            },
+            access_list: AccessListV1 {
+                reads: vec![],
+                writes: vec![],
+            },
+            payload,
+            signatures: vec![],
+        };
+        let digest = envelope.signing_payload().signing_digest()?;
+        envelope.signatures = vec![SignatureEnvelope {
+            algorithm_id: keypair.key_descriptor().algorithm_id(),
+            key_reference: None,
+            signature: keypair.sign(&digest).to_vec(),
+        }];
+        Ok(envelope)
+    }
+
     fn sample_finalized_block(height: u64) -> StateResult<FinalizedBlock> {
+        sample_finalized_block_with_transactions(height, Vec::new())
+    }
+
+    fn sample_finalized_block_with_transactions(
+        height: u64,
+        transactions: Vec<TransactionEnvelope>,
+    ) -> StateResult<FinalizedBlock> {
         let body = BlockBody {
             body_version: BODY_VERSION_1,
-            transactions: Vec::new(),
+            transactions,
             receipts: Vec::new(),
             evidence: Vec::new(),
             extra_data: Vec::new(),
@@ -300,6 +361,57 @@ mod tests {
             .latest_finalized_block()?
             .ok_or_else(|| hn_state::StateError::Storage("expected a block".into()))?;
         assert_eq!(latest.envelope.header.height.get(), 5);
+        Ok(())
+    }
+
+    #[test]
+    fn tx_location_is_none_for_an_unknown_tx_id() -> StateResult<()> {
+        let store = InMemoryStateStore::new();
+        assert_eq!(store.tx_location(&[0x99; 32])?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn tx_location_matches_each_transactions_own_position() -> StateResult<()> {
+        let tx_a = signed_transfer(0x01, 0)?;
+        let tx_b = signed_transfer(0x02, 0)?;
+        let id_a = hn_state::tx_id(&tx_a.encode()?)?;
+        let id_b = hn_state::tx_id(&tx_b.encode()?)?;
+
+        let mut store = InMemoryStateStore::new();
+        store.commit_block(&[], &sample_finalized_block_with_transactions(3, vec![tx_a, tx_b])?)?;
+
+        assert_eq!(store.tx_location(&id_a)?, Some((BlockHeight::new(3), 0)));
+        assert_eq!(store.tx_location(&id_b)?, Some((BlockHeight::new(3), 1)));
+        Ok(())
+    }
+
+    #[test]
+    fn tx_location_rebuilt_from_replaying_every_block_equals_what_commit_block_recorded()
+    -> StateResult<()> {
+        let tx_1 = signed_transfer(0x03, 0)?;
+        let tx_2 = signed_transfer(0x04, 0)?;
+        let block_1 = sample_finalized_block_with_transactions(1, vec![tx_1])?;
+        let block_2 = sample_finalized_block_with_transactions(2, vec![tx_2])?;
+
+        let mut recorded_live = InMemoryStateStore::new();
+        recorded_live.commit_block(&[], &block_1)?;
+        recorded_live.commit_block(&[], &block_2)?;
+
+        // Replay: a fresh store fed only the already-finalized blocks,
+        // as a restarting node restoring this index from scratch would
+        // (ADR-0046, "Decided: Transaction Index" — "rebuildable by
+        // replaying FinalizedBlocks").
+        let mut rebuilt = InMemoryStateStore::new();
+        for block in recorded_live.finalized_block_range(BlockHeight::new(0), 10)? {
+            rebuilt.commit_block(&[], &block)?;
+        }
+
+        for tx in [&block_1.envelope.body.transactions[0], &block_2.envelope.body.transactions[0]]
+        {
+            let id = hn_state::tx_id(&tx.encode()?)?;
+            assert_eq!(recorded_live.tx_location(&id)?, rebuilt.tx_location(&id)?);
+        }
         Ok(())
     }
 }
