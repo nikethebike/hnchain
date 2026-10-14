@@ -115,6 +115,21 @@ enum NodeEvent {
         from_height: u64,
     },
     StartupGraceElapsed,
+    /// One RPC call to answer against this node's own current state
+    /// (ADR-0046, "Decided: Architecture And Crate Direction") — the
+    /// event-loop side of the bridge that ADR decides, built ahead of
+    /// its own real producer: nothing in this crate sends one yet
+    /// (`main.rs` starts no HTTP listener), since the hand-written
+    /// `std::net` server itself is still unbuilt. `reply` is a
+    /// capacity-1 channel so sending never blocks the loop waiting on
+    /// a slow or gone receiver; any deadline is the *caller's* own
+    /// `recv_timeout` (ADR-0046's own `503 node_busy` on expiry), never
+    /// this loop's concern.
+    #[allow(dead_code)]
+    Rpc {
+        call: hn_rpc::RpcCall,
+        reply: mpsc::SyncSender<hn_rpc::RpcResult>,
+    },
 }
 
 struct Ctx {
@@ -203,6 +218,13 @@ struct Ctx {
     /// this node has actually, verifiably gotten, independent of
     /// whatever `ctx.engine` currently reflects.
     last_finalized_height: BlockHeight,
+    /// Genesis block's own `block_hash` — fixed for this chain's whole
+    /// lifetime, computed once at startup from the genesis manifest
+    /// (ADR-0043). `RpcCall::Status`'s own `genesis_hash` field
+    /// (ADR-0046) needs this distinct, never-changing value; nothing
+    /// else in this file reads it, since every other check already
+    /// has its own chain-position fields (`last_block_hash`, ...).
+    genesis_hash: Digest,
 }
 
 /// One in-progress historical sync attempt (ADR-0044, "Decided:
@@ -396,6 +418,7 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         // any round begins this run; the first real transaction is
         // admitted against `last_finalized_height + 1`.
         last_finalized_height: starting_height,
+        genesis_hash: genesis_block_hash,
     };
 
     drive(&mut ctx, event_rx, config.peers.len())
@@ -610,9 +633,45 @@ fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) ->
                     act_on(ctx, action)?;
                 }
             }
+            NodeEvent::Rpc { call, reply } => {
+                let result = dispatch_rpc_call(ctx, call)?;
+                // A receiver that already gave up (its own
+                // `recv_timeout` deadline, ADR-0046) is not this loop's
+                // problem -- the work was still done at the cost of
+                // one bounded call, and the loop moves on either way.
+                let _ = reply.send(result);
+            }
         }
     }
     Ok(())
+}
+
+/// Services one [`hn_rpc::RpcCall`] against `ctx`'s own current state
+/// (ADR-0046, "Decided: Architecture And Crate Direction") — builds the
+/// narrow [`crate::rpc_bridge::RpcContext`] view
+/// [`crate::rpc_bridge::handle_rpc_call`] actually needs from the full
+/// node `Ctx`, the same boundary every other free function in this
+/// file already draws against it.
+fn dispatch_rpc_call(ctx: &mut Ctx, call: hn_rpc::RpcCall) -> NodeResult<hn_rpc::RpcResult> {
+    let mut rpc_ctx = crate::rpc_bridge::RpcContext {
+        store: &ctx.store,
+        mempool: &mut ctx.mempool,
+        chain_id: ctx.chain_id,
+        network_id: ctx.network_id,
+        genesis_hash: ctx.genesis_hash,
+        protocol_version: (
+            PROTOCOL_VERSION.major(),
+            PROTOCOL_VERSION.minor(),
+            PROTOCOL_VERSION.patch(),
+        ),
+        last_finalized_height: ctx.last_finalized_height,
+        last_block_hash: ctx.last_block_hash,
+        last_timestamp: ctx.last_timestamp,
+        validator_candidates: &ctx.records,
+        peer_count: ctx.established.len(),
+        syncing: ctx.syncing.is_some(),
+    };
+    crate::rpc_bridge::handle_rpc_call(call, &mut rpc_ctx)
 }
 
 fn is_current(ctx: &Ctx, height: u64, round: u64) -> bool {

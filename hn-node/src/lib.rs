@@ -113,6 +113,7 @@ mod hex;
 mod identity;
 mod mempool;
 mod node;
+mod rpc_bridge;
 
 pub use config::{ConfigError, NodeConfig};
 pub use error::{NodeError, NodeResult};
@@ -122,6 +123,7 @@ pub use genesis::{
 };
 pub use mempool::{MEMPOOL_MAX_TXS, Mempool, MempoolError};
 pub use node::run;
+pub use rpc_bridge::{RpcContext, handle_rpc_call};
 
 #[cfg(test)]
 mod tests {

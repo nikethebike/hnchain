@@ -71,7 +71,9 @@ impl RedbStateStore {
         let write_txn = database.begin_write().map_err(storage_error)?;
         write_txn.open_table(STATE_TABLE).map_err(storage_error)?;
         write_txn.open_table(BLOCKS_TABLE).map_err(storage_error)?;
-        write_txn.open_table(TX_INDEX_TABLE).map_err(storage_error)?;
+        write_txn
+            .open_table(TX_INDEX_TABLE)
+            .map_err(storage_error)?;
         write_txn.commit().map_err(storage_error)?;
         Ok(Self { database })
     }
@@ -167,11 +169,15 @@ impl BlockStore for RedbStateStore {
             blocks_table
                 .insert(height, encoded_block.as_slice())
                 .map_err(storage_error)?;
-            let mut tx_index_table =
-                write_txn.open_table(TX_INDEX_TABLE).map_err(storage_error)?;
+            let mut tx_index_table = write_txn
+                .open_table(TX_INDEX_TABLE)
+                .map_err(storage_error)?;
             for (tx_id, tx_height, index) in &tx_locations {
                 tx_index_table
-                    .insert(tx_id.as_slice(), encode_tx_location(*tx_height, *index).as_slice())
+                    .insert(
+                        tx_id.as_slice(),
+                        encode_tx_location(*tx_height, *index).as_slice(),
+                    )
                     .map_err(storage_error)?;
             }
         }
@@ -235,12 +241,15 @@ fn decode_tx_location(bytes: &[u8]) -> StateResult<(BlockHeight, u32)> {
             "tx_index value has the wrong length".into(),
         ));
     }
-    let height = u64::from_be_bytes(bytes[0..8].try_into().map_err(|_| {
-        StateError::Storage("tx_index value's height could not be read".into())
-    })?);
-    let index = u32::from_be_bytes(bytes[8..12].try_into().map_err(|_| {
-        StateError::Storage("tx_index value's index could not be read".into())
-    })?);
+    let height =
+        u64::from_be_bytes(bytes[0..8].try_into().map_err(|_| {
+            StateError::Storage("tx_index value's height could not be read".into())
+        })?);
+    let index = u32::from_be_bytes(
+        bytes[8..12]
+            .try_into()
+            .map_err(|_| StateError::Storage("tx_index value's index could not be read".into()))?,
+    );
     Ok((BlockHeight::new(height), index))
 }
 
@@ -258,10 +267,10 @@ mod tests {
     use hn_crypto::{Ed25519KeyPair, KeyRole, SignatureEnvelope, account_address_body};
     use hn_state::{
         AccessListV1, BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader,
-        BlockStore, FINALIZED_BLOCK_VERSION_1, FinalizedBlock, HEADER_VERSION_1,
-        QuorumCertificate, StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter,
-        TX_VERSION_1, TransactionEnvelope, TransferPayloadV1, TxType, ValidityWindowV1,
-        VoteTargetType, VoteType, Write, list_empty_root,
+        BlockStore, FINALIZED_BLOCK_VERSION_1, FinalizedBlock, HEADER_VERSION_1, QuorumCertificate,
+        StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter, TX_VERSION_1,
+        TransactionEnvelope, TransferPayloadV1, TxType, ValidityWindowV1, VoteTargetType, VoteType,
+        Write, list_empty_root,
     };
     use tempfile::tempdir;
 
@@ -614,8 +623,9 @@ mod tests {
                     .map_err(storage_error)?;
             }
             {
-                let mut tx_index_table =
-                    write_txn.open_table(TX_INDEX_TABLE).map_err(storage_error)?;
+                let mut tx_index_table = write_txn
+                    .open_table(TX_INDEX_TABLE)
+                    .map_err(storage_error)?;
                 tx_index_table
                     .insert(
                         tx_id.as_slice(),
@@ -653,7 +663,10 @@ mod tests {
         let id_a = hn_state::tx_id(&tx_a.encode()?)?;
         let id_b = hn_state::tx_id(&tx_b.encode()?)?;
 
-        store.commit_block(&[], &sample_finalized_block_with_transactions(3, vec![tx_a, tx_b])?)?;
+        store.commit_block(
+            &[],
+            &sample_finalized_block_with_transactions(3, vec![tx_a, tx_b])?,
+        )?;
 
         assert_eq!(store.tx_location(&id_a)?, Some((BlockHeight::new(3), 0)));
         assert_eq!(store.tx_location(&id_b)?, Some((BlockHeight::new(3), 1)));

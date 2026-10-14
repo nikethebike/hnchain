@@ -297,7 +297,7 @@ impl ConsensusEngine {
 #[cfg(test)]
 mod tests {
     use hn_core::{BlockHeight, Epoch, ProtocolEpoch, Round, UnixTimeMillis};
-    use hn_crypto::{Ed25519KeyPair, KeyRole, SignatureEnvelope};
+    use hn_crypto::{Digest, Ed25519KeyPair, KeyRole, SignatureEnvelope};
     use hn_state::{
         BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, BlockStore,
         ConsensusVote, FinalizedBlock, HEADER_VERSION_1, StateReader, StateResult,
@@ -401,6 +401,10 @@ mod tests {
         }
 
         fn latest_finalized_block(&self) -> StateResult<Option<FinalizedBlock>> {
+            Ok(None)
+        }
+
+        fn tx_location(&self, _tx_id: &Digest) -> StateResult<Option<(BlockHeight, u32)>> {
             Ok(None)
         }
     }

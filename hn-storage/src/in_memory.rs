@@ -115,10 +115,10 @@ mod tests {
     use hn_crypto::{Ed25519KeyPair, KeyRole, SignatureEnvelope, account_address_body};
     use hn_state::{
         AccessListV1, BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader,
-        BlockStore, FINALIZED_BLOCK_VERSION_1, FinalizedBlock, HEADER_VERSION_1,
-        QuorumCertificate, StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter,
-        TX_VERSION_1, TransactionEnvelope, TransferPayloadV1, TxType, ValidityWindowV1,
-        VoteTargetType, VoteType, Write, list_empty_root,
+        BlockStore, FINALIZED_BLOCK_VERSION_1, FinalizedBlock, HEADER_VERSION_1, QuorumCertificate,
+        StateCommitter, StateEnumerator, StateReader, StateResult, StateWriter, TX_VERSION_1,
+        TransactionEnvelope, TransferPayloadV1, TxType, ValidityWindowV1, VoteTargetType, VoteType,
+        Write, list_empty_root,
     };
 
     fn signed_transfer(seed: u8, nonce: u64) -> StateResult<TransactionEnvelope> {
@@ -379,7 +379,10 @@ mod tests {
         let id_b = hn_state::tx_id(&tx_b.encode()?)?;
 
         let mut store = InMemoryStateStore::new();
-        store.commit_block(&[], &sample_finalized_block_with_transactions(3, vec![tx_a, tx_b])?)?;
+        store.commit_block(
+            &[],
+            &sample_finalized_block_with_transactions(3, vec![tx_a, tx_b])?,
+        )?;
 
         assert_eq!(store.tx_location(&id_a)?, Some((BlockHeight::new(3), 0)));
         assert_eq!(store.tx_location(&id_b)?, Some((BlockHeight::new(3), 1)));
@@ -407,8 +410,10 @@ mod tests {
             rebuilt.commit_block(&[], &block)?;
         }
 
-        for tx in [&block_1.envelope.body.transactions[0], &block_2.envelope.body.transactions[0]]
-        {
+        for tx in [
+            &block_1.envelope.body.transactions[0],
+            &block_2.envelope.body.transactions[0],
+        ] {
             let id = hn_state::tx_id(&tx.encode()?)?;
             assert_eq!(recorded_live.tx_location(&id)?, rebuilt.tx_location(&id)?);
         }
