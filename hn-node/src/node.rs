@@ -3177,4 +3177,38 @@ mod tests {
         assert_eq!(trimmed, vec![huge_block]);
         Ok(())
     }
+
+    /// ADR-0046's own conformance requirement: "a blocked event loop
+    /// gives `503 node_busy`." Nothing ever drains `event_rx` here --
+    /// standing in for an event loop saturated with other real work
+    /// that never reaches this particular `NodeEvent::Rpc` within the
+    /// deadline. This is also the proof that consensus itself never
+    /// shares this wait: `drive()` (the only thing that would ever
+    /// read from this channel) never blocks on an `RpcHandler` in the
+    /// other direction -- the wait below is entirely this handler's
+    /// own `recv_timeout`, with no corresponding wait anywhere on the
+    /// consensus side for it to stall.
+    #[test]
+    fn rpc_handler_returns_node_busy_when_the_event_loop_never_answers() {
+        let (event_tx, _event_rx) = mpsc::channel::<NodeEvent>();
+        let handler = RpcHandler { event_tx };
+        let request = ParsedRequest {
+            method: hn_rpc::HttpMethod::Get,
+            target: "/v1/status",
+            headers: Vec::new(),
+            body: &[],
+        };
+
+        let started = std::time::Instant::now();
+        let response = handler.handle(request);
+        let elapsed = started.elapsed();
+
+        assert_eq!(response.status, 503);
+        assert_eq!(
+            String::from_utf8(response.body).unwrap_or_default(),
+            r#"{"error":"node_busy"}"#
+        );
+        assert!(elapsed >= RPC_REPLY_DEADLINE);
+        assert!(elapsed < RPC_REPLY_DEADLINE + Duration::from_secs(1));
+    }
 }

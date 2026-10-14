@@ -241,6 +241,54 @@ mod tests {
         Ok(())
     }
 
+    /// ADR-0046's own conformance requirement: "oversized body rejected
+    /// without reading it all" -- a `Content-Length` declaring far more
+    /// than `max_body_len` is rejected from the header alone
+    /// (`parse_request`'s own check order: the declared length is
+    /// compared against the limit before anything about the actual
+    /// body bytes present is even considered), so the response arrives
+    /// immediately, never waiting around for bytes this client never
+    /// even sends.
+    #[test]
+    fn rejects_an_oversized_declared_body_without_reading_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let listener = bind_loopback()?;
+        let addr = listener.local_addr()?;
+        // A generous total deadline: if this test took anywhere close
+        // to it, that alone would mean the server was actually waiting
+        // on body bytes rather than rejecting from the header alone.
+        let config = ServerConfig {
+            total_read_deadline: Duration::from_secs(5),
+            ..fast_config()
+        };
+        spawn_server(listener, config, Arc::new(EchoStatusHandler));
+
+        let mut client = TcpStream::connect(addr)?;
+        let declared_len = config.max_body_len * 1000;
+        client.write_all(
+            format!("POST /v1/transactions HTTP/1.1\r\nContent-Length: {declared_len}\r\n\r\n")
+                .as_bytes(),
+        )?;
+        // Deliberately never sends a single body byte.
+
+        let started = Instant::now();
+        client.set_read_timeout(Some(Duration::from_secs(2)))?;
+        let mut response = Vec::new();
+        client.read_to_end(&mut response)?;
+        let elapsed = started.elapsed();
+
+        let text = String::from_utf8(response)?;
+        assert!(
+            text.starts_with("HTTP/1.1 400"),
+            "unexpected response: {text}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "response took {elapsed:?}, far longer than a header-only rejection should"
+        );
+        Ok(())
+    }
+
     /// ADR-0046's own conformance requirement: "a slowloris client
     /// (bytes trickled below the per-read timeout) is dropped at the
     /// total deadline."
