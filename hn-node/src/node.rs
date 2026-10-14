@@ -13,9 +13,9 @@ use hn_core::{BlockHeight, Epoch, ProtocolEpoch, ProtocolVersion, Round, UnixTim
 use hn_crypto::{Digest, Ed25519KeyPair, KeyRole, SignatureEnvelope, hash_profile_0x0001};
 use hn_network::{
     Channel, ConsensusProposalMessageV1, HandshakeAction, HandshakeEvent, HandshakeParams,
-    HandshakeState, Hello, MAX_SYNC_BLOCKS_PER_RESPONSE, MessageType, P2PMessageEnvelopeV1,
-    PeerLink, SyncBlockRangeRequestV1, SyncBlockRangeResponseV1, TransactionAnnounceV1,
-    TransactionRequestV1, TransactionResponseV1, spawn_peer_link,
+    HandshakeState, Hello, MAX_PAYLOAD_LEN, MAX_SYNC_BLOCKS_PER_RESPONSE, MessageType,
+    P2PMessageEnvelopeV1, PeerLink, SyncBlockRangeRequestV1, SyncBlockRangeResponseV1,
+    TransactionAnnounceV1, TransactionRequestV1, TransactionResponseV1, spawn_peer_link,
 };
 use hn_state::{
     BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, BlockStore,
@@ -865,6 +865,17 @@ fn handle_peer_message(
             let blocks = ctx
                 .store
                 .finalized_block_range(request.from_height, max_count)?;
+            // ADR-0044's own named "Unbounded response size" security
+            // consideration is only half closed by
+            // `MAX_SYNC_BLOCKS_PER_RESPONSE`: that bounds how many
+            // blocks, not how big they are, and a real finalized
+            // block's own size varies hugely (an empty block vs. one
+            // packed with `MAX_TRANSACTIONS_PER_BLOCK` transactions).
+            // Trimming here, not inside `BlockStore::finalized_block_range`
+            // itself, keeps that trait's own contract purely
+            // height-based and puts the wire-size policy where the
+            // wire-size constant (`MAX_PAYLOAD_LEN`) already lives.
+            let blocks = fit_blocks_within_byte_budget(blocks, SYNC_RESPONSE_BYTE_BUDGET)?;
             send_to(
                 ctx,
                 conn_id,
@@ -994,6 +1005,52 @@ fn start_sync(ctx: &mut Ctx, peer_conn_id: u64, target_height: u64) -> NodeResul
         target_height,
     });
     request_next_sync_range(ctx, peer_conn_id)
+}
+
+/// Maximum total bytes one `SyncBlockRangeResponseV1` may occupy once
+/// wrapped in a `P2PMessageEnvelopeV1` (ADR-0044's own named
+/// "Unbounded response size" security consideration) — generous
+/// margin below `hn_network::MAX_PAYLOAD_LEN` for that envelope's own
+/// small fixed overhead (version, chain/network id, channel, message
+/// type, message id), so this response itself can never be the thing
+/// that turns `send_to`'s own `.encode()` call into the real error
+/// `MAX_SYNC_BLOCKS_PER_RESPONSE` alone cannot prevent: that bounds
+/// how many blocks, not how big they are, and a real finalized
+/// block's own size varies hugely (an empty block vs. one packed with
+/// `MAX_TRANSACTIONS_PER_BLOCK` transactions).
+const SYNC_RESPONSE_BYTE_BUDGET: usize = MAX_PAYLOAD_LEN - 4096;
+
+/// Trims `blocks` (already in ascending, contiguous height order)
+/// down to however many fit within `byte_budget` once the whole
+/// response is encoded — a prefix, never a block skipped in the
+/// middle (ADR-0044's own "never a gap-containing or reordered"
+/// rule: once one block does not fit, nothing after it could either,
+/// since height order is fixed). Always keeps at least the first
+/// block, even if it alone exceeds `byte_budget` — a lagging node
+/// must keep making real progress one block at a time rather than be
+/// offered nothing at all because the next real block happens to be
+/// large.
+fn fit_blocks_within_byte_budget(
+    blocks: Vec<FinalizedBlock>,
+    byte_budget: usize,
+) -> NodeResult<Vec<FinalizedBlock>> {
+    let mut selected: Vec<FinalizedBlock> = Vec::new();
+    for block in blocks {
+        let is_first = selected.is_empty();
+        selected.push(block);
+        let encoded_len = SyncBlockRangeResponseV1 {
+            blocks: selected.clone(),
+        }
+        .encode()?
+        .len();
+        if encoded_len > byte_budget {
+            if !is_first {
+                selected.pop();
+            }
+            break;
+        }
+    }
+    Ok(selected)
 }
 
 /// A per-peer request timeout, and how many times to keep retrying
@@ -1889,10 +1946,10 @@ mod tests {
     use hn_core::{AccountNonce, BlockHeight, Round};
     use hn_crypto::account_address_body;
     use hn_state::{
-        AccessListV1, AccountSection, BalanceValueV1, FINALIZED_BLOCK_VERSION_1, ReceiptStatus,
-        StateWriter, TX_VERSION_1, TransactionEnvelope, TransferPayloadV1, TxType,
-        ValidatorSection, ValidityWindowV1, account_section_state_key, extra_data_hash,
-        validator_section_state_key,
+        AccessListV1, AccountSection, BalanceValueV1, FINALIZED_BLOCK_VERSION_1,
+        MAX_EVIDENCE_BLOB_LEN, ReceiptStatus, StateWriter, TX_VERSION_1, TransactionEnvelope,
+        TransferPayloadV1, TxType, ValidatorSection, ValidityWindowV1, account_section_state_key,
+        extra_data_hash, validator_section_state_key,
     };
     use hn_storage::InMemoryStateStore;
 
@@ -2849,6 +2906,122 @@ mod tests {
         // `extra_data` is real content here, and must actually affect
         // the hash, not be silently ignored by reusing the empty case.
         assert_ne!(header.extra_data_hash, extra_data_hash(&[])?);
+        Ok(())
+    }
+
+    /// A real `FinalizedBlock` at `height`, padded with
+    /// `evidence_blob_count` maximal-size evidence blobs purely to
+    /// inflate its own encoded size -- `evidence` entries are opaque
+    /// bytes at this layer (no concrete `ConsensusEvidence` shape
+    /// exists yet, ADR-0015), so this is a cheap, honest way to build
+    /// a genuinely large block without constructing thousands of real
+    /// signed transactions.
+    fn fat_finalized_block(height: u64, evidence_blob_count: usize) -> NodeResult<FinalizedBlock> {
+        let body = BlockBody {
+            body_version: BODY_VERSION_1,
+            transactions: Vec::new(),
+            receipts: Vec::new(),
+            evidence: vec![vec![0xab_u8; MAX_EVIDENCE_BLOB_LEN]; evidence_blob_count],
+            extra_data: Vec::new(),
+        };
+        let header = BlockHeader {
+            header_version: HEADER_VERSION_1,
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            height: BlockHeight::new(height),
+            round: Round::new(0),
+            epoch: Epoch::new(0),
+            protocol_epoch: ProtocolEpoch::GENESIS,
+            parent_block_hash: [0_u8; 32],
+            proposer: [0x01_u8; 32],
+            timestamp: UnixTimeMillis::from_millis(height),
+            transactions_root: body.transactions_root()?,
+            state_root: [0x02_u8; 32],
+            receipts_root: body.receipts_root()?,
+            events_root: list_empty_root()?,
+            consensus_root: DEVNET_VSC,
+            evidence_root: body.evidence_root()?,
+            protocol_parameters_hash: protocol_parameters_placeholder_hash()?,
+            extra_data_hash: body.extra_data_hash()?,
+        };
+        let envelope = BlockEnvelope {
+            block_version: BLOCK_VERSION_1,
+            header,
+            body,
+            justification: None,
+        };
+        let block_hash = envelope.block_hash()?;
+        let commit_qc = QuorumCertificate {
+            certificate_type: VoteType::Precommit,
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            epoch: Epoch::new(0),
+            height: BlockHeight::new(height),
+            round: Round::new(0),
+            validator_set_commitment: DEVNET_VSC,
+            target_type: VoteTargetType::Block,
+            target_hash: block_hash,
+            total_voting_power: 100,
+            signed_voting_power: 100,
+            signer_commitment: vec![0b0000_0001],
+            aggregate_proof: vec![SignatureEnvelope {
+                algorithm_id: 1,
+                key_reference: None,
+                signature: vec![0xaa; 64],
+            }],
+        };
+        Ok(FinalizedBlock {
+            finalized_block_version: FINALIZED_BLOCK_VERSION_1,
+            envelope,
+            commit_qc,
+        })
+    }
+
+    #[test]
+    fn fit_blocks_within_byte_budget_trims_64_fat_blocks_without_an_encoding_error()
+    -> NodeResult<()> {
+        // Each block carries 4 maximal evidence blobs (~256 KiB) --
+        // 64 of them are ~16 MiB raw, comfortably over
+        // `SYNC_RESPONSE_BYTE_BUDGET` (~8 MiB): exactly the shape
+        // ADR-0044's own "Unbounded response size" finding named --
+        // `MAX_SYNC_BLOCKS_PER_RESPONSE` alone would have let all 64
+        // of these through and failed to encode at the P2P framing
+        // layer.
+        let blocks: Vec<FinalizedBlock> = (1..=64)
+            .map(|height| fat_finalized_block(height, 4))
+            .collect::<NodeResult<_>>()?;
+        let trimmed = fit_blocks_within_byte_budget(blocks, SYNC_RESPONSE_BYTE_BUDGET)?;
+        assert!(!trimmed.is_empty());
+        assert!(trimmed.len() < 64);
+        let encoded_len = SyncBlockRangeResponseV1 { blocks: trimmed }.encode()?.len();
+        assert!(encoded_len <= SYNC_RESPONSE_BYTE_BUDGET);
+        Ok(())
+    }
+
+    #[test]
+    fn fit_blocks_within_byte_budget_always_includes_at_least_one_oversized_block() -> NodeResult<()>
+    {
+        // 128 maximal evidence blobs alone are already ~8 MiB -- with
+        // this block's own other fields and the response's own
+        // framing overhead, the single block exceeds
+        // `SYNC_RESPONSE_BYTE_BUDGET` on its own. It must still be the
+        // one block returned, never zero -- a lagging node must keep
+        // making real progress even when the very next real block
+        // happens to be this large.
+        let huge_block = fat_finalized_block(1, 128)?;
+        let huge_block_len = SyncBlockRangeResponseV1 {
+            blocks: vec![huge_block.clone()],
+        }
+        .encode()?
+        .len();
+        assert!(huge_block_len > SYNC_RESPONSE_BYTE_BUDGET);
+
+        let second_block = fat_finalized_block(2, 1)?;
+        let trimmed = fit_blocks_within_byte_budget(
+            vec![huge_block.clone(), second_block],
+            SYNC_RESPONSE_BYTE_BUDGET,
+        )?;
+        assert_eq!(trimmed, vec![huge_block]);
         Ok(())
     }
 }
