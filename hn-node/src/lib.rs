@@ -87,8 +87,14 @@
 //! meaningful starting from the very first real block, not just from
 //! the second one onward.
 //!
-//! Explicitly out of scope, named rather than guessed at: any RPC/CLI
-//! surface, real (non-devnet) validator onboarding and real custody for
+//! [`rpc_bridge::handle_rpc_call`] (ADR-0046, "RPC v1") answers the v1
+//! surface's own eight read/submit calls against this node's current
+//! state; [`node::run`] wires it into the driving loop as
+//! `NodeEvent::Rpc`. No HTTP server exists yet (`hn-rpc`'s own
+//! hand-written `std::net` listener, still unbuilt) and nothing in
+//! this crate constructs that event today — explicitly out of scope,
+//! named rather than guessed at, along with real (non-devnet)
+//! validator onboarding and real custody for
 //! the three genesis allocation accounts (`docs/specs/core/genesis-
 //! security.md`'s own open items), non-validating "full node" mode,
 //! general malformed-message decode resilience (every message type,
