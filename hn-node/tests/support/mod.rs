@@ -15,21 +15,27 @@
 //! actually unused overall.
 #![allow(dead_code)]
 
-use std::io::{BufRead, BufReader};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::io::{BufRead, BufReader, Read};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use hn_core::{AccountNonce, ProtocolVersion};
+use hn_core::{
+    AccountNonce, BlockHeight, Epoch, ProtocolEpoch, ProtocolVersion, Round, UnixTimeMillis,
+};
 use hn_crypto::{Digest, Ed25519KeyPair, KeyRole, SignatureEnvelope, account_address_body};
 use hn_network::{
     Channel, HandshakeAction, HandshakeEvent, HandshakeParams, HandshakeState, Hello, MessageType,
-    P2PMessageEnvelopeV1, read_frame, write_frame,
+    P2PMessageEnvelopeV1, SyncBlockRangeRequestV1, SyncBlockRangeResponseV1, read_frame,
+    write_frame,
 };
 use hn_state::{
-    AccessListV1, TX_VERSION_1, TransactionEnvelope, TransferPayloadV1, TxType, ValidityWindowV1,
+    AccessListV1, BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader,
+    ConsensusVote, FINALIZED_BLOCK_VERSION_1, FinalizedBlock, HEADER_VERSION_1, QuorumCertificate,
+    TX_VERSION_1, TransactionEnvelope, TransferPayloadV1, TxType, ValidityWindowV1,
+    VoteSigningPayloadV1, VoteTargetType, VoteType, list_empty_root,
 };
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -435,6 +441,221 @@ pub fn connect_handshake_and_send(
         payload,
     )?;
     Ok(stream)
+}
+
+/// Spawns a background thread acting as a single dishonest peer at
+/// `addr`: completes a real `Hello` handshake, immediately announces
+/// `claimed_height` over one syntactically valid (but never
+/// signature-checked at that stage, ADR-0044) `ConsensusVote` to make
+/// itself the connection a real node's own `observe_height` picks as
+/// the peer to ask first, then answers the resulting
+/// `SyncBlockRangeRequest` with one forged `FinalizedBlock` --
+/// self-consistent in isolation, but never actually finalized by
+/// anyone's real `commit_qc`. A node's own verification
+/// (`verify_and_commit_synced_block`) must reject it and move on to a
+/// different, honest peer. Errors are swallowed (printed to stderr):
+/// this runs detached in its own thread, with no result to propagate
+/// back to the test:: a caller observes this peer's effect only
+/// through the real node's own log lines (a `REJECTED synced block`
+/// line, followed by eventually catching up regardless).
+pub fn spawn_dishonest_sync_peer(
+    addr: SocketAddr,
+    chain_id: u8,
+    network_id: u16,
+    claimed_height: u64,
+) -> TestResult<()> {
+    // Bound synchronously, in the caller's own thread, before this
+    // function returns: a real validator dialing this address must
+    // never lose the race against this peer's own startup -- every
+    // other peer it might dial is a real `hn-node` process whose
+    // listener has already been up for a while, with no such
+    // start-up delay of its own to compete against.
+    let listener = TcpListener::bind(addr)?;
+    std::thread::spawn(move || {
+        if let Err(error) = run_dishonest_sync_peer(listener, chain_id, network_id, claimed_height)
+        {
+            eprintln!("dishonest sync peer exited: {error}");
+        }
+    });
+    Ok(())
+}
+
+fn run_dishonest_sync_peer(
+    listener: TcpListener,
+    chain_id: u8,
+    network_id: u16,
+    claimed_height: u64,
+) -> TestResult<()> {
+    let (mut stream, _) = listener.accept()?;
+
+    let params = HandshakeParams {
+        protocol_version: test_protocol_version(),
+        chain_id,
+        network_id,
+        required_channels: vec![Channel::Handshake, Channel::Consensus],
+        required_message_types: vec![
+            MessageType::Hello,
+            MessageType::ConsensusProposal,
+            MessageType::ConsensusVote,
+            MessageType::QuorumCertificateMessage,
+        ],
+    };
+    let keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorNetwork, [0xDD; 32]);
+    let mut handshake = HandshakeState::new(params, keypair);
+
+    let HandshakeAction::Send(hello) = handshake.apply(HandshakeEvent::SendHello)? else {
+        return Err("expected to send a Hello first".into());
+    };
+    send_envelope(
+        &mut stream,
+        chain_id,
+        network_id,
+        Channel::Handshake,
+        MessageType::Hello,
+        hello.encode()?,
+    )?;
+
+    let request = read_frame(&mut stream)?;
+    let peer_hello = Hello::decode(&request.payload)?;
+    match handshake.apply(HandshakeEvent::ReceiveHello(peer_hello))? {
+        HandshakeAction::Accepted { .. } => {}
+        other => return Err(format!("handshake not accepted: {other:?}").into()),
+    }
+
+    let fake_vote = ConsensusVote {
+        payload: VoteSigningPayloadV1 {
+            vote_type: VoteType::Precommit,
+            chain_id,
+            network_id,
+            epoch: Epoch::new(0),
+            height: BlockHeight::new(claimed_height),
+            round: Round::new(0),
+            validator_set_commitment: [0x11; 32],
+            validator_id: [0xDD; 32],
+            target_type: VoteTargetType::Block,
+            target_hash: [0xaa; 32],
+            vote_metadata: Vec::new(),
+        },
+        signature: SignatureEnvelope {
+            algorithm_id: 1,
+            key_reference: None,
+            signature: vec![0xaa; 64],
+        },
+    };
+    send_envelope(
+        &mut stream,
+        chain_id,
+        network_id,
+        Channel::Consensus,
+        MessageType::ConsensusVote,
+        fake_vote.encode()?,
+    )?;
+
+    // Ignore anything that is not the `SyncBlockRangeRequest` this
+    // whole setup exists to answer (a stray vote/proposal the real
+    // node sends for some other, unrelated reason).
+    let sync_request = loop {
+        let frame = read_frame(&mut stream)?;
+        if frame.channel == Channel::Sync
+            && frame.message_type == MessageType::SyncBlockRangeRequest
+        {
+            break SyncBlockRangeRequestV1::decode(&frame.payload)?;
+        }
+    };
+
+    let forged = forged_finalized_block(sync_request.from_height.get() + 1, chain_id, network_id)?;
+    send_envelope(
+        &mut stream,
+        chain_id,
+        network_id,
+        Channel::Sync,
+        MessageType::SyncBlockRangeResponse,
+        SyncBlockRangeResponseV1 {
+            blocks: vec![forged],
+        }
+        .encode()?,
+    )?;
+
+    // Dropping (and so closing) the stream immediately after this
+    // final write races the OS's own transmission of it -- observed
+    // in practice as the peer never receiving the response at all.
+    // Reading until the peer closes its own end first (after it has
+    // what it needs, it never sends anything else) waits for that
+    // transmission to genuinely complete before this connection ends.
+    let mut drain = Vec::new();
+    let _ = stream.read_to_end(&mut drain);
+
+    Ok(())
+}
+
+/// A self-consistent (internally) but never-really-finalized
+/// `FinalizedBlock` at `height` -- `commit_qc` carries a well-formed
+/// but entirely fabricated signature, matching no real validator's
+/// own key; a real node's `verify_and_commit_synced_block` must
+/// reject this regardless of which specific check catches it first.
+fn forged_finalized_block(
+    height: u64,
+    chain_id: u8,
+    network_id: u16,
+) -> TestResult<FinalizedBlock> {
+    let body = BlockBody {
+        body_version: BODY_VERSION_1,
+        transactions: Vec::new(),
+        receipts: Vec::new(),
+        evidence: Vec::new(),
+        extra_data: Vec::new(),
+    };
+    let header = BlockHeader {
+        header_version: HEADER_VERSION_1,
+        chain_id,
+        network_id,
+        height: BlockHeight::new(height),
+        round: Round::new(0),
+        epoch: Epoch::new(0),
+        protocol_epoch: ProtocolEpoch::GENESIS,
+        parent_block_hash: [0_u8; 32],
+        proposer: [0xdd_u8; 32],
+        timestamp: UnixTimeMillis::from_millis(height),
+        transactions_root: body.transactions_root()?,
+        state_root: [0xee_u8; 32],
+        receipts_root: body.receipts_root()?,
+        events_root: list_empty_root()?,
+        consensus_root: [0x11_u8; 32],
+        evidence_root: body.evidence_root()?,
+        protocol_parameters_hash: [0x04_u8; 32],
+        extra_data_hash: body.extra_data_hash()?,
+    };
+    let envelope = BlockEnvelope {
+        block_version: BLOCK_VERSION_1,
+        header,
+        body,
+        justification: None,
+    };
+    let block_hash = envelope.block_hash()?;
+    let commit_qc = QuorumCertificate {
+        certificate_type: VoteType::Precommit,
+        chain_id,
+        network_id,
+        epoch: Epoch::new(0),
+        height: BlockHeight::new(height),
+        round: Round::new(0),
+        validator_set_commitment: [0x11_u8; 32],
+        target_type: VoteTargetType::Block,
+        target_hash: block_hash,
+        total_voting_power: 100,
+        signed_voting_power: 100,
+        signer_commitment: vec![0b0000_0001],
+        aggregate_proof: vec![SignatureEnvelope {
+            algorithm_id: 1,
+            key_reference: None,
+            signature: vec![0xaa; 64],
+        }],
+    };
+    Ok(FinalizedBlock {
+        finalized_block_version: FINALIZED_BLOCK_VERSION_1,
+        envelope,
+        commit_qc,
+    })
 }
 
 fn send_envelope(
