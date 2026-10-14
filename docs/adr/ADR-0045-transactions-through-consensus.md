@@ -27,7 +27,11 @@ scope, and replaces the fixed-devnet-value `state_root` check ADR-0040/
 ADR-0042 established with real execution — see "Decided: Proposal
 Validation Executes The Block," below)
 
-Referenced By: None
+Referenced By:
+
+- ADR-0046: RPC v1 (transaction submission runs through this ADR's own
+  `Mempool::admit` pipeline unchanged — RPC gets no separate admission
+  path)
 
 ## Context
 

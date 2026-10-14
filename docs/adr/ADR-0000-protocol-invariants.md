@@ -66,6 +66,11 @@ mutation.
 HNVM, RPC, CLI, wallet, P2P, and internal services must not bypass state
 transition validation.
 
+ADR-0046 (RPC v1) is the decided instance of this rule for the node's own
+read/submit interface: transaction submission runs through the exact same
+`Mempool::admit` pipeline a P2P-received transaction does, and nothing in
+that ADR grants RPC a cheaper path.
+
 ### No Hidden Consensus Dependencies
 
 Consensus behavior must not depend on:

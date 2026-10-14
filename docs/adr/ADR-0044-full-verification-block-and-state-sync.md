@@ -30,6 +30,10 @@ Referenced By:
   by ADR-0045 — this ADR's own mechanism can only be meaningfully
   tested once real transactions actually flow through consensus-
   produced blocks, which ADR-0045 is the accepted decision for)
+- ADR-0046: RPC v1 (reuses `BlockStore::{finalized_block_range,
+  latest_finalized_block}` directly as its own block-reading surface,
+  and the atomic-commit rule this ADR decided is extended by one more
+  table, `tx_index`, rather than redecided)
 
 ## Context
 
