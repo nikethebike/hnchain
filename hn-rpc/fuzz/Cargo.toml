@@ -1,0 +1,31 @@
+[package]
+name = "hn-rpc-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.hn-rpc]
+path = ".."
+
+[[bin]]
+name = "parse_request"
+path = "fuzz_targets/parse_request.rs"
+test = false
+doc = false
+bench = false
+
+# This crate is its own fuzzing-only workspace root (ADR-0046,
+# "Conformance / Test Requirements" -- "A cargo-fuzz target over
+# parse_request exists in the repository"), deliberately detached from
+# the main workspace at the repo root: cargo-fuzz needs nightly and
+# libfuzzer-sys, neither of which the rest of this project should ever
+# be forced onto, and this crate is never built by the main
+# verification suite (`cargo build/test/clippy --workspace`) at all --
+# only ever run explicitly, periodically, never a CI gate.
+[workspace]
