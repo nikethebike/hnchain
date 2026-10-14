@@ -24,6 +24,14 @@ pub struct NodeConfig {
     /// Base round-stage timeout, in milliseconds (ADR-0037, "Decided:
     /// Timeout Duration").
     pub base_timeout_ms: u64,
+    /// The address this node's own RPC server (ADR-0046, "RPC v1")
+    /// binds to, if any. `None` (the default: the flag is simply
+    /// absent) means no RPC server starts at all — ADR-0046's own
+    /// "Binds `127.0.0.1` by default. Exposing it is an explicit
+    /// config value" names the bind address's own default, not
+    /// whether RPC runs at all; whether it runs at all is this flag's
+    /// own presence or absence.
+    pub rpc_listen: Option<SocketAddr>,
 }
 
 /// A `--flag value` parse failure, or a missing required flag.
@@ -47,7 +55,8 @@ impl NodeConfig {
     /// of the `--config` flag itself, so a config file and literal CLI
     /// flags are parsed by the exact same logic below.
     ///
-    /// Defaults: `--base-timeout-ms 500`. Every other flag is required.
+    /// Defaults: `--base-timeout-ms 500`, `--rpc-listen` absent (no RPC
+    /// server at all). Every other flag is required.
     pub fn parse(args: impl Iterator<Item = String>) -> Result<Self, ConfigError> {
         let tokens = expand_config_flag(args.collect())?;
         Self::parse_tokens(tokens)
@@ -61,6 +70,7 @@ impl NodeConfig {
         let mut consensus_key_seed = None;
         let mut network_key_seed = None;
         let mut base_timeout_ms: u64 = 500;
+        let mut rpc_listen = None;
 
         let mut tokens = tokens.into_iter();
         while let Some(flag) = tokens.next() {
@@ -75,6 +85,7 @@ impl NodeConfig {
                 "--consensus-key-seed" => consensus_key_seed = Some(parse_seed(&flag, &value)?),
                 "--network-key-seed" => network_key_seed = Some(parse_seed(&flag, &value)?),
                 "--base-timeout-ms" => base_timeout_ms = parse(&flag, &value)?,
+                "--rpc-listen" => rpc_listen = Some(parse_addr(&flag, &value)?),
                 other => return Err(ConfigError(format!("unrecognized flag {other}"))),
             }
         }
@@ -87,6 +98,7 @@ impl NodeConfig {
             consensus_key_seed: required(consensus_key_seed, "--consensus-key-seed")?,
             network_key_seed: required(network_key_seed, "--network-key-seed")?,
             base_timeout_ms,
+            rpc_listen,
         })
     }
 }
@@ -251,5 +263,48 @@ mod tests {
     fn rejects_an_unrecognized_flag() {
         let result = NodeConfig::parse(args(&["--nonsense", "1"]));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn rpc_listen_defaults_to_absent() -> Result<(), Box<dyn std::error::Error>> {
+        let seed = &SEED[..64];
+        let config = NodeConfig::parse(args(&[
+            "--genesis",
+            "genesis.json",
+            "--data-dir",
+            "/tmp/node0",
+            "--listen",
+            "127.0.0.1:30000",
+            "--consensus-key-seed",
+            seed,
+            "--network-key-seed",
+            seed,
+        ]))?;
+        assert_eq!(config.rpc_listen, None);
+        Ok(())
+    }
+
+    #[test]
+    fn rpc_listen_is_set_when_the_flag_is_given() -> Result<(), Box<dyn std::error::Error>> {
+        let seed = &SEED[..64];
+        let config = NodeConfig::parse(args(&[
+            "--genesis",
+            "genesis.json",
+            "--data-dir",
+            "/tmp/node0",
+            "--listen",
+            "127.0.0.1:30000",
+            "--consensus-key-seed",
+            seed,
+            "--network-key-seed",
+            seed,
+            "--rpc-listen",
+            "127.0.0.1:8080",
+        ]))?;
+        assert_eq!(
+            config.rpc_listen,
+            Some("127.0.0.1:8080".parse::<std::net::SocketAddr>()?)
+        );
+        Ok(())
     }
 }

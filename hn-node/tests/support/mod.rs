@@ -168,6 +168,31 @@ pub fn spawn_node(
     peer_indices: &[u8],
     base_timeout_ms: u64,
 ) -> TestResult<NodeProcess> {
+    spawn_node_with_rpc_listen(
+        genesis_path,
+        data_dir,
+        validator_index,
+        base_port,
+        peer_indices,
+        base_timeout_ms,
+        None,
+    )
+}
+
+/// [`spawn_node`], additionally passing `--rpc-listen <rpc_listen>`
+/// when `rpc_listen` is `Some` (ADR-0046, "RPC v1") — a separate
+/// function rather than a new required parameter on `spawn_node`
+/// itself, so every existing call site (none of which cares about RPC
+/// at all) stays unchanged.
+pub fn spawn_node_with_rpc_listen(
+    genesis_path: &Path,
+    data_dir: &Path,
+    validator_index: u8,
+    base_port: u16,
+    peer_indices: &[u8],
+    base_timeout_ms: u64,
+    rpc_listen: Option<SocketAddr>,
+) -> TestResult<NodeProcess> {
     let genesis_path = genesis_path.to_str().ok_or("non-UTF-8 genesis path")?;
     let data_dir = data_dir.to_str().ok_or("non-UTF-8 data dir path")?;
     let listen = listen_addr(base_port, validator_index).to_string();
@@ -191,6 +216,10 @@ pub fn spawn_node(
             args.push("--peer".to_string());
             args.push(listen_addr(base_port, peer_index).to_string());
         }
+    }
+    if let Some(rpc_listen) = rpc_listen {
+        args.push("--rpc-listen".to_string());
+        args.push(rpc_listen.to_string());
     }
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_hn-node"))

@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -17,12 +17,13 @@ use hn_network::{
     P2PMessageEnvelopeV1, PeerLink, SyncBlockRangeRequestV1, SyncBlockRangeResponseV1,
     TransactionAnnounceV1, TransactionRequestV1, TransactionResponseV1, spawn_peer_link,
 };
+use hn_rpc::{HttpResponse, ParsedRequest, RequestHandler, RpcError, ServerConfig, spawn_server};
 use hn_state::{
     BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, BlockStore,
-    ConsensusVote, EmptyHashTable, FinalizedBlock, HEADER_VERSION_1, QuorumCertificate, ReceiptV1,
-    StateCommitter, StateEnumerator, StateReader, ValidatorRecordV1, ValidatorStatus,
-    VoteSigningPayloadV1, VoteTargetType, VoteType, Write, active_key, active_set, apply_block,
-    compute_post_state_root, list_empty_root, protocol_parameters_placeholder_hash,
+    ConsensusVote, EmptyHashTable, FinalizedBlock, HEADER_VERSION_1, MAX_TRANSACTION_SIZE,
+    QuorumCertificate, ReceiptV1, StateCommitter, StateEnumerator, StateReader, ValidatorRecordV1,
+    ValidatorStatus, VoteSigningPayloadV1, VoteTargetType, VoteType, Write, active_key, active_set,
+    apply_block, compute_post_state_root, list_empty_root, protocol_parameters_placeholder_hash,
 };
 use hn_storage::RedbStateStore;
 
@@ -116,16 +117,14 @@ enum NodeEvent {
     },
     StartupGraceElapsed,
     /// One RPC call to answer against this node's own current state
-    /// (ADR-0046, "Decided: Architecture And Crate Direction") — the
-    /// event-loop side of the bridge that ADR decides, built ahead of
-    /// its own real producer: nothing in this crate sends one yet
-    /// (`main.rs` starts no HTTP listener), since the hand-written
-    /// `std::net` server itself is still unbuilt. `reply` is a
-    /// capacity-1 channel so sending never blocks the loop waiting on
-    /// a slow or gone receiver; any deadline is the *caller's* own
-    /// `recv_timeout` (ADR-0046's own `503 node_busy` on expiry), never
-    /// this loop's concern.
-    #[allow(dead_code)]
+    /// (ADR-0046, "Decided: Architecture And Crate Direction") —
+    /// constructed by [`RpcHandler::handle`], the real bridge from
+    /// `hn_rpc::spawn_server`'s own worker threads into this loop,
+    /// started from [`run`] whenever `config.rpc_listen` is `Some`.
+    /// `reply` is a capacity-1 channel so sending never blocks the
+    /// loop waiting on a slow or gone receiver; any deadline is the
+    /// *caller's* own `recv_timeout` (ADR-0046's own `503 node_busy`
+    /// on expiry), never this loop's concern.
     Rpc {
         call: hn_rpc::RpcCall,
         reply: mpsc::SyncSender<hn_rpc::RpcResult>,
@@ -354,7 +353,7 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
     }
 
     let conn_id_counter = Arc::new(AtomicU64::new(0));
-    let listener = std::net::TcpListener::bind(config.listen)?;
+    let listener = TcpListener::bind(config.listen)?;
     spawn_listener(
         listener,
         raw_tx.clone(),
@@ -373,6 +372,18 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
                 Arc::clone(&conn_id_counter),
             );
         }
+    }
+
+    // ADR-0046, "RPC v1": no RPC server at all unless this flag is
+    // present (ADR-0038's own "every flag either required or has a
+    // stated default" posture, extended -- `rpc_listen`'s own default
+    // is "absent", not a magic address).
+    if let Some(rpc_listen) = config.rpc_listen {
+        let rpc_listener = TcpListener::bind(rpc_listen)?;
+        let handler: Arc<dyn RequestHandler> = Arc::new(RpcHandler {
+            event_tx: event_tx.clone(),
+        });
+        spawn_server(rpc_listener, rpc_server_config(), handler);
     }
 
     spawn_after(
@@ -452,7 +463,7 @@ fn init_genesis(store: &mut RedbStateStore, manifest: &GenesisManifest) -> NodeR
 }
 
 fn spawn_listener(
-    listener: std::net::TcpListener,
+    listener: TcpListener,
     raw_tx: Sender<(u64, P2PMessageEnvelopeV1)>,
     closed_tx: Sender<u64>,
     event_tx: Sender<NodeEvent>,
@@ -672,6 +683,71 @@ fn dispatch_rpc_call(ctx: &mut Ctx, call: hn_rpc::RpcCall) -> NodeResult<hn_rpc:
         syncing: ctx.syncing.is_some(),
     };
     crate::rpc_bridge::handle_rpc_call(call, &mut rpc_ctx)
+}
+
+/// The devnet default for how long an RPC worker thread waits for the
+/// event loop's own answer before giving up (ADR-0046, "Decided:
+/// Architecture And Crate Direction" — "the devnet default 2 s").
+const RPC_REPLY_DEADLINE: Duration = Duration::from_secs(2);
+
+/// [`hn_rpc::spawn_server`]'s own devnet worker-pool/deadline profile
+/// (ADR-0046's own "implementation constants, documented" —
+/// documented here, the one place this crate starts that server).
+/// `max_body_len` is exactly ADR-0046's own named bound: `2 *
+/// MAX_TRANSACTION_SIZE + 1 KiB` (hex doubling a canonical
+/// transaction's own bytes, plus a small JSON envelope).
+fn rpc_server_config() -> ServerConfig {
+    ServerConfig {
+        worker_count: 4,
+        accept_queue_capacity: 16,
+        total_read_deadline: Duration::from_secs(5),
+        per_read_timeout: Duration::from_secs(2),
+        write_timeout: Duration::from_secs(5),
+        max_body_len: MAX_TRANSACTION_SIZE.saturating_mul(2).saturating_add(1024),
+    }
+}
+
+/// [`hn_rpc::RequestHandler`] for this node's own RPC server — routes
+/// the request, submits a successfully-routed call into the running
+/// event loop as a [`NodeEvent::Rpc`], and waits up to
+/// [`RPC_REPLY_DEADLINE`] for its answer (ADR-0046, "Decided:
+/// Architecture And Crate Direction": "If the loop does not answer
+/// within a deadline ... the server returns `503 node_busy`. Slow RPC
+/// must degrade RPC, never consensus" — this struct is the only thing
+/// that ever blocks on that wait; the event loop itself never waits on
+/// this struct for anything).
+struct RpcHandler {
+    event_tx: Sender<NodeEvent>,
+}
+
+impl RequestHandler for RpcHandler {
+    fn handle(&self, request: ParsedRequest<'_>) -> HttpResponse {
+        let call = match hn_rpc::route(&request) {
+            Ok(call) => call,
+            Err(error) => return hn_rpc::error_response(error.status_code(), error.code()),
+        };
+
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        if self
+            .event_tx
+            .send(NodeEvent::Rpc {
+                call,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return node_busy_response();
+        }
+        match reply_rx.recv_timeout(RPC_REPLY_DEADLINE) {
+            Ok(Ok(reply)) => hn_rpc::reply_to_response(&reply),
+            Ok(Err(error)) => hn_rpc::error_response(error.status_code(), error.code()),
+            Err(_) => node_busy_response(),
+        }
+    }
+}
+
+fn node_busy_response() -> HttpResponse {
+    hn_rpc::error_response(RpcError::NodeBusy.status_code(), RpcError::NodeBusy.code())
 }
 
 fn is_current(ctx: &Ctx, height: u64, round: u64) -> bool {
