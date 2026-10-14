@@ -646,6 +646,24 @@ fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) ->
             }
             NodeEvent::Rpc { call, reply } => {
                 let result = dispatch_rpc_call(ctx, call)?;
+                // ADR-0046, "Decided: Transaction Submission": "the
+                // transaction is announced to peers exactly as a
+                // P2P-admitted one" -- the same re-broadcast the
+                // `TransactionResponse` handler above already does,
+                // since an RPC submission reuses the exact same
+                // `Mempool::admit` pipeline and needs the exact same
+                // propagation.
+                if let Ok(hn_rpc::RpcReply::Submitted(submitted)) = &result {
+                    broadcast(
+                        ctx,
+                        Channel::Transactions,
+                        MessageType::TransactionAnnounce,
+                        TransactionAnnounceV1 {
+                            tx_id: submitted.tx_id,
+                        }
+                        .encode(),
+                    )?;
+                }
                 // A receiver that already gave up (its own
                 // `recv_timeout` deadline, ADR-0046) is not this loop's
                 // problem -- the work was still done at the cost of

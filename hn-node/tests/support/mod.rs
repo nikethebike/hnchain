@@ -15,7 +15,7 @@
 //! actually unused overall.
 #![allow(dead_code)]
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -705,4 +705,90 @@ fn send_envelope(
     )?;
     write_frame(stream, &envelope)?;
     Ok(())
+}
+
+/// Sends one bare HTTP/1.1 request to `addr` (ADR-0046, "RPC v1") and
+/// returns its status code and raw body bytes — a minimal, test-only
+/// client with no retry/keep-alive of its own, matching the server's
+/// own "one request per connection" (`Connection: close` always).
+pub fn http_request(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    body: Option<&[u8]>,
+) -> TestResult<(u16, Vec<u8>)> {
+    let mut stream = TcpStream::connect(addr)?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+
+    let mut request = format!("{method} {path} HTTP/1.1\r\n");
+    if let Some(body) = body {
+        request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
+    request.push_str("\r\n");
+    stream.write_all(request.as_bytes())?;
+    if let Some(body) = body {
+        stream.write_all(body)?;
+    }
+
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw)?;
+    let separator_at = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or("RPC response has no header/body separator")?;
+    let status_line = std::str::from_utf8(&raw[..separator_at])?
+        .lines()
+        .next()
+        .ok_or("RPC response has an empty status line")?;
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or("RPC response status line is malformed")?
+        .parse()?;
+    let response_body = raw[separator_at + 4..].to_vec();
+    Ok((status, response_body))
+}
+
+/// [`http_request`], decoding the response body as JSON.
+pub fn http_get_json(addr: SocketAddr, path: &str) -> TestResult<(u16, serde_json::Value)> {
+    let (status, body) = http_request(addr, "GET", path, None)?;
+    Ok((status, serde_json::from_slice(&body)?))
+}
+
+/// [`http_request`], encoding `payload` as the JSON request body and
+/// decoding the response body as JSON.
+pub fn http_post_json(
+    addr: SocketAddr,
+    path: &str,
+    payload: &serde_json::Value,
+) -> TestResult<(u16, serde_json::Value)> {
+    let body = serde_json::to_vec(payload)?;
+    let (status, response_body) = http_request(addr, "POST", path, Some(&body))?;
+    Ok((status, serde_json::from_slice(&response_body)?))
+}
+
+/// Polls `GET {path}` on `addr` until `predicate` holds against the
+/// decoded JSON body, or `timeout` elapses first — a connection
+/// failure (the RPC server not up yet) is treated the same as "not
+/// satisfied yet," not an error, since callers typically start polling
+/// right after spawning the process.
+pub fn wait_until_rpc(
+    addr: SocketAddr,
+    path: &str,
+    predicate: impl Fn(&serde_json::Value) -> bool,
+    timeout: Duration,
+) -> TestResult<serde_json::Value> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok((_, value)) = http_get_json(addr, path)
+            && predicate(&value)
+        {
+            return Ok(value);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("timed out waiting on GET {path} against {addr}").into());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
