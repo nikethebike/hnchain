@@ -10,7 +10,7 @@ description = "HNChain RPC surface boundaries."
 
 [dependencies]
 hn-core = { path = "../hn-core" }
-hn-node = { path = "../hn-node" }
+serde_json = "1.0"
 
 [lints]
 workspace = true

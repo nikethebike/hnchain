@@ -240,6 +240,7 @@ dependencies = [
  "hn-crypto",
  "hn-hncs",
  "hn-network",
+ "hn-rpc",
  "hn-state",
  "hn-storage",
  "serde_json",
@@ -250,7 +251,7 @@ name = "hn-rpc"
 version = "0.1.0"
 dependencies = [
  "hn-core",
- "hn-node",
+ "serde_json",
 ]
 
 [[package]]
