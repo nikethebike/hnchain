@@ -41,10 +41,19 @@ pub enum RpcError {
     /// the HTTP layer on a timed-out reply channel, not by anything in
     /// this crate today.
     NodeBusy,
+    /// No route matches this request's own method and target at all
+    /// (ADR-0046's own "v1 Endpoint Set" names exactly eight; anything
+    /// else, including a known path with the wrong method, is this) —
+    /// not one of ADR-0046's own explicitly-named codes, but the only
+    /// sensible answer to a request this surface simply does not
+    /// define.
+    NotFound,
 }
 
 impl RpcError {
-    /// This error's stable wire code, exactly as ADR-0046 names it.
+    /// This error's stable wire code, exactly as ADR-0046 names it
+    /// (or, for [`Self::NotFound`], this crate's own small addition to
+    /// that registry).
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
@@ -58,6 +67,27 @@ impl RpcError {
             Self::TxDuplicate => "tx_duplicate",
             Self::MempoolFull => "mempool_full",
             Self::NodeBusy => "node_busy",
+            Self::NotFound => "not_found",
+        }
+    }
+
+    /// The HTTP status this error maps to (ADR-0046, "Decided:
+    /// Transaction Submission" — every admission failure is `422`,
+    /// distinct from the generic `400`/`404` the rest of this registry
+    /// uses).
+    #[must_use]
+    pub const fn status_code(self) -> u16 {
+        match self {
+            Self::InvalidAddress => 400,
+            Self::BlockNotFound | Self::NotFound => 404,
+            Self::TxDecodeFailed
+            | Self::TxChainMismatch
+            | Self::TxBadSignature
+            | Self::TxOutsideValidityWindow
+            | Self::TxWouldFail
+            | Self::TxDuplicate
+            | Self::MempoolFull => 422,
+            Self::NodeBusy => 503,
         }
     }
 }
@@ -89,10 +119,22 @@ mod tests {
         assert_eq!(RpcError::TxDuplicate.code(), "tx_duplicate");
         assert_eq!(RpcError::MempoolFull.code(), "mempool_full");
         assert_eq!(RpcError::NodeBusy.code(), "node_busy");
+        assert_eq!(RpcError::NotFound.code(), "not_found");
     }
 
     #[test]
     fn display_matches_code() {
         assert_eq!(RpcError::TxDuplicate.to_string(), "tx_duplicate");
+    }
+
+    #[test]
+    fn status_code_matches_the_adrs_own_named_codes() {
+        assert_eq!(RpcError::InvalidAddress.status_code(), 400);
+        assert_eq!(RpcError::BlockNotFound.status_code(), 404);
+        assert_eq!(RpcError::NotFound.status_code(), 404);
+        assert_eq!(RpcError::TxDecodeFailed.status_code(), 422);
+        assert_eq!(RpcError::TxDuplicate.status_code(), 422);
+        assert_eq!(RpcError::MempoolFull.status_code(), 422);
+        assert_eq!(RpcError::NodeBusy.status_code(), 503);
     }
 }

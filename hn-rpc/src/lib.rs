@@ -26,21 +26,34 @@
 //! (slowloris defence), and a write timeout — every response carries
 //! `Connection: close` ([`HttpResponse::write_to`]), matching "One
 //! request per connection." It answers a successfully-parsed request
-//! through the caller-supplied [`RequestHandler`]; routing the eight
-//! `/v1` methods to real answers, and the hex/decimal-string JSON wire
-//! encoding ADR-0046's own "Decided: Value Encoding Rules" settles,
-//! remain future work — today's handler and its error-fallback
-//! responses are both deliberately minimal.
+//! through the caller-supplied [`RequestHandler`].
+//!
+//! [`route`] (ADR-0046, "Decided: v1 Endpoint Set") matches a
+//! [`ParsedRequest`] against the eight `/v1` methods, decoding each
+//! one's own path parameters (decimal heights; hex addresses/
+//! transaction ids) into a concrete [`RpcCall`]. [`reply_to_response`]/
+//! [`error_response`] (ADR-0046, "Decided: Value Encoding Rules" /
+//! "a unified error format") encode the far side — an [`RpcReply`]
+//! or any rejection — back into hex/decimal-string JSON. Neither one
+//! touches a socket or a node's own state; wiring a real
+//! [`RequestHandler`] that calls into a running node's event loop
+//! (ADR-0046, "Decided: Architecture And Crate Direction") and
+//! actually starting this server from `main.rs` both remain future
+//! work (`hn-node`'s own next step).
 
 mod call;
 mod error;
+mod hex;
+mod json;
 mod parser;
 mod reply;
 mod response;
+mod routing;
 mod server;
 
 pub use call::RpcCall;
 pub use error::RpcError;
+pub use json::{error_response, reply_to_response};
 pub use parser::{
     HttpError, HttpMethod, MAX_HEADER_COUNT, MAX_HEADER_SECTION_LEN, MAX_REQUEST_TARGET_LEN,
     ParsedRequest, parse_request,
@@ -51,6 +64,7 @@ pub use reply::{
     ValidatorEntry, ValidatorStatusReply, ValidatorsReply,
 };
 pub use response::HttpResponse;
+pub use routing::route;
 pub use server::{RequestHandler, ServerConfig, spawn_server};
 
 #[cfg(test)]

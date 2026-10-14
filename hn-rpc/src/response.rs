@@ -22,18 +22,14 @@ pub struct HttpResponse {
 }
 
 impl HttpResponse {
-    /// A minimal, generic response for a request [`crate::parse_request`]
-    /// rejected — plain text, not yet the unified JSON error format
-    /// ADR-0046's own routing step settles, but already honest about
-    /// the exact rejection and never anything resembling a stack trace
-    /// or internal path (ADR-0046, "Security Considerations").
+    /// The response for a request [`crate::parse_request`] rejected —
+    /// the same unified `{"error": "..."}` JSON body
+    /// [`crate::json::error_response`] gives every other rejection on
+    /// this surface, never anything resembling a stack trace or
+    /// internal path (ADR-0046, "Security Considerations").
     #[must_use]
     pub fn from_http_error(error: HttpError) -> Self {
-        Self {
-            status: error.status_code(),
-            content_type: "text/plain; charset=utf-8",
-            body: error.to_string().into_bytes(),
-        }
+        crate::json::error_response(error.status_code(), error.code())
     }
 
     /// Writes this response to `writer` as a complete HTTP/1.1

@@ -159,11 +159,48 @@ impl HttpError {
             _ => 400,
         }
     }
+
+    /// This rejection's own stable wire code — transport-level, so not
+    /// part of ADR-0046's own [`crate::RpcError`] registry, but a
+    /// snake_case identifier in the same style, used by the same
+    /// unified `{"error": "..."}` JSON body (ADR-0046, "Decided:
+    /// v1 Endpoint Set" — "a unified error format").
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::TruncatedRequest => "truncated_request",
+            Self::BareCarriageReturn => "bare_carriage_return",
+            Self::BareLineFeed => "bare_line_feed",
+            Self::NulByte => "nul_byte",
+            Self::ControlCharacter => "control_character",
+            Self::HeaderSectionTooLarge => "header_section_too_large",
+            Self::MalformedRequestLine => "malformed_request_line",
+            Self::MethodNotAllowed => "method_not_allowed",
+            Self::UnsupportedHttpVersion => "unsupported_http_version",
+            Self::TargetNotOriginForm => "target_not_origin_form",
+            Self::TargetHasPercentOrQuery => "target_has_percent_or_query",
+            Self::TargetTooLong => "target_too_long",
+            Self::TargetHasInvalidBytes => "target_has_invalid_bytes",
+            Self::TooManyHeaders => "too_many_headers",
+            Self::ObsoleteLineFolding => "obsolete_line_folding",
+            Self::MalformedHeaderLine => "malformed_header_line",
+            Self::InvalidHeaderName => "invalid_header_name",
+            Self::InvalidHeaderValue => "invalid_header_value",
+            Self::ChunkedTransferEncodingNotSupported => "chunked_transfer_encoding_not_supported",
+            Self::ExpectNotSupported => "expect_not_supported",
+            Self::MissingContentLength => "missing_content_length",
+            Self::DuplicateContentLength => "duplicate_content_length",
+            Self::InvalidContentLength => "invalid_content_length",
+            Self::BodyTooLarge => "body_too_large",
+            Self::GetRequestHasBody => "get_request_has_body",
+            Self::TrailingBytesAfterBody => "trailing_bytes_after_body",
+        }
+    }
 }
 
 impl std::fmt::Display for HttpError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{self:?} ({})", self.status_code())
+        write!(formatter, "{} ({})", self.code(), self.status_code())
     }
 }
 
