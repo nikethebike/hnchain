@@ -32,6 +32,10 @@ Referenced By:
 - ADR-0046: RPC v1 (transaction submission runs through this ADR's own
   `Mempool::admit` pipeline unchanged — RPC gets no separate admission
   path)
+- ADR-0047: CLI v1 (the `send` command builds and signs a real
+  `TransactionEnvelope` using the same `hn-state` types this ADR's own
+  pipeline already consumes, then submits it through ADR-0046's RPC —
+  no transaction-format or admission logic of its own)
 
 ## Context
 

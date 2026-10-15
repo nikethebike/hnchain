@@ -18,7 +18,12 @@ Depends On:
 
 Supersedes: None
 
-Referenced By: None
+Referenced By:
+
+- ADR-0047: CLI v1 (`hnchain` talks to a node only through this ADR's
+  own HTTP API — never the node's database, never P2P — and its HTTP
+  client is a small module added to this crate, `hn-rpc`, so the CLI
+  and the integration tests share one implementation)
 
 ## Context
 
@@ -200,10 +205,17 @@ this parser.
 
 ### Decided: Security And Resource Limits
 
-- Binds `127.0.0.1` by default. Exposing it is an explicit config value
-  (`rpc_listen`); nothing in v1 is privileged, so no authentication in v1.
-  If an administrative method is ever added it is a separate ADR with
-  authentication and is never on `/v1`'s public surface.
+- RPC is off by default: no server starts at all unless `--rpc-listen
+  <addr>` is given (`NodeConfig.rpc_listen: Option<SocketAddr>`, `None`
+  by default). When given, the node binds exactly that address, with
+  no implicit loopback fallback of its own — a devnet profile's own
+  `--rpc-listen 127.0.0.1:<port>` is the operator's own choice, not
+  something the node enforces or defaults to. Exposing it beyond
+  loopback is therefore an explicit, visible line in the node's own
+  command line, never a silent default; nothing in v1 is privileged,
+  so no authentication in v1. If an administrative method is ever
+  added it is a separate ADR with authentication and is never on
+  `/v1`'s public surface.
 - Maximum request body: `2 × MAX_TRANSACTION_SIZE + 1 KiB` (hex doubling,
   plus JSON envelope). Maximum header section and URL length bounded
   (implementation constants, documented).
@@ -212,7 +224,9 @@ this parser.
 - CORS disabled by default.
 - Response errors never include stack traces or internal paths.
 - Rate limiting of `POST` is **not** solved here; it shares the open P2P
-  DoS-hardening item. Localhost-by-default is the v1 mitigation.
+  DoS-hardening item. RPC being off unless explicitly enabled, and the
+  operator's own choice of bind address when it is, are the v1
+  mitigation.
 
 ## Rejected Options
 
