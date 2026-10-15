@@ -30,6 +30,8 @@ pub mod cli;
 pub mod hex;
 pub mod keyfile;
 pub mod profile;
+pub mod rpc;
+pub mod rpc_url;
 pub mod sanitize;
 pub mod transfer;
 

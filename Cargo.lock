@@ -188,6 +188,7 @@ dependencies = [
  "hn-crypto",
  "hn-rpc",
  "hn-state",
+ "serde_json",
 ]
 
 [[package]]

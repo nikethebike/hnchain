@@ -28,13 +28,20 @@ pub const CHAIN_ID: u8 = ChainId::HNCHAIN.get();
 /// The devnet's own pinned `network_id` (ADR-0003).
 pub const NETWORK_ID: u16 = 1;
 
-/// The committed `hn-node/genesis/devnet.json`'s own real
-/// `genesis_hash` (ADR-0038, "Decided: Genesis Hash") -- the node's
-/// own `GenesisManifest::genesis_hash()` output for that file, not
-/// re-derived independently here.
+/// The committed `hn-node/genesis/devnet.json`'s own genesis
+/// *block's* `block_hash` (ADR-0043, "Genesis As A Real Block 0") --
+/// exactly what a freshly-initialized node's own `GET /v1/status`
+/// reports as `genesis_hash` (and, at height 0, as
+/// `latest_block_hash` too). This is distinct from
+/// `GenesisManifest::genesis_hash()` (ADR-0038), which commits to the
+/// manifest file's own bytes for the node's `--data-dir` consistency
+/// check, not to the derived block header `/v1/status` actually
+/// surfaces -- confirmed against a real running node rather than
+/// re-derived independently here, since `genesis_block_header` is a
+/// private `hn-node` function with no public API of its own.
 pub const GENESIS_HASH: [u8; 32] = [
-    0xa3, 0x75, 0x72, 0x77, 0xb3, 0x8e, 0xe0, 0x01, 0xf3, 0xce, 0x2e, 0xcd, 0xb2, 0xc3, 0x0e, 0x0b,
-    0x27, 0x9e, 0xf3, 0xd8, 0xc3, 0x30, 0xeb, 0x87, 0x82, 0x35, 0x68, 0xab, 0x6c, 0x8c, 0xb3, 0xdc,
+    0x08, 0x20, 0x4f, 0x46, 0x88, 0x76, 0x60, 0x64, 0xc8, 0xb9, 0x07, 0x58, 0x2a, 0x61, 0xd5, 0x35,
+    0xeb, 0xd2, 0x35, 0x29, 0xc6, 0x84, 0x70, 0x76, 0x5c, 0x7d, 0xc7, 0x57, 0xa9, 0xf8, 0x14, 0x70,
 ];
 
 /// `--rpc`'s own default when not given.

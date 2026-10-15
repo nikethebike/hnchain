@@ -17,6 +17,7 @@ hn-core = { path = "../hn-core" }
 hn-crypto = { path = "../hn-crypto" }
 hn-rpc = { path = "../hn-rpc" }
 hn-state = { path = "../hn-state" }
+serde_json = "1.0"
 
 [lints]
 workspace = true
