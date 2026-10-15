@@ -1653,8 +1653,49 @@ fn send_to(
     Ok(())
 }
 
+/// Drives `action`, and every follow-up action it produces, to
+/// completion — the *only* place in this file that may ever call
+/// itself again for a new action; [`act_on_once`],
+/// [`maybe_start_propose_stage`], and [`cast_vote`] each return their
+/// own follow-up action (if any) rather than ever calling [`act_on`]
+/// a second time.
+///
+/// That matters because a real chain of actions can run many steps
+/// deep with no network round-trip, or even a return to this crate's
+/// own event loop, in between: self-propose (`None` ->
+/// `maybe_start_propose_stage`) -> self-prevote (`Prevote` ->
+/// `cast_vote`) -> self-precommit (`Precommit` -> `cast_vote` again)
+/// -> finalize (`Finalized`) -> the *next* height's own `NewHeight` ->
+/// `None` again — every step of which a validator holding enough
+/// voting power to reach quorum with itself alone (the degenerate but
+/// entirely legitimate single-validator devnet case) completes on its
+/// own, for every height, forever. Each of those five functions used
+/// to call `act_on` again directly for its own next action, so this
+/// whole chain recursed through all of them once per height with no
+/// bound at all, and a long enough run overflowed the stack (found
+/// running exactly this scenario for a few seconds, ADR-0046's own
+/// `rpc_listen.rs`/`rpc_end_to_end.rs` test development, both of which
+/// sidestep it by using 2+ validators instead). This loop is the
+/// trampoline instead: whatever `act_on_once` (transitively including
+/// `maybe_start_propose_stage`/`cast_vote`) returns becomes the next
+/// iteration's own input, so a thousand cascading heights cost this
+/// one stack frame exactly once, never one per height.
 fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
-    match action {
+    let mut next = Some(action);
+    while let Some(action) = next {
+        next = act_on_once(ctx, action)?;
+    }
+    Ok(())
+}
+
+/// One [`ConsensusAction`]'s own real handling — [`act_on`]'s own
+/// internal step, returning whatever follow-up action it (or, for
+/// `None`/`Prevote`/`Precommit`, the helper it delegates to) produced
+/// instead of ever calling [`act_on`] again, so its own trampoline
+/// loop can drive an arbitrarily long cascade of them in constant
+/// stack space.
+fn act_on_once(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<Option<ConsensusAction>> {
+    Ok(match action {
         ConsensusAction::None => maybe_start_propose_stage(ctx)?,
         ConsensusAction::Prevote(target) => cast_vote(ctx, VoteType::Prevote, target)?,
         ConsensusAction::Precommit(target) => cast_vote(ctx, VoteType::Precommit, target)?,
@@ -1690,7 +1731,7 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
                     round.get(),
                     hex(&block_hash),
                 ));
-                return Ok(());
+                return Ok(None);
             };
             match ctx.engine.commit_finalized_block(
                 block_hash,
@@ -1744,8 +1785,7 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
                     // future block again.
                     ctx.mempool
                         .remove_included(result.applied.iter().map(|applied| applied.tx_id));
-                    let action = ctx.engine.begin_new_height()?;
-                    act_on(ctx, action)?;
+                    Some(ctx.engine.begin_new_height()?)
                 }
                 // The engine's own `proposed_blocks` cache can miss
                 // this exact same way, for the exact same reason, even
@@ -1760,19 +1800,27 @@ fn act_on(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<()> {
                         round.get(),
                         hex(&block_hash),
                     ));
+                    None
                 }
                 Err(error) => return Err(error.into()),
             }
         }
         ConsensusAction::RoundAdvanced { .. } | ConsensusAction::NewHeight { .. } => {
-            let action = ctx.engine.begin_round()?;
-            act_on(ctx, action)?;
+            Some(ctx.engine.begin_round()?)
         }
-    }
-    Ok(())
+    })
 }
 
-fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<()> {
+/// If this node is this round's own proposer, self-proposes and
+/// returns the engine's own resulting action (its own `handle_proposal`
+/// call's return value) for [`act_on`]'s trampoline to drive next --
+/// never calling [`act_on`] itself here, unlike before: a proposer
+/// that also holds enough voting power to reach quorum on its own
+/// (the single-validator devnet case) would otherwise cascade through
+/// propose/prevote/precommit/finalize *and the next height's own
+/// propose* one native call deeper each time, with no bound (see
+/// [`act_on`]'s own doc comment).
+fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<Option<ConsensusAction>> {
     let height = ctx.engine.state().height;
     let round = ctx.engine.state().round;
     spawn_after(
@@ -1859,12 +1907,23 @@ fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<()> {
         let action = ctx
             .engine
             .handle_proposal(block_hash, transactions_for_engine, None)?;
-        act_on(ctx, action)?;
+        return Ok(Some(action));
     }
-    Ok(())
+    Ok(None)
 }
 
-fn cast_vote(ctx: &mut Ctx, vote_type: VoteType, target: ConsensusTarget) -> NodeResult<()> {
+/// Casts and broadcasts `vote_type`, then — if this node's own vote
+/// was itself enough to form a real quorum certificate (ADR-0037's
+/// own devnet case: a validator holding enough voting power to reach
+/// quorum with itself alone) — returns the engine's own resulting
+/// action for [`act_on`]'s trampoline to drive next, the same
+/// never-call-`act_on`-directly discipline [`maybe_start_propose_stage`]
+/// now also follows.
+fn cast_vote(
+    ctx: &mut Ctx,
+    vote_type: VoteType,
+    target: ConsensusTarget,
+) -> NodeResult<Option<ConsensusAction>> {
     let (target_type, target_hash) = match target {
         ConsensusTarget::Block(hash) => (VoteTargetType::Block, hash),
         ConsensusTarget::Nil => (VoteTargetType::Nil, [0_u8; 32]),
@@ -1928,10 +1987,10 @@ fn cast_vote(ctx: &mut Ctx, vote_type: VoteType, target: ConsensusTarget) -> Nod
             let action = ctx
                 .engine
                 .handle_quorum_certificate(qc, &ctx.store, &ctx.ordered_ids)?;
-            act_on(ctx, action)?;
+            return Ok(Some(action));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Builds this round's real `hn_state::BlockHeader` (ADR-0040, "Decided:
