@@ -1,6 +1,6 @@
 use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, Verifier, VerifyingKey};
 use hn_hncs::HncsError;
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore};
 
 /// Numeric identifier of the Ed25519 signing algorithm (ADR-0002 profile
 /// `0x0001`, `PureEdDSA Ed25519`, RFC 8032).
@@ -178,6 +178,22 @@ impl KeyDescriptor {
     }
 }
 
+/// Generates a new 32-byte Ed25519 seed from the operating system's own
+/// CSPRNG (the same source [`Ed25519KeyPair::generate`] already uses
+/// internally, just with the secret actually exposed this time).
+/// Pairs with [`Ed25519KeyPair::from_seed`] as the real
+/// generate-then-persist-then-reload path a saved key file needs
+/// (ADR-0047, "Decided: Key Files — Plain Seed File..." — recorded
+/// there as a fact established before writing that ADR:
+/// `Ed25519KeyPair::generate` exposes no accessor for the secret it
+/// produces, so nothing can persist a key created through it).
+#[must_use]
+pub fn generate_seed() -> [u8; 32] {
+    let mut seed = [0_u8; 32];
+    OsRng.fill_bytes(&mut seed);
+    seed
+}
+
 /// An Ed25519 keypair able to sign for a specific `KeyRole`.
 ///
 /// Wraps a reviewed external implementation (`ed25519-dalek`) behind an
@@ -199,9 +215,13 @@ impl Ed25519KeyPair {
         }
     }
 
-    /// Reconstructs a keypair from a 32-byte Ed25519 seed. Deterministic;
-    /// intended for tests and conformance vectors, not for generating keys
-    /// that must remain secret from the seed's own source.
+    /// Reconstructs a keypair from a 32-byte Ed25519 seed. Deterministic:
+    /// the same seed always reconstructs the same keypair — exactly what
+    /// a persisted key file (ADR-0047, "Decided: Key Files") relies on to
+    /// reload a real secret key, via [`generate_seed`] for the seed
+    /// itself. Also used directly (a fixed seed, not through
+    /// `generate_seed`) by tests and conformance vectors that need a
+    /// deterministic, reproducible key.
     pub fn from_seed(key_role: KeyRole, seed: [u8; 32]) -> Self {
         Self {
             signing_key: SigningKey::from_bytes(&seed),
@@ -229,7 +249,33 @@ impl Ed25519KeyPair {
 
 #[cfg(test)]
 mod tests {
-    use super::{Ed25519KeyPair, IdentityError, KeyRole};
+    use super::{Ed25519KeyPair, IdentityError, KeyRole, generate_seed};
+
+    #[test]
+    fn generate_seed_produces_a_distinct_32_byte_value_each_time() {
+        let first = generate_seed();
+        let second = generate_seed();
+        assert_eq!(first.len(), 32);
+        assert_ne!(
+            first, second,
+            "two real CSPRNG seeds collided -- either broken randomness or an impossible coincidence"
+        );
+    }
+
+    #[test]
+    fn from_seed_reproduces_the_same_keypair() {
+        let seed = generate_seed();
+        let first = Ed25519KeyPair::from_seed(KeyRole::AccountSigning, seed);
+        let second = Ed25519KeyPair::from_seed(KeyRole::AccountSigning, seed);
+        assert_eq!(
+            first.key_descriptor().public_key_bytes(),
+            second.key_descriptor().public_key_bytes()
+        );
+
+        let message = b"reproduced key signs exactly the way the original would";
+        let signature = first.sign(message);
+        assert_eq!(second.key_descriptor().verify(message, &signature), Ok(()));
+    }
 
     #[test]
     fn signs_and_verifies() {

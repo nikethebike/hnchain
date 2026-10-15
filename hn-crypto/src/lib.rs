@@ -26,7 +26,7 @@ pub use hash::{
 };
 pub use identity::{
     ED25519_ALGORITHM_ID, ED25519_PUBLIC_KEY_LEN, ED25519_SIGNATURE_LEN, Ed25519KeyPair,
-    IdentityError, IdentityResult, KeyDescriptor, KeyRole,
+    IdentityError, IdentityResult, KeyDescriptor, KeyRole, generate_seed,
 };
 pub use protocol_address::{NAMESPACE_PROTOCOL, ProtocolModule};
 pub use signature_envelope::{SIGNATURE_MAX_LEN, SignatureEnvelope};
