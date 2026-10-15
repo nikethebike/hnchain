@@ -34,14 +34,21 @@
 //! transaction ids) into a concrete [`RpcCall`]. [`reply_to_response`]/
 //! [`error_response`] (ADR-0046, "Decided: Value Encoding Rules" /
 //! "a unified error format") encode the far side — an [`RpcReply`]
-//! or any rejection — back into hex/decimal-string JSON. Neither one
-//! touches a socket or a node's own state; wiring a real
-//! [`RequestHandler`] that calls into a running node's event loop
-//! (ADR-0046, "Decided: Architecture And Crate Direction") and
-//! actually starting this server from `main.rs` both remain future
-//! work (`hn-node`'s own next step).
+//! or any rejection — back into hex/decimal-string JSON. `hn_node`
+//! wires a real [`RequestHandler`] into these (ADR-0046, "Decided:
+//! Architecture And Crate Direction") and starts this server from its
+//! own `run()` behind `--rpc-listen`.
+//!
+//! [`client::request`]/[`client::get_json`]/[`client::post_json`]
+//! (ADR-0047, "Decided: HTTP Client Lives In `hn-rpc`") are this
+//! surface's own client side: the same minimal one-request-per-
+//! connection HTTP/1.1 contract as the server, with mandatory
+//! connect/total deadlines ([`client::ClientConfig`]), shared by
+//! `hn-cli` and `hn-node`'s own integration tests rather than each
+//! hand-rolling it independently.
 
 mod call;
+mod client;
 mod error;
 mod hex;
 mod json;
@@ -52,6 +59,7 @@ mod routing;
 mod server;
 
 pub use call::RpcCall;
+pub use client::{ClientConfig, ClientError, get_json, post_json, request};
 pub use error::RpcError;
 pub use json::{error_response, reply_to_response};
 pub use parser::{
