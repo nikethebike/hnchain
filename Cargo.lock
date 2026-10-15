@@ -184,8 +184,10 @@ dependencies = [
 name = "hn-cli"
 version = "0.1.0"
 dependencies = [
- "hn-node",
+ "hn-core",
+ "hn-crypto",
  "hn-rpc",
+ "hn-state",
 ]
 
 [[package]]

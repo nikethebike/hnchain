@@ -8,9 +8,15 @@ repository.workspace = true
 authors.workspace = true
 description = "HNChain command-line interface boundary."
 
+[[bin]]
+name = "hnchain"
+path = "src/main.rs"
+
 [dependencies]
-hn-node = { path = "../hn-node" }
+hn-core = { path = "../hn-core" }
+hn-crypto = { path = "../hn-crypto" }
 hn-rpc = { path = "../hn-rpc" }
+hn-state = { path = "../hn-state" }
 
 [lints]
 workspace = true
