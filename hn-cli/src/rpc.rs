@@ -68,6 +68,21 @@ pub fn get(global: &GlobalOptions, path: &str) -> Result<(u16, Vec<u8>), RpcFail
         .map_err(|error| RpcFailure::Unreachable(error.to_string()))
 }
 
+/// Performs `POST path` with a JSON body against the active `--rpc`
+/// endpoint (`send`'s own `POST /v1/transactions`).
+pub fn post(
+    global: &GlobalOptions,
+    path: &str,
+    payload: &serde_json::Value,
+) -> Result<(u16, Vec<u8>), RpcFailure> {
+    let (addr, config) = resolve(global)?;
+    let body = serde_json::to_vec(payload).map_err(|error| {
+        RpcFailure::Unreachable(format!("could not encode request body: {error}"))
+    })?;
+    hn_rpc::request(addr, "POST", path, Some(&body), config)
+        .map_err(|error| RpcFailure::Unreachable(error.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{RpcFailure, resolve};

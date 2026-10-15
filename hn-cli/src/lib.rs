@@ -33,6 +33,7 @@ pub mod profile;
 pub mod rpc;
 pub mod rpc_url;
 pub mod sanitize;
+pub mod send;
 pub mod transfer;
 
 #[cfg(test)]
