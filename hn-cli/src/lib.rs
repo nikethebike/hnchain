@@ -13,13 +13,23 @@
 //! names, with no parsing-library dependency. [`sanitize`] escapes any
 //! server-supplied string before it is ever printed, so a hostile or
 //! compromised RPC endpoint cannot inject terminal control sequences
-//! into this process's own stdout/stderr.
+//! into this process's own stdout/stderr. [`amount`] is the strict
+//! decimal HNCOIN/`hnit` grammar `--amount`/`--amount-hnit` parse
+//! against. [`keyfile`] is the plain, owner-only-permissions key file
+//! format `key generate`/`key show` read and write — explicitly not
+//! custody-grade (ADR-0047, "Decided: Key Files"). [`profile`] is
+//! today's one hardcoded devnet constant, standing in for the real
+//! network-pinning profile a later pass builds.
 //!
-//! Command execution (actually calling the node, loading keys, signing
-//! transactions) lands one command at a time in later passes; today
-//! only parsing, `--help`, and exit codes exist.
+//! Command execution for `send` and the read-only `/v1` commands
+//! (actually calling the node, signing transactions) lands one
+//! command at a time in later passes.
 
+pub mod amount;
 pub mod cli;
+pub mod hex;
+pub mod keyfile;
+pub mod profile;
 pub mod sanitize;
 
 #[cfg(test)]
