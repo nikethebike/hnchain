@@ -19,6 +19,12 @@ Supersedes: None
 Referenced By:
 
 - ADR-0035: Wiring The Consensus Engine To `hn-state`
+- ADR-0048: Byzantine-Safe Consensus (supersedes this ADR's own
+  "Locking rule" and its "Explicitly Not Resolved: Not byzantine-safe
+  as specified" — including that paragraph's own citation of an
+  ADR-0009 formal-modeling requirement that ADR-0009 does not
+  actually contain; replaces `locked_block`/`highest_qc` with separate
+  `locked_value`/`locked_round`/`valid_value`/`valid_round`/`valid_qc`)
 
 ## Context
 

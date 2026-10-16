@@ -21,6 +21,10 @@ Supersedes: None
 Referenced By:
 
 - ADR-0034: Consensus State Machine Skeleton
+- ADR-0048: Byzantine-Safe Consensus (adds decide-at-any-round: a
+  precommit quorum for a block at an earlier round of the current
+  height, plus a validated proposal, finalizes — previously dropped
+  as stale)
 
 ## Context
 

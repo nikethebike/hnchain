@@ -23,6 +23,11 @@ Referenced By:
   sync]," so ADR-0044 is the arrival of the thing it always said would
   eventually be needed, not a reversal. This ADR's own separate
   connection-drop-reconnection decision is untouched)
+- ADR-0048: Byzantine-Safe Consensus (adds the vote journal — this
+  ADR's own restart recovery persisted committed blocks/state but
+  never voting state, so a restarted validator could sign a
+  conflicting vote or forget its lock; the journal closes that hole
+  and `restart_recovery*` tests must keep passing under it)
 
 ## Context
 

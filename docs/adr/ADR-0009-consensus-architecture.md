@@ -23,6 +23,10 @@ Referenced By:
 - ADR-0037: Multi-Node Consensus Wiring (implements "Timeout And View
   Change" with a real wall-clock timer loop and a working, explicitly
   non-final base timeout/backoff default)
+- ADR-0048: Byzantine-Safe Consensus (the actual safety/liveness work
+  this ADR's own "complexity risk" mitigation pointed at; also records
+  that this ADR sets no formal-modeling mandate, correcting a
+  misreading that had propagated through ADR-0034)
 
 ## Context
 

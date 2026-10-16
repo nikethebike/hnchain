@@ -36,6 +36,11 @@ Referenced By:
   `TransactionEnvelope` using the same `hn-state` types this ADR's own
   pipeline already consumes, then submits it through ADR-0046's RPC —
   no transaction-format or admission logic of its own)
+- ADR-0048: Byzantine-Safe Consensus (the consensus machine's own
+  `validated` flag on a proposal is set only after this ADR's
+  `verify_proposal`, including real execution, succeeds — a pinned
+  test proves every proposal path sets it from the real verification
+  result)
 
 ## Context
 

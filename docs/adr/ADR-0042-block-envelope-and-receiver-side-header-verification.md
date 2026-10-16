@@ -30,6 +30,10 @@ Referenced By:
   fixed-devnet-value `state_root` check — step 6 of "Decided: Receiver-
   Side Verification Rules," below — with real execution, once blocks
   carry real transactions)
+- ADR-0048: Byzantine-Safe Consensus (every `BlockEnvelope` this
+  codebase builds today sets `justification: None`; this ADR adds a
+  real `valid_value`/`justification` re-proposal path so a proposer
+  can carry forward a polka instead of a fresh value every round)
 
 ## Context
 

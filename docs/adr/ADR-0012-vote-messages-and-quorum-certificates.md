@@ -22,6 +22,11 @@ Supersedes: None
 Referenced By:
 
 - ADR-0034: Consensus State Machine Skeleton
+- ADR-0048: Byzantine-Safe Consensus (changes `VotePool` from
+  per-target tallies to per-validator first-seen records, so a
+  validator that signs two different targets at the same key is
+  recorded as equivocation evidence instead of silently counted in
+  both tallies)
 
 ## Context
 

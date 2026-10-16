@@ -63,6 +63,7 @@ docs/
     ADR-0045-transactions-through-consensus.md
     ADR-0046-rpc-v1.md
     ADR-0047-cli-v1.md
+    ADR-0048-byzantine-safe-consensus.md
 
   specs/
     core/

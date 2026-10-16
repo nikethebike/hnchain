@@ -38,6 +38,11 @@ Referenced By:
   `synthetic_block_hash` — an explicitly non-cryptographic per-round
   placeholder at the time — with a real `hn_state::BlockHeader::
   block_hash` computation)
+- ADR-0048: Byzantine-Safe Consensus (replaces this ADR's own
+  `is_current`/`expects_qc` certificate filter — which drops
+  non-current-round or step-mismatched certificates before they ever
+  reach the state machine — with a caller that only drops on wrong
+  height, letting the machine own all round/step scoping)
 
 ## Context
 
