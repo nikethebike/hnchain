@@ -99,13 +99,27 @@ pub enum RoundOutcome {
 #[derive(Clone, Debug, Default)]
 pub struct Delivery {
     pub proposal_dropped_for: BTreeSet<Digest>,
+    /// Validators whose own real precommit vote this stage is lost in
+    /// the network: their own `state` still processes the real
+    /// prevote quorum and locks normally (so `valid_value`/
+    /// `locked_value` update exactly as a real dropped-precommit-
+    /// message validator's would), but their vote is excluded from
+    /// this round's own precommit tally, so a precommit quorum that
+    /// would otherwise have formed may not (ADR-0048, Finding 3.1's
+    /// own "a polka formed, but the precommit quorum did not").
+    pub precommit_dropped_for: BTreeSet<Digest>,
 }
 
 fn has_quorum(signed_power: u128, total_power: u128) -> bool {
     signed_power.saturating_mul(3) > total_power.saturating_mul(2)
 }
 
-fn deterministic_block_hash(height: BlockHeight, round: Round) -> Digest {
+/// The deterministic stand-in block hash a fresh (non-re-proposing)
+/// proposer builds for `(height, round)` -- exposed so tests can
+/// predict what an ordinary round proposes without hard-coding a
+/// value the harness itself never actually produces.
+#[must_use]
+pub fn deterministic_block_hash(height: BlockHeight, round: Round) -> Digest {
     let mut hash = [0_u8; 32];
     hash[0..8].copy_from_slice(&height.get().to_le_bytes());
     hash[8..16].copy_from_slice(&round.get().to_le_bytes());
@@ -338,7 +352,13 @@ impl Network {
                     .state
                     .apply(ConsensusEvent::PrevoteTimeout { height, round })?,
             };
-            if let ConsensusAction::Precommit(target) = action {
+            // This validator's own state still locks/votes normally
+            // either way (see Delivery::precommit_dropped_for's own
+            // doc) -- only whether the vote reaches the tally below
+            // depends on delivery.
+            if let ConsensusAction::Precommit(target) = action
+                && !delivery.precommit_dropped_for.contains(&id)
+            {
                 precommits.push((id, power, target));
             }
         }
