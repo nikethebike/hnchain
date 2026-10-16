@@ -27,11 +27,20 @@ use support::{
 const VALIDATOR_COUNT: u8 = 2;
 const BASE_PORT: u16 = 32_800;
 const RPC_BASE_PORT: u16 = 32_900;
-const BASE_TIMEOUT_MS: u64 = 150;
-const WAIT: Duration = Duration::from_secs(90);
+// BASE_TIMEOUT_MS/WAIT loosened (same reasoning as
+// transaction_finalization.rs: a tight round timeout under a
+// CPU-starved CI runner just forces view-changes instead of
+// tolerating real slowness) and FLOOD_THREADS halved -- still well
+// beyond the devnet worker pool's own capacity (4 workers + a
+// 16-deep queue = 20), so the load assertion's own intent is
+// unchanged, but with less CPU pressure competing against the two
+// real validator processes this test also depends on making
+// progress.
+const BASE_TIMEOUT_MS: u64 = 300;
+const WAIT: Duration = Duration::from_secs(180);
 const TARGET_HEIGHT: u64 = 15;
 const FLOOD_DURATION: Duration = Duration::from_secs(6);
-const FLOOD_THREADS: usize = 64;
+const FLOOD_THREADS: usize = 32;
 
 #[test]
 fn consensus_keeps_its_own_pace_while_rpc_is_flooded_with_concurrent_requests() -> TestResult {

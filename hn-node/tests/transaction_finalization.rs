@@ -19,8 +19,16 @@ use support::{
 
 const VALIDATOR_COUNT: u8 = 4;
 const BASE_PORT: u16 = 32_000;
-const BASE_TIMEOUT_MS: u64 = 200;
-const WAIT: Duration = Duration::from_secs(90);
+// Both loosened from an earlier 200ms/90s: four real validator
+// processes under a CPU-starved CI runner can legitimately miss a
+// tight round timeout, which just forces a view-change and delays
+// real progress further rather than tolerating the slowness --
+// raising the round budget lets a slow-but-live round actually
+// finish instead of resetting, and the overall wait is raised to
+// match (CI was observed timing out here; a quiet dev machine
+// finishes in a couple of seconds either way).
+const BASE_TIMEOUT_MS: u64 = 400;
+const WAIT: Duration = Duration::from_secs(180);
 const RECIPIENT: [u8; 32] = [0x55; 32];
 
 #[test]
