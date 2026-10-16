@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hn_core::{BlockHeight, Round};
 use hn_crypto::Digest;
@@ -28,9 +28,14 @@ use crate::step::ConsensusStep;
 /// - `validated_block_hashes`: every block hash this validator has
 ///   validated a proposal for, at any round of the current height
 ///   (R8: "a validated proposal for v (**any round**)").
-/// - `round_validated_proposal`: the *current* round's own validated
-///   proposal, if any (R6: "a validated proposal for v for round
-///   r"). Reset whenever the round changes.
+/// - `validated_proposals`: every `(round, block_hash)` pair this
+///   validator has validated a proposal for this height (R6: "a
+///   validated proposal for v for round r"), keyed by the round the
+///   proposal was *for* — not reset on a round change, unlike an
+///   earlier version of this field that tracked only the current
+///   round and forgot a proposal that arrived before this validator's
+///   own round caught up to it (found via ADR-0048's own Verification
+///   Requirement 5, the independent-implementation diff test).
 /// - `pending_finalization`: a precommit quorum this validator cannot
 ///   yet act on because it has no validated proposal for the block it
 ///   targets (R8's "need block" path). Cleared once
@@ -48,9 +53,9 @@ use crate::step::ConsensusStep;
 /// holds (from its own vote pool) once it has validated the matching
 /// proposal. The caller already has everything needed to do this
 /// (the certificate it received, and the proposal it just validated)
-/// without this crate retaining it. `round_validated_proposal` exists
-/// so that re-submission — or the normal in-order delivery — finds a
-/// match.
+/// without this crate retaining it. `validated_proposals` exists so
+/// that re-submission — or the normal in-order delivery, or a
+/// proposal that arrived early — all find a match.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConsensusState {
     /// The height this state machine is attempting to finalize.
@@ -78,7 +83,7 @@ pub struct ConsensusState {
     pub valid_qc: Option<QuorumCertificate>,
 
     validated_block_hashes: BTreeSet<Digest>,
-    round_validated_proposal: Option<Digest>,
+    validated_proposals: BTreeMap<Round, Digest>,
     pending_finalization: Option<(Digest, QuorumCertificate)>,
 }
 
@@ -98,7 +103,7 @@ impl ConsensusState {
             valid_round: None,
             valid_qc: None,
             validated_block_hashes: BTreeSet::new(),
-            round_validated_proposal: None,
+            validated_proposals: BTreeMap::new(),
             pending_finalization: None,
         }
     }
@@ -141,17 +146,98 @@ impl ConsensusState {
                 self.handle_block_polka(qc)
             }
             ConsensusEvent::PrevoteQuorum(qc) => self.handle_nil_prevote_quorum(qc),
+            ConsensusEvent::Proposal {
+                height,
+                round,
+                block_hash,
+                valid_round,
+                justification,
+                validated,
+            } => self.handle_proposal(
+                height,
+                round,
+                block_hash,
+                valid_round,
+                justification,
+                validated,
+            ),
             other => self.apply_scoped(other),
         }
     }
 
-    /// `BeginRound`/`Proposal`/`ProposeTimeout`/`PrevoteTimeout`/
+    /// R2/R3's own bookkeeping-plus-vote. Routed directly from
+    /// `apply_inner`, like every other event that must record
+    /// something regardless of `self.step`/`self.round`, rather than
+    /// through `apply_scoped`'s step-scoped table: R8's "a validated
+    /// proposal for v, at any round" is pure historical memory, not
+    /// conditioned on this proposal having arrived in order, so
+    /// `validated_block_hashes` must grow on *every* `validated: true`
+    /// proposal — including one that is otherwise stale (wrong round,
+    /// or this validator has already left `Propose`) — or a validator
+    /// that received a late-but-genuinely-validated proposal would
+    /// wrongly `NeedBlock` a later `PrecommitQuorum` it already has the
+    /// block for. Found via ADR-0048's own Verification Requirement 5
+    /// (the independent-implementation diff test): only the vote-
+    /// casting half (R2/R3 proper) stays scoped to `Propose` at the
+    /// current round, same as before.
+    fn handle_proposal(
+        &mut self,
+        height: BlockHeight,
+        round: Round,
+        block_hash: Digest,
+        valid_round: Option<Round>,
+        justification: Option<QuorumCertificate>,
+        validated: bool,
+    ) -> ConsensusResult<ConsensusAction> {
+        self.check_height(height)?;
+        if validated {
+            self.validated_block_hashes.insert(block_hash);
+            self.validated_proposals.insert(round, block_hash);
+        }
+        if self.step != ConsensusStep::Propose {
+            return Ok(ConsensusAction::Ignored {
+                reason: "proposal received while not in step Propose",
+            });
+        }
+        if round != self.round {
+            return Ok(ConsensusAction::Ignored {
+                reason: "proposal for a round other than the current one",
+            });
+        }
+        let target = self.decide_prevote_target(
+            block_hash,
+            round,
+            valid_round,
+            justification.as_ref(),
+            validated,
+        );
+        self.step = ConsensusStep::Prevote;
+        Ok(ConsensusAction::Prevote(target))
+    }
+
+    /// `BeginRound`/`ProposeTimeout`/`PrevoteTimeout`/
     /// `PrecommitTimeout`/`BeginNewHeight` — every event whose own
     /// handling is scoped to exactly `(self.step, self.round)` (R1's
-    /// own `BeginRound` half, R2, R3, R4, R7, R9's timeout half, R11).
-    /// A deliberately closed, total function over `(step, event)`:
-    /// any pair not listed is [`ConsensusError::UnexpectedEvent`]
-    /// (ADR-0034's own "Rejected Options" reasoning, unchanged).
+    /// own `BeginRound` half, R4, R7, R9's timeout half, R11).
+    /// `Proposal` (R2/R3) is handled separately, see
+    /// [`Self::handle_proposal`].
+    ///
+    /// Only `BeginRound`/`BeginNewHeight` keep ADR-0034's original
+    /// "closed, total function" treatment of an unlisted `(step,
+    /// event)` pair as [`ConsensusError::UnexpectedEvent`] — the
+    /// caller only ever sends either one when it already knows this
+    /// machine is at the step that accepts it, so receiving one
+    /// anywhere else is a caller bug, not a race. The three
+    /// `*Timeout` variants get their own wrong-step arms further down
+    /// returning [`ConsensusAction::Ignored`] instead: found via
+    /// ADR-0048's own Verification Requirement 5 (an independent
+    /// second implementation, diff-tested against this one) that
+    /// treating a timer whose own round already moved on as a hard
+    /// error — rather than the same `Ignored` every
+    /// `QuorumCertificate`-carrying event already gets — contradicts
+    /// "Decided: Certificate Routing In `hn-node`"'s own plan to drop
+    /// the caller-side filter to height alone and let the machine own
+    /// round/step scoping.
     fn apply_scoped(&mut self, event: ConsensusEvent) -> ConsensusResult<ConsensusAction> {
         match (self.step, event) {
             (ConsensusStep::NewHeight, ConsensusEvent::BeginRound)
@@ -160,37 +246,6 @@ impl ConsensusState {
                 Ok(ConsensusAction::None)
             }
 
-            (
-                ConsensusStep::Propose,
-                ConsensusEvent::Proposal {
-                    height,
-                    round,
-                    block_hash,
-                    valid_round,
-                    justification,
-                    validated,
-                },
-            ) => {
-                self.check_height(height)?;
-                if round != self.round {
-                    return Ok(ConsensusAction::Ignored {
-                        reason: "proposal for a round other than the current one",
-                    });
-                }
-                if validated {
-                    self.validated_block_hashes.insert(block_hash);
-                    self.round_validated_proposal = Some(block_hash);
-                }
-                let target = self.decide_prevote_target(
-                    block_hash,
-                    round,
-                    valid_round,
-                    justification.as_ref(),
-                    validated,
-                );
-                self.step = ConsensusStep::Prevote;
-                Ok(ConsensusAction::Prevote(target))
-            }
             (ConsensusStep::Propose, ConsensusEvent::ProposeTimeout { height, round }) => {
                 self.check_height(height)?;
                 if round != self.round {
@@ -234,6 +289,35 @@ impl ConsensusState {
                 })
             }
 
+            // A `*Timeout` delivered at a step other than the one it is
+            // scoped to is a timer whose own round already moved on
+            // (ADR-0048, "Decided: Certificate Routing In `hn-node`": once
+            // the caller-side filter drops only on wrong height, the
+            // *machine* owns round/step scoping) — not a caller bug, unlike
+            // `BeginRound`/`BeginNewHeight` below, which the caller only
+            // ever sends when it already knows this machine is at the
+            // right step. `Ignored`, not `UnexpectedEvent`, matching the
+            // treatment every `QuorumCertificate`-carrying event already
+            // gets.
+            (_, ConsensusEvent::ProposeTimeout { height, .. }) => {
+                self.check_height(height)?;
+                Ok(ConsensusAction::Ignored {
+                    reason: "propose timeout received while not in step Propose",
+                })
+            }
+            (_, ConsensusEvent::PrevoteTimeout { height, .. }) => {
+                self.check_height(height)?;
+                Ok(ConsensusAction::Ignored {
+                    reason: "prevote timeout received while not in step Prevote",
+                })
+            }
+            (_, ConsensusEvent::PrecommitTimeout { height, .. }) => {
+                self.check_height(height)?;
+                Ok(ConsensusAction::Ignored {
+                    reason: "precommit timeout received while not in step Precommit",
+                })
+            }
+
             (step, _) => Err(ConsensusError::UnexpectedEvent { step }),
         }
     }
@@ -241,11 +325,9 @@ impl ConsensusState {
     /// R9's timeout/nil-quorum half and R10's round-skip half share
     /// this: `round = round + 1` (or, for round skip, `round =
     /// round'`), `step = Timeout`, `locked_*`/`valid_*` untouched
-    /// (the entire reason locking exists). Only the per-round
-    /// bookkeeping (`round_validated_proposal`) resets — it is not
-    /// one of the ADR's own named invariant-bearing fields, so
-    /// resetting it does not violate "nothing resets within a
-    /// height."
+    /// (the entire reason locking exists). `validated_proposals` is
+    /// keyed by round and never needs clearing here — see that
+    /// field's own doc comment.
     fn advance_round(&mut self) -> ConsensusResult<ConsensusAction> {
         let next_round = self
             .round
@@ -253,7 +335,6 @@ impl ConsensusState {
             .map_err(|_| ConsensusError::RoundOverflow)?;
         self.round = next_round;
         self.step = ConsensusStep::Timeout;
-        self.round_validated_proposal = None;
         Ok(ConsensusAction::RoundAdvanced { round: next_round })
     }
 
@@ -275,7 +356,6 @@ impl ConsensusState {
         }
         self.round = round;
         self.step = ConsensusStep::Timeout;
-        self.round_validated_proposal = None;
         Ok(ConsensusAction::RoundAdvanced { round })
     }
 
@@ -333,7 +413,7 @@ impl ConsensusState {
                 reason: "prevote polka received before this round reached prevote",
             });
         }
-        if self.round_validated_proposal == Some(qc.target_hash) {
+        if self.validated_proposals.get(&self.round) == Some(&qc.target_hash) {
             Ok(self.apply_polka(qc))
         } else {
             Ok(ConsensusAction::Ignored {
@@ -390,6 +470,14 @@ impl ConsensusState {
         let block_hash = qc.target_hash;
         if self.validated_block_hashes.contains(&block_hash) {
             self.step = ConsensusStep::Finalize;
+            // Clears any stale `NeedBlock` left over from an earlier
+            // `PrecommitQuorum` this validator could not yet act on —
+            // found via ADR-0048's own Verification Requirement 5 (the
+            // independent-implementation diff test): without this, an
+            // unrelated later `BlockFetched` for that earlier pending
+            // hash would still match and replay a second, redundant
+            // `Finalized` action after this height is already done.
+            self.pending_finalization = None;
             Ok(ConsensusAction::Finalized {
                 block_hash,
                 commit_qc: qc,
@@ -1369,13 +1457,61 @@ mod tests {
     #[test]
     fn rejects_an_event_with_no_transition_for_the_current_step() {
         let mut state = fresh();
-        // Still `NewHeight`: a proposal has no defined transition here.
+        // Still `NewHeight`: `BeginRound`/`BeginNewHeight` are the only
+        // events this scoping still treats as a caller bug when the step
+        // doesn't match (`Proposal`/`*Timeout` get `Ignored` instead, see
+        // the test below).
         assert_eq!(
-            state.apply(proposal(0, BLOCK_A, true)),
+            state.apply(ConsensusEvent::BeginNewHeight),
             Err(ConsensusError::UnexpectedEvent {
                 step: ConsensusStep::NewHeight
             })
         );
+    }
+
+    #[test]
+    fn ignores_a_proposal_or_timeout_delivered_at_the_wrong_step() {
+        let mut state = fresh();
+        // Still `NewHeight`: a proposal and every `*Timeout` arriving here
+        // are stale network/timer messages, not a caller bug (ADR-0048,
+        // "Decided: Certificate Routing In `hn-node`" — found via the
+        // independent-implementation diff test, ADR-0048's own
+        // Verification Requirement 5).
+        assert_eq!(
+            state.apply(proposal(0, BLOCK_A, true)),
+            Ok(ConsensusAction::Ignored {
+                reason: "proposal received while not in step Propose",
+            })
+        );
+        assert_eq!(
+            state.apply(ConsensusEvent::ProposeTimeout {
+                height: height(),
+                round: Round::FIRST,
+            }),
+            Ok(ConsensusAction::Ignored {
+                reason: "propose timeout received while not in step Propose",
+            })
+        );
+        assert_eq!(
+            state.apply(ConsensusEvent::PrevoteTimeout {
+                height: height(),
+                round: Round::FIRST,
+            }),
+            Ok(ConsensusAction::Ignored {
+                reason: "prevote timeout received while not in step Prevote",
+            })
+        );
+        assert_eq!(
+            state.apply(ConsensusEvent::PrecommitTimeout {
+                height: height(),
+                round: Round::FIRST,
+            }),
+            Ok(ConsensusAction::Ignored {
+                reason: "precommit timeout received while not in step Precommit",
+            })
+        );
+        // None of these stale deliveries actually moved the state machine.
+        assert_eq!(state.step, ConsensusStep::NewHeight);
     }
 
     #[test]
