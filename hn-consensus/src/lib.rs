@@ -87,7 +87,7 @@ pub use event::{ConsensusEvent, ConsensusTarget};
 pub use leader::round_proposer;
 pub use state::ConsensusState;
 pub use step::ConsensusStep;
-pub use vote_pool::VotePool;
+pub use vote_pool::{EquivocationEvidence, VotePool};
 
 #[cfg(test)]
 mod tests {

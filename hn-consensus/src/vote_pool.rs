@@ -47,6 +47,20 @@ fn has_quorum(signed_voting_power: u128, total_voting_power: u128) -> bool {
     signed_voting_power.saturating_mul(3) > total_voting_power.saturating_mul(2)
 }
 
+/// Proof that a validator signed two different targets at the same
+/// `(height, round, vote_type)` (ADR-0048, "Decided: Equivocation
+/// Evidence"). Scoped to votes only — a proposer sending two
+/// different proposals for the same `(height, round)` is a separate
+/// equivocation class (ADR-0048, "Decided: Proposer Duties"), tracked
+/// by whatever receives proposals, not by this pool.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EquivocationEvidence {
+    /// The first vote this pool saw at the key both votes share.
+    pub vote_a: ConsensusVote,
+    /// The later, conflicting vote from the same signer.
+    pub vote_b: ConsensusVote,
+}
+
 #[derive(Debug, Default)]
 struct Tally {
     /// `bit_position -> signature`, one entry per distinct signer.
@@ -74,9 +88,21 @@ struct Tally {
 /// pruned — an accepted simplification for this pass, not a leak this
 /// type's own callers are expected to work around; see ADR-0037's own
 /// "Explicitly Not Resolved."
+///
+/// `first_vote` is ADR-0048's own "Decided: Equivocation Evidence":
+/// per `(height, round, vote_type, bit_position)`, the first verified
+/// vote seen, regardless of target. A later vote at the same key for
+/// the *same* target is idempotent (falls through to the normal
+/// tally below); for a *different* target it is diverted into
+/// [`EquivocationEvidence`] instead of ever being tallied — safe for
+/// quorum arithmetic either way, since a Byzantine validator gains
+/// nothing by equivocating (it is never double-counted), and an
+/// honest one never does.
 #[derive(Debug, Default)]
 pub struct VotePool {
     rounds: HashMap<RoundKey, HashMap<TargetKey, Tally>>,
+    first_vote: HashMap<RoundKey, HashMap<usize, (TargetKey, ConsensusVote)>>,
+    equivocations: Vec<EquivocationEvidence>,
 }
 
 impl VotePool {
@@ -84,6 +110,12 @@ impl VotePool {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Every [`EquivocationEvidence`] recorded so far, oldest first.
+    #[must_use]
+    pub fn equivocations(&self) -> &[EquivocationEvidence] {
+        &self.equivocations
     }
 
     /// Records `vote`'s signature at `bit_position` (its signer's index
@@ -94,11 +126,15 @@ impl VotePool {
     ///
     /// Idempotent for a repeated `bit_position` against the same target:
     /// a duplicate vote from the same signer does not double-count its
-    /// voting power. Returns the newly-formed [`QuorumCertificate`] the
-    /// first time this `(height, round, vote_type, target)`'s signed
-    /// voting power crosses the quorum threshold — `None` on every
-    /// other call, including every later call for a target that already
-    /// crossed it.
+    /// voting power. A `bit_position` that has already voted for a
+    /// *different* target at this same `(height, round, vote_type)` is
+    /// recorded as [`EquivocationEvidence`] instead — not tallied at
+    /// all, so it can never itself produce a certificate. Returns the
+    /// newly-formed [`QuorumCertificate`] the first time this
+    /// `(height, round, vote_type, target)`'s signed voting power
+    /// crosses the quorum threshold — `None` on every other call,
+    /// including every later call for a target that already crossed
+    /// it.
     pub fn insert(
         &mut self,
         vote: &ConsensusVote,
@@ -117,6 +153,19 @@ impl VotePool {
             target_type_tag: target_type_tag(payload.target_type),
             target_hash: payload.target_hash,
         };
+
+        let first_votes = self.first_vote.entry(round_key).or_default();
+        if let Some((existing_target, existing_vote)) = first_votes.get(&bit_position) {
+            if *existing_target != target_key {
+                self.equivocations.push(EquivocationEvidence {
+                    vote_a: existing_vote.clone(),
+                    vote_b: vote.clone(),
+                });
+                return None;
+            }
+        } else {
+            first_votes.insert(bit_position, (target_key, vote.clone()));
+        }
 
         let tally = self
             .rounds
@@ -244,6 +293,106 @@ mod tests {
         assert!(pool.insert(&vote([0x03; 32], 3)?, 2, 100, 300, 3).is_some());
         // A fourth signer's vote for the same already-certified target.
         assert!(pool.insert(&vote([0x04; 32], 4)?, 3, 100, 400, 4).is_none());
+        Ok(())
+    }
+
+    fn vote_for(
+        validator_id: [u8; 32],
+        seed: u8,
+        target_hash: [u8; 32],
+    ) -> Result<ConsensusVote, Box<dyn std::error::Error>> {
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [seed; 32]);
+        let payload = VoteSigningPayloadV1 {
+            vote_type: VoteType::Prevote,
+            chain_id: 1,
+            network_id: 1,
+            epoch: Epoch::new(0),
+            height: BlockHeight::new(1),
+            round: Round::new(0),
+            validator_set_commitment: VSC,
+            validator_id,
+            target_type: VoteTargetType::Block,
+            target_hash,
+            vote_metadata: Vec::new(),
+        };
+        let digest = payload.signing_digest()?;
+        Ok(ConsensusVote {
+            payload,
+            signature: SignatureEnvelope {
+                algorithm_id: keypair.key_descriptor().algorithm_id(),
+                key_reference: None,
+                signature: keypair.sign(&digest).to_vec(),
+            },
+        })
+    }
+
+    const OTHER_BLOCK: [u8; 32] = [0xbb; 32];
+
+    #[test]
+    fn a_second_vote_for_a_different_target_is_recorded_as_equivocation_not_tallied()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut pool = VotePool::new();
+        let first = vote_for([0x01; 32], 1, BLOCK)?;
+        let second = vote_for([0x01; 32], 1, OTHER_BLOCK)?;
+
+        assert!(pool.insert(&first, 0, 100, 300, 3).is_none());
+        // Same signer (bit_position 0), different target: diverted to
+        // evidence, never tallied toward OTHER_BLOCK's own quorum.
+        assert!(pool.insert(&second, 0, 100, 300, 3).is_none());
+
+        let evidence = pool.equivocations();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].vote_a, first);
+        assert_eq!(evidence[0].vote_b, second);
+
+        // The equivocating signer's power never counted toward
+        // OTHER_BLOCK: two more honest signers for it still fall
+        // short of quorum (200 of 300).
+        assert!(
+            pool.insert(&vote_for([0x02; 32], 2, OTHER_BLOCK)?, 1, 100, 300, 3)
+                .is_none()
+        );
+        assert!(
+            pool.insert(&vote_for([0x03; 32], 3, OTHER_BLOCK)?, 2, 100, 300, 3)
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn repeating_the_same_target_is_not_equivocation() -> Result<(), Box<dyn std::error::Error>> {
+        let mut pool = VotePool::new();
+        let first = vote([0x01; 32], 1)?;
+        assert!(pool.insert(&first, 0, 100, 300, 3).is_none());
+        // The exact same vote again.
+        assert!(pool.insert(&first, 0, 100, 300, 3).is_none());
+        assert!(pool.equivocations().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn equivocation_is_independent_per_round_key() -> Result<(), Box<dyn std::error::Error>> {
+        let mut pool = VotePool::new();
+        let round_0 = vote_for([0x01; 32], 1, BLOCK)?;
+        assert!(pool.insert(&round_0, 0, 100, 300, 3).is_none());
+
+        // Same signer, same bit position, but a genuinely different
+        // round: a different target there is not equivocation.
+        let mut other_round_payload = round_0.payload.clone();
+        other_round_payload.round = Round::new(1);
+        other_round_payload.target_hash = OTHER_BLOCK;
+        let digest = other_round_payload.signing_digest()?;
+        let keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [1; 32]);
+        let round_1 = ConsensusVote {
+            payload: other_round_payload,
+            signature: SignatureEnvelope {
+                algorithm_id: keypair.key_descriptor().algorithm_id(),
+                key_reference: None,
+                signature: keypair.sign(&digest).to_vec(),
+            },
+        };
+        assert!(pool.insert(&round_1, 0, 100, 300, 3).is_none());
+        assert!(pool.equivocations().is_empty());
         Ok(())
     }
 }
