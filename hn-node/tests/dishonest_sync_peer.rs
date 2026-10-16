@@ -21,8 +21,8 @@ mod support;
 use std::time::Duration;
 
 use support::{
-    NodeProcess, TestResult, height_field, spawn_dishonest_sync_peer, spawn_node,
-    wait_until_all_log, write_devnet_genesis,
+    NodeProcess, TestResult, height_field, reached_at_least_height, spawn_dishonest_sync_peer,
+    spawn_node, wait_until_all_log, write_devnet_genesis,
 };
 
 const VALIDATOR_COUNT: u8 = 4;
@@ -112,10 +112,7 @@ fn a_node_rejects_a_forged_block_switches_peers_and_still_catches_up() -> TestRe
         let node_refs: Vec<&NodeProcess> = nodes.iter().collect();
         let lines = wait_until_all_log(
             &node_refs,
-            |line| {
-                line.starts_with("FINALIZED height=")
-                    && height_field(line).is_ok_and(|height| height >= MINIMUM_SURVIVING_HEIGHT)
-            },
+            |line| reached_at_least_height(line, MINIMUM_SURVIVING_HEIGHT),
             WAIT,
         )?;
         lines
@@ -148,10 +145,7 @@ fn a_node_rejects_a_forged_block_switches_peers_and_still_catches_up() -> TestRe
     // at all.
     let caught_up_lines = wait_until_all_log(
         &[late_node_ref],
-        |line| {
-            line.starts_with("FINALIZED height=")
-                && height_field(line).is_ok_and(|height| height >= surviving_height)
-        },
+        |line| reached_at_least_height(line, surviving_height),
         WAIT,
     )?;
     height_field(&caught_up_lines[0])?;

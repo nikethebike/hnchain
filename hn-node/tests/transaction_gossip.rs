@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use hn_network::{Channel, MessageType};
 use support::{
-    NETWORK_ID, TestResult, connect_handshake_and_send, hex, signed_reserve_transfer, spawn_node,
-    wait_until_all_log, write_devnet_genesis,
+    NETWORK_ID, TestResult, connect_handshake_and_send, hex, reached_exact_height,
+    signed_reserve_transfer, spawn_node, wait_until_all_log, write_devnet_genesis,
 };
 
 const VALIDATOR_COUNT: u8 = 2;
@@ -64,11 +64,7 @@ fn a_transaction_injected_into_one_node_gossips_to_another() -> TestResult {
     // not a gap in the gossip logic itself.
     {
         let node_refs: Vec<&support::NodeProcess> = nodes.iter().collect();
-        wait_until_all_log(
-            &node_refs,
-            |line| line.starts_with("FINALIZED height=1 "),
-            WAIT,
-        )?;
+        wait_until_all_log(&node_refs, |line| reached_exact_height(line, 1), WAIT)?;
     }
 
     let envelope = signed_reserve_transfer(RECIPIENT, 100, 0)?;

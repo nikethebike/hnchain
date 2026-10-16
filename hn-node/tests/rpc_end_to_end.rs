@@ -20,9 +20,9 @@ use std::time::Duration;
 
 use hn_crypto::account_address_body;
 use support::{
-    NETWORK_ID, NodeProcess, TestResult, height_field, http_get_json, http_post_json, listen_addr,
-    reserve_keypair, signed_reserve_transfer, spawn_node_with_rpc_listen, wait_until_all_log,
-    wait_until_rpc, write_devnet_genesis,
+    NETWORK_ID, NodeProcess, TestResult, http_get_json, http_post_json, listen_addr,
+    reached_at_least_height, reached_exact_height, reserve_keypair, signed_reserve_transfer,
+    spawn_node_with_rpc_listen, wait_until_all_log, wait_until_rpc, write_devnet_genesis,
 };
 
 const VALIDATOR_COUNT: u8 = 4;
@@ -77,11 +77,7 @@ fn rpc_submission_cross_node_balances_status_growth_and_restart_syncing() -> Tes
     }
     {
         let node_refs: Vec<&NodeProcess> = nodes.iter().collect();
-        wait_until_all_log(
-            &node_refs,
-            |line| line.starts_with("FINALIZED height=1 "),
-            WAIT,
-        )?;
+        wait_until_all_log(&node_refs, |line| reached_exact_height(line, 1), WAIT)?;
     }
 
     let node_a_rpc = listen_addr(RPC_BASE_PORT, 0);
@@ -172,10 +168,7 @@ fn rpc_submission_cross_node_balances_status_growth_and_restart_syncing() -> Tes
         let node_refs: Vec<&NodeProcess> = nodes.iter().collect();
         wait_until_all_log(
             &node_refs,
-            |line| {
-                line.starts_with("FINALIZED height=")
-                    && height_field(line).is_ok_and(|height| height >= MINIMUM_SURVIVING_HEIGHT)
-            },
+            |line| reached_at_least_height(line, MINIMUM_SURVIVING_HEIGHT),
             WAIT,
         )?;
     }

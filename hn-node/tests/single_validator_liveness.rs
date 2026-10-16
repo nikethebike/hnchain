@@ -20,7 +20,10 @@ mod support;
 
 use std::time::Duration;
 
-use support::{TestResult, height_field, spawn_node, wait_until_all_log, write_devnet_genesis};
+use support::{
+    TestResult, height_field, reached_at_least_height, spawn_node, wait_until_all_log,
+    write_devnet_genesis,
+};
 
 const VALIDATOR_COUNT: u8 = 1;
 const BASE_PORT: u16 = 33_000;
@@ -61,10 +64,7 @@ fn a_single_validator_reaches_a_high_height_without_overflowing_its_stack() -> T
 
     let lines = wait_until_all_log(
         &[&node],
-        |line| {
-            line.starts_with("FINALIZED height=")
-                && height_field(line).is_ok_and(|height| height >= TARGET_HEIGHT)
-        },
+        |line| reached_at_least_height(line, TARGET_HEIGHT),
         WAIT,
     )?;
     let reached = height_field(&lines[0])?;

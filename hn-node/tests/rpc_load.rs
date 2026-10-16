@@ -20,8 +20,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use support::{
-    NodeProcess, TestResult, height_field, http_get_json, listen_addr, spawn_node_with_rpc_listen,
-    wait_until_all_log, write_devnet_genesis,
+    NodeProcess, TestResult, http_get_json, listen_addr, reached_at_least_height,
+    reached_exact_height, spawn_node_with_rpc_listen, wait_until_all_log, write_devnet_genesis,
 };
 
 const VALIDATOR_COUNT: u8 = 2;
@@ -69,11 +69,7 @@ fn consensus_keeps_its_own_pace_while_rpc_is_flooded_with_concurrent_requests() 
     }
     {
         let node_refs: Vec<&NodeProcess> = nodes.iter().collect();
-        wait_until_all_log(
-            &node_refs,
-            |line| line.starts_with("FINALIZED height=1 "),
-            WAIT,
-        )?;
+        wait_until_all_log(&node_refs, |line| reached_exact_height(line, 1), WAIT)?;
     }
 
     // FLOOD_THREADS clients, each hammering GET /v1/status back to
@@ -117,10 +113,7 @@ fn consensus_keeps_its_own_pace_while_rpc_is_flooded_with_concurrent_requests() 
         let node_refs: Vec<&NodeProcess> = nodes.iter().collect();
         wait_until_all_log(
             &node_refs,
-            |line| {
-                line.starts_with("FINALIZED height=")
-                    && height_field(line).is_ok_and(|height| height >= TARGET_HEIGHT)
-            },
+            |line| reached_at_least_height(line, TARGET_HEIGHT),
             WAIT,
         )?;
     }

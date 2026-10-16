@@ -26,8 +26,8 @@ use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
 use support::{
-    NodeProcess, TestResult, listen_addr, spawn_node, spawn_node_with_rpc_listen,
-    wait_until_all_log, write_devnet_genesis,
+    NodeProcess, TestResult, listen_addr, reached_exact_height, spawn_node,
+    spawn_node_with_rpc_listen, wait_until_all_log, write_devnet_genesis,
 };
 
 const VALIDATOR_COUNT: u8 = 2;
@@ -104,11 +104,7 @@ fn the_node_does_not_listen_for_rpc_without_the_flag() -> TestResult {
         )?);
     }
     let node_refs: Vec<&NodeProcess> = nodes.iter().collect();
-    wait_until_all_log(
-        &node_refs,
-        |line| line.starts_with("FINALIZED height=1 "),
-        WAIT,
-    )?;
+    wait_until_all_log(&node_refs, |line| reached_exact_height(line, 1), WAIT)?;
 
     for validator_index in 0..VALIDATOR_COUNT {
         let rpc_addr = listen_addr(RPC_BASE_PORT_ABSENT, validator_index);
@@ -156,7 +152,7 @@ fn the_node_answers_rpc_status_when_the_flag_is_given() -> TestResult {
 
     wait_until_all_log(
         &[&node0, &node1],
-        |line| line.starts_with("FINALIZED height=1 "),
+        |line| reached_exact_height(line, 1),
         WAIT,
     )?;
 

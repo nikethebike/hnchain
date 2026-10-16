@@ -22,8 +22,9 @@ use std::time::Duration;
 
 use hn_network::{Channel, MessageType};
 use support::{
-    NodeProcess, TestResult, connect_handshake_and_send, height_field, signed_reserve_transfer,
-    spawn_node, state_root_field, wait_until_all_log, write_devnet_genesis,
+    NodeProcess, TestResult, connect_handshake_and_send, height_field, reached_at_least_height,
+    reached_exact_height, signed_reserve_transfer, spawn_node, state_root_field,
+    wait_until_all_log, write_devnet_genesis,
 };
 
 const VALIDATOR_COUNT: u8 = 4;
@@ -70,11 +71,7 @@ fn a_restarted_validator_catches_up_to_the_same_state_root_after_real_transfers(
     // `transaction_gossip.rs`'s own test already established.
     {
         let node_refs: Vec<&NodeProcess> = nodes.iter().collect();
-        wait_until_all_log(
-            &node_refs,
-            |line| line.starts_with("FINALIZED height=1 "),
-            WAIT,
-        )?;
+        wait_until_all_log(&node_refs, |line| reached_exact_height(line, 1), WAIT)?;
     }
 
     let node0_addr = support::listen_addr(BASE_PORT, 0);
@@ -132,10 +129,7 @@ fn a_restarted_validator_catches_up_to_the_same_state_root_after_real_transfers(
         let node_refs: Vec<&NodeProcess> = nodes.iter().collect();
         let lines = wait_until_all_log(
             &node_refs,
-            |line| {
-                line.starts_with("FINALIZED height=")
-                    && height_field(line).is_ok_and(|height| height >= MINIMUM_SURVIVING_HEIGHT)
-            },
+            |line| reached_at_least_height(line, MINIMUM_SURVIVING_HEIGHT),
             WAIT,
         )?;
         lines

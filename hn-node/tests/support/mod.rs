@@ -310,14 +310,42 @@ pub fn block_field(finalized_line: &str) -> TestResult<&str> {
         .ok_or_else(|| "FINALIZED line missing a block= field".into())
 }
 
-/// Extracts the numeric `height=` value from a `FINALIZED ...` log
-/// line.
+/// Extracts the numeric `height=` value from a `FINALIZED ...` (or
+/// `SYNCED ...`) log line.
 pub fn height_field(finalized_line: &str) -> TestResult<u64> {
     let raw = finalized_line
         .split_whitespace()
         .find_map(|field| field.strip_prefix("height="))
         .ok_or("FINALIZED line missing a height= field")?;
     Ok(raw.parse()?)
+}
+
+/// Whether `line` is either of the two ways a real node reports
+/// having reached a given height: `"FINALIZED height=N ..."` (live
+/// consensus, `act_on`) or `"SYNCED height=N ..."` (historical sync,
+/// ADR-0044). A validator that happens to start up measurably later
+/// than its peers can receive even its very first few heights only
+/// through sync, never finalizing them live itself -- found via a
+/// real CI failure, not simulated: a validator whose own log never
+/// once said `"FINALIZED height=1 "` even after reaching height 560+,
+/// because every one of its own early heights arrived as `SYNCED`
+/// instead. A caller checking only for the `FINALIZED` line can wait
+/// forever on such a node even though it has genuinely reached, and
+/// moved past, that height.
+pub fn is_height_report(line: &str) -> bool {
+    line.starts_with("FINALIZED height=") || line.starts_with("SYNCED height=")
+}
+
+/// Whether `line` reports reaching exactly `height`, via either path
+/// [`is_height_report`] recognizes.
+pub fn reached_exact_height(line: &str, height: u64) -> bool {
+    is_height_report(line) && height_field(line).ok() == Some(height)
+}
+
+/// Whether `line` reports reaching at least `height`, via either path
+/// [`is_height_report`] recognizes.
+pub fn reached_at_least_height(line: &str, height: u64) -> bool {
+    is_height_report(line) && height_field(line).is_ok_and(|reached| reached >= height)
 }
 
 /// Extracts the hex `state_root=` value from a `FINALIZED ...` log
