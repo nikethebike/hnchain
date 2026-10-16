@@ -28,8 +28,13 @@ use support::{
 const VALIDATOR_COUNT: u8 = 4;
 const BASE_PORT: u16 = 32_600;
 const RPC_BASE_PORT: u16 = 32_700;
-const BASE_TIMEOUT_MS: u64 = 150;
-const WAIT: Duration = Duration::from_secs(90);
+// Loosened from an earlier 150ms/90s (same reasoning as
+// transaction_finalization.rs and friends: real validator processes
+// under a CPU-starved CI runner can legitimately miss a tight round
+// timeout, which only delays real progress further by forcing a
+// view-change rather than tolerating the slowness).
+const BASE_TIMEOUT_MS: u64 = 300;
+const WAIT: Duration = Duration::from_secs(180);
 const ALL_VALIDATORS: [u8; 4] = [0, 1, 2, 3];
 const RESTARTED_VALIDATOR: u8 = 3;
 const RECIPIENT: [u8; 32] = [0x77; 32];

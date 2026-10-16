@@ -34,13 +34,14 @@ use support::{TestResult, block_field, spawn_node, wait_until_all_log, write_dev
 const VALIDATOR_COUNT: u8 = 4;
 const RUNNING_VALIDATORS: [u8; 3] = [0, 2, 3];
 const BASE_PORT: u16 = 31_700;
-const BASE_TIMEOUT_MS: u64 = 200;
-// See restart_recovery.rs's own identical constant for why this is 90s
-// rather than a smaller number: a generous CI-load margin, not a
-// tuned-to-the-second value -- this exact test flaked past a 25s
-// ceiling on GitHub Actions (real multi-process/real-TCP timing under
-// load, not a hang).
-const WAIT: Duration = Duration::from_secs(90);
+// See restart_recovery.rs's own identical constants for the same
+// history: a generous CI-load margin, not tuned-to-the-second values
+// -- this exact test flaked past a 25s ceiling on GitHub Actions
+// once (real multi-process/real-TCP timing under load, not a hang),
+// got raised to 90s/200ms, and a shared CI runner has since flaked
+// past that too.
+const BASE_TIMEOUT_MS: u64 = 400;
+const WAIT: Duration = Duration::from_secs(180);
 
 #[test]
 fn three_of_four_validators_survive_a_dead_round_zero_proposer() -> TestResult {

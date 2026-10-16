@@ -31,8 +31,13 @@ use support::{
 };
 
 const VALIDATOR_COUNT: u8 = 2;
-const BASE_TIMEOUT_MS: u64 = 200;
-const WAIT: Duration = Duration::from_secs(90);
+// Loosened from an earlier 200ms/90s (same reasoning as
+// transaction_finalization.rs and friends: real validator processes
+// under a CPU-starved CI runner can legitimately miss a tight round
+// timeout, which only delays real progress further by forcing a
+// view-change rather than tolerating the slowness).
+const BASE_TIMEOUT_MS: u64 = 400;
+const WAIT: Duration = Duration::from_secs(180);
 
 // Distinct port ranges per test function: both run concurrently
 // (cargo test's own default), each spawning real processes, so

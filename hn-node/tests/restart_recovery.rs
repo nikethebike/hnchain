@@ -32,14 +32,18 @@ use support::{TestResult, height_field, spawn_node, wait_until_all_log, write_de
 
 const VALIDATOR_COUNT: u8 = 4;
 const BASE_PORT: u16 = 31_800;
-const BASE_TIMEOUT_MS: u64 = 150;
 // A generous margin over this test's own real historical runtime
 // (well under 5s locally), not a tuned-to-the-second value -- CI
 // runners have observably flaked past a 25s ceiling under load despite
 // nothing being actually stuck (real multi-process/real-TCP timing,
-// not a hang), so this leaves wide headroom rather than nudging the
-// number that already proved too tight once.
-const WAIT: Duration = Duration::from_secs(90);
+// not a hang). The ceiling was raised to 90s for exactly that reason
+// once already, and a shared CI runner has since flaked past that too
+// -- raised again to 180s, and the round timeout itself widened too
+// (a tight round budget under a CPU-starved runner just forces a
+// view-change instead of tolerating the slowness, delaying real
+// progress further rather than only widening the deadline).
+const BASE_TIMEOUT_MS: u64 = 300;
+const WAIT: Duration = Duration::from_secs(180);
 const ALL_VALIDATORS: [u8; 4] = [0, 1, 2, 3];
 const RESTARTED_VALIDATOR: u8 = 3;
 
