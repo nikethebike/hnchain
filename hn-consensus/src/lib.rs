@@ -28,11 +28,19 @@
 //! [`hn_state::QuorumCertificate::verify_signatures`] already draw one
 //! layer down.
 //!
-//! `locked_block`/`highest_qc` (ADR-0034, "Locking rule") are a
-//! deliberate simplification of Tendermint's textbook algorithm, which
-//! tracks `lockedRound`/`validRound` as two separate pairs — merged
-//! into one field here, named explicitly as not yet a byzantine-safe
-//! claim in ADR-0034's own "Explicitly Not Resolved."
+//! [`ConsensusState`]'s own `locked_value`/`locked_round`/
+//! `valid_value`/`valid_round`/`valid_qc` (ADR-0048, "Decided:
+//! ConsensusState v2") are Tendermint's textbook `lockedValue`/
+//! `lockedRound`/`validValue`/`validRound` pairs, tracked separately —
+//! ADR-0034's own merged `locked_block`/`highest_qc` field is
+//! superseded. ADR-0048's own line-by-line audit found the merge was
+//! not actually the safety hole ADR-0034 feared (`highest_qc.round`
+//! was always exactly `lockedRound`); the real holes it closes are
+//! unpersisted voting state across a restart (R1–R11 plus a vote
+//! journal, a later pass), locking without a validated proposal (R6),
+//! no equivocation evidence, no re-proposal of a partial lock's own
+//! `validValue` (R1), no round skipping for a lagging validator
+//! (R10), and no decide-at-any-round (R8).
 //!
 //! [`ConsensusEngine`] (ADR-0035, "Wiring The Consensus Engine To
 //! `hn-state`") is what actually calls the verification/eligibility/

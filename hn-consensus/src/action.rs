@@ -41,4 +41,29 @@ pub enum ConsensusAction {
         /// The height about to begin.
         height: BlockHeight,
     },
+    /// A `precommit` quorum certificate proves `block_hash` final
+    /// (ADR-0048, R8: "decide at any round"), but this validator holds
+    /// no validated proposal for it yet. The caller must fetch and
+    /// validate the block (ADR-0044 sync) and then feed back
+    /// [`crate::ConsensusEvent::BlockFetched`] — this replaces the
+    /// old `SKIPPED finalizing ... (no cached proposal)` dropped-event
+    /// path with an explicit state the machine remembers.
+    NeedBlock {
+        /// The block hash this validator needs before it can finalize.
+        block_hash: Digest,
+        /// The certificate already proving it final, once the block
+        /// itself is in hand.
+        commit_qc: QuorumCertificate,
+    },
+    /// The event was well-formed and consistent with this state
+    /// machine's own rules, but produced no effect — e.g. a `prevote`
+    /// polka for a round this machine has already moved past, or a
+    /// repeat of a vote already recorded (ADR-0048, "Decided:
+    /// Certificate Routing In `hn-node`"). Distinct from `None` so a
+    /// caller or test can tell "nothing to do because redundant" apart
+    /// from "nothing to do because this step genuinely has no action."
+    Ignored {
+        /// Why this event had no effect.
+        reason: &'static str,
+    },
 }

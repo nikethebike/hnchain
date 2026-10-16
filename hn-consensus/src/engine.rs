@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use hn_core::BlockHeight;
+use hn_core::{BlockHeight, Round};
 use hn_crypto::Digest;
 use hn_state::{
     BlockApplicationResult, BlockEnvelope, BlockStore, ConsensusVote, FINALIZED_BLOCK_VERSION_1,
@@ -67,28 +67,40 @@ impl ConsensusEngine {
 
     /// Records `transactions` under `block_hash` (so
     /// [`ConsensusEngine::commit_finalized_block`] can find them if
-    /// this block goes on to finalize) and feeds a `Proposal` event
-    /// into the state machine. Does not itself validate `transactions`
-    /// against `block_hash` or check proposer eligibility (ADR-0011) —
-    /// both are the caller's job before calling this, the same
-    /// "caller already resolved it" boundary every method here draws.
+    /// this block goes on to finalize) and feeds a `Proposal` event,
+    /// for this engine's own current `(height, round)`, into the
+    /// state machine. Does not itself validate `transactions` against
+    /// `block_hash`, run `verify_proposal`, or check proposer
+    /// eligibility (ADR-0011) — all of that is the caller's job
+    /// before calling this; `validated` must be the real result of
+    /// that verification (ADR-0048, "Decided: Boundary"), never
+    /// assumed `true`.
     pub fn handle_proposal(
         &mut self,
         block_hash: Digest,
         transactions: Vec<TransactionEnvelope>,
+        valid_round: Option<Round>,
         justification: Option<QuorumCertificate>,
+        validated: bool,
     ) -> ConsensusResult<ConsensusAction> {
         self.proposed_blocks.insert(block_hash, transactions);
         self.state.apply(ConsensusEvent::Proposal {
+            height: self.state.height,
+            round: self.state.round,
             block_hash,
+            valid_round,
             justification,
+            validated,
         })
     }
 
     /// `Propose` -> `Prevote`, casting a nil prevote. See
     /// [`ConsensusEvent::ProposeTimeout`].
     pub fn propose_timeout(&mut self) -> ConsensusResult<ConsensusAction> {
-        self.state.apply(ConsensusEvent::ProposeTimeout)
+        self.state.apply(ConsensusEvent::ProposeTimeout {
+            height: self.state.height,
+            round: self.state.round,
+        })
     }
 
     /// Verifies `qc`'s signatures ([`QuorumCertificate::verify_signatures`])
@@ -124,13 +136,19 @@ impl ConsensusEngine {
     /// `Prevote` -> `Precommit`, casting a nil precommit. See
     /// [`ConsensusEvent::PrevoteTimeout`].
     pub fn prevote_timeout(&mut self) -> ConsensusResult<ConsensusAction> {
-        self.state.apply(ConsensusEvent::PrevoteTimeout)
+        self.state.apply(ConsensusEvent::PrevoteTimeout {
+            height: self.state.height,
+            round: self.state.round,
+        })
     }
 
     /// `Precommit` -> `Timeout`, advancing the round. See
     /// [`ConsensusEvent::PrecommitTimeout`].
     pub fn precommit_timeout(&mut self) -> ConsensusResult<ConsensusAction> {
-        self.state.apply(ConsensusEvent::PrecommitTimeout)
+        self.state.apply(ConsensusEvent::PrecommitTimeout {
+            height: self.state.height,
+            round: self.state.round,
+        })
     }
 
     /// Verifies one individual vote — [`ConsensusVote::verify`] (the
@@ -494,7 +512,7 @@ mod tests {
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         engine.begin_round()?;
 
-        let action = engine.handle_proposal(BLOCK_A, vec![], None)?;
+        let action = engine.handle_proposal(BLOCK_A, vec![], None, None, true)?;
         assert_eq!(
             action,
             ConsensusAction::Prevote(ConsensusTarget::Block(BLOCK_A))
@@ -515,7 +533,7 @@ mod tests {
 
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         engine.begin_round()?;
-        engine.handle_proposal(BLOCK_A, vec![], None)?;
+        engine.handle_proposal(BLOCK_A, vec![], None, None, true)?;
 
         let prevote_qc = signed_qc(
             VoteType::Prevote,
@@ -531,7 +549,7 @@ mod tests {
             action,
             ConsensusAction::Precommit(ConsensusTarget::Block(BLOCK_A))
         );
-        assert_eq!(engine.state().locked_block, Some(BLOCK_A));
+        assert_eq!(engine.state().locked_value, Some(BLOCK_A));
 
         let precommit_qc = signed_qc(
             VoteType::Precommit,
@@ -566,7 +584,7 @@ mod tests {
 
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         engine.begin_round()?;
-        engine.handle_proposal(BLOCK_A, vec![], None)?;
+        engine.handle_proposal(BLOCK_A, vec![], None, None, true)?;
 
         // Signed by the wrong key -- the store has `stored_keypair`'s
         // key on file for `validator_id`, not `signing_keypair`'s.
@@ -612,7 +630,7 @@ mod tests {
 
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         engine.begin_round()?;
-        engine.handle_proposal(BLOCK_A, vec![], None)?;
+        engine.handle_proposal(BLOCK_A, vec![], None, None, true)?;
         let prevote_qc = signed_qc(
             VoteType::Prevote,
             validator_id,
@@ -810,7 +828,7 @@ mod tests {
 
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         engine.begin_round()?;
-        engine.handle_proposal(BLOCK_A, vec![], None)?;
+        engine.handle_proposal(BLOCK_A, vec![], None, None, true)?;
 
         for (index, (keypair, validator_id)) in signers.iter().enumerate() {
             let vote = cast_vote(*validator_id, keypair, BLOCK_A)?;
@@ -847,7 +865,7 @@ mod tests {
 
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         engine.begin_round()?;
-        engine.handle_proposal(BLOCK_A, vec![], None)?;
+        engine.handle_proposal(BLOCK_A, vec![], None, None, true)?;
         assert!(matches!(
             engine.record_vote(&bad_vote, &store, &records),
             Err(ConsensusError::VoteInvalid(_))

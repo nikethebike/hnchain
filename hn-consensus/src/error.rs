@@ -1,5 +1,6 @@
 use std::fmt;
 
+use hn_core::BlockHeight;
 use hn_crypto::Digest;
 use hn_state::StateError;
 
@@ -70,6 +71,19 @@ pub enum ConsensusError {
     /// [`hn_state::fetch_validator_record`] or
     /// [`hn_state::apply_and_commit_block`].
     StateApplication(StateError),
+    /// An event's own `height` does not equal this state machine's
+    /// current `height` (ADR-0048, "Decided: Boundary"). The caller
+    /// is responsible for routing an event to the right height's own
+    /// state machine; this is a routing bug, not a Byzantine input —
+    /// `hn-node`'s own certificate filter (ADR-0048, "Decided:
+    /// Certificate Routing In `hn-node`") drops a wrong-height
+    /// certificate before it ever reaches here.
+    WrongHeight {
+        /// This state machine's own current height.
+        expected: BlockHeight,
+        /// The height the event actually carried.
+        actual: BlockHeight,
+    },
 }
 
 impl fmt::Display for ConsensusError {
@@ -100,6 +114,14 @@ impl fmt::Display for ConsensusError {
                 write!(formatter, "unknown validator {validator_id:x?}")
             }
             Self::StateApplication(error) => write!(formatter, "state application failed: {error}"),
+            Self::WrongHeight { expected, actual } => {
+                write!(
+                    formatter,
+                    "event height {} does not match this state machine's own height {}",
+                    actual.get(),
+                    expected.get()
+                )
+            }
         }
     }
 }

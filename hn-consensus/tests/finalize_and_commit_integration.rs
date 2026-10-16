@@ -214,7 +214,7 @@ fn engine_finalizes_and_really_commits_a_transfer_through_a_real_backend() -> Te
     let mut engine = ConsensusEngine::new_height(BlockHeight::GENESIS);
     assert_eq!(engine.begin_round()?, ConsensusAction::None);
 
-    let action = engine.handle_proposal(BLOCK_HASH, vec![envelope], None)?;
+    let action = engine.handle_proposal(BLOCK_HASH, vec![envelope], None, None, true)?;
     assert_eq!(
         action,
         ConsensusAction::Prevote(ConsensusTarget::Block(BLOCK_HASH))
@@ -226,7 +226,7 @@ fn engine_finalizes_and_really_commits_a_transfer_through_a_real_backend() -> Te
         action,
         ConsensusAction::Precommit(ConsensusTarget::Block(BLOCK_HASH))
     );
-    assert_eq!(engine.state().locked_block, Some(BLOCK_HASH));
+    assert_eq!(engine.state().locked_value, Some(BLOCK_HASH));
 
     let precommit_qc = signed_qc(VoteType::Precommit, validator_id, &validator_keypair, 0)?;
     let action =
@@ -283,7 +283,7 @@ fn engine_finalizes_and_really_commits_a_transfer_through_a_real_backend() -> Te
             height: BlockHeight::new(1)
         }
     );
-    assert_eq!(engine.state().locked_block, None);
+    assert_eq!(engine.state().locked_value, None);
 
     Ok(())
 }
