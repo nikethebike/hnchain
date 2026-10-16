@@ -32,9 +32,14 @@ const RPC_BASE_PORT: u16 = 32_700;
 // transaction_finalization.rs and friends: real validator processes
 // under a CPU-starved CI runner can legitimately miss a tight round
 // timeout, which only delays real progress further by forcing a
-// view-change rather than tolerating the slowness).
+// view-change rather than tolerating the slowness). A first widening
+// to 300ms/180s still tripped at exactly 180.06s on a later CI rerun
+// -- this test does as much real work as
+// restart_recovery_with_transactions.rs (also 4 validators, also a
+// real restart and resync, plus several RPC round trips on top), so
+// it gets that same wider 240s margin.
 const BASE_TIMEOUT_MS: u64 = 300;
-const WAIT: Duration = Duration::from_secs(180);
+const WAIT: Duration = Duration::from_secs(240);
 const ALL_VALIDATORS: [u8; 4] = [0, 1, 2, 3];
 const RESTARTED_VALIDATOR: u8 = 3;
 const RECIPIENT: [u8; 32] = [0x77; 32];
