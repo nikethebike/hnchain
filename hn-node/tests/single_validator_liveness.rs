@@ -24,9 +24,15 @@ use support::{TestResult, height_field, spawn_node, wait_until_all_log, write_de
 
 const VALIDATOR_COUNT: u8 = 1;
 const BASE_PORT: u16 = 33_000;
+// BASE_TIMEOUT_MS stays as-is (deliberately minimal: this test's own
+// point is reaching TARGET_HEIGHT via self-finalization with no
+// network round-trip at all, not timing robustness). WAIT is widened
+// from an earlier 120s -- observed finishing in 84s on a CI runner
+// that takes a couple of seconds on a quiet machine, well into that
+// smaller budget.
 const BASE_TIMEOUT_MS: u64 = 5;
 const TARGET_HEIGHT: u64 = 1000;
-const WAIT: Duration = Duration::from_secs(120);
+const WAIT: Duration = Duration::from_secs(240);
 
 #[test]
 fn a_single_validator_reaches_a_high_height_without_overflowing_its_stack() -> TestResult {

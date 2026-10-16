@@ -28,8 +28,14 @@ use support::{
 
 const VALIDATOR_COUNT: u8 = 4;
 const BASE_PORT: u16 = 32_200;
-const BASE_TIMEOUT_MS: u64 = 150;
-const WAIT: Duration = Duration::from_secs(90);
+// Loosened from an earlier 150ms/90s (same reasoning as
+// transaction_finalization.rs/rpc_load.rs: observed timing out on a
+// CPU-starved CI runner, passes in a couple of seconds on a quiet
+// machine) -- this test does strictly more real work than either of
+// those (a kill, a real restart and catch-up, and two real transfers
+// across ten-plus blocks), so it gets the widest margin of the three.
+const BASE_TIMEOUT_MS: u64 = 300;
+const WAIT: Duration = Duration::from_secs(240);
 const ALL_VALIDATORS: [u8; 4] = [0, 1, 2, 3];
 const RESTARTED_VALIDATOR: u8 = 3;
 const RECIPIENT: [u8; 32] = [0x66; 32];
