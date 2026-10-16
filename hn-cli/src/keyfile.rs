@@ -221,6 +221,27 @@ mod tests {
         ))
     }
 
+    /// Writes a raw fixture file for a test that is not itself about
+    /// file permissions -- `std::fs::write` alone leaves the file at
+    /// whatever the process's own umask grants (often group/other
+    /// readable on a real Unix machine, e.g. CI's own Linux runner,
+    /// even though never on Windows, which has no such concept at
+    /// all), which `load`'s own `#[cfg(unix)]` permission check would
+    /// then reject before ever reaching the header/seed parsing these
+    /// tests actually exercise.
+    fn write_fixture_with_secure_permissions(
+        path: &std::path::Path,
+        contents: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        std::fs::write(path, contents)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
+    }
+
     #[test]
     fn generate_then_load_reproduces_the_same_keypair() -> Result<(), Box<dyn std::error::Error>> {
         let path = temp_path("round-trip");
@@ -287,7 +308,7 @@ mod tests {
     fn load_rejects_a_malformed_header() -> Result<(), Box<dyn std::error::Error>> {
         let path = temp_path("malformed-header");
         let _ = std::fs::remove_file(&path);
-        std::fs::write(&path, "not-the-right-magic\n")?;
+        write_fixture_with_secure_permissions(&path, "not-the-right-magic\n")?;
 
         let result = load(&path);
         assert!(matches!(result, Err(KeyFileError::MalformedHeader(_))));
@@ -300,7 +321,10 @@ mod tests {
     fn load_rejects_a_wrong_length_seed() -> Result<(), Box<dyn std::error::Error>> {
         let path = temp_path("wrong-length-seed");
         let _ = std::fs::remove_file(&path);
-        std::fs::write(&path, "hnchain-key-v1\nrole: account-signing\nseed: aabb\n")?;
+        write_fixture_with_secure_permissions(
+            &path,
+            "hnchain-key-v1\nrole: account-signing\nseed: aabb\n",
+        )?;
 
         let result = load(&path);
         assert!(matches!(result, Err(KeyFileError::InvalidSeed)));
@@ -314,9 +338,9 @@ mod tests {
         let path = temp_path("uppercase-seed");
         let _ = std::fs::remove_file(&path);
         let uppercase_seed = "AB".repeat(32);
-        std::fs::write(
+        write_fixture_with_secure_permissions(
             &path,
-            format!("hnchain-key-v1\nrole: account-signing\nseed: {uppercase_seed}\n"),
+            &format!("hnchain-key-v1\nrole: account-signing\nseed: {uppercase_seed}\n"),
         )?;
 
         let result = load(&path);
@@ -331,9 +355,9 @@ mod tests {
         let path = temp_path("non-hex-seed");
         let _ = std::fs::remove_file(&path);
         let bad_seed = "z".repeat(64);
-        std::fs::write(
+        write_fixture_with_secure_permissions(
             &path,
-            format!("hnchain-key-v1\nrole: account-signing\nseed: {bad_seed}\n"),
+            &format!("hnchain-key-v1\nrole: account-signing\nseed: {bad_seed}\n"),
         )?;
 
         let result = load(&path);
