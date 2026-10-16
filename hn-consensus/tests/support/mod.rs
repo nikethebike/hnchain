@@ -366,12 +366,27 @@ impl Network {
         let precommit_qc = self.aggregate(VoteType::Precommit, round, &precommits);
 
         // --- Decide ---
+        //
+        // Every validator whose own state is actually driven (not
+        // `Silent`/`VoteForAnything`, which never touch it at all --
+        // see the `BeginRound` step above) must still receive this
+        // stage's own event, Byzantine or not: skipping it here, the
+        // way an earlier version of this harness did, left a
+        // misbehaving-but-state-driven validator (an
+        // `EquivocatingProposer` on a round it did not propose)
+        // stuck at `Precommit` forever, since nothing ever resolved
+        // it -- the very next round's own `BeginRound` then hit
+        // `UnexpectedEvent` against a step it has no transition from.
+        // Found by the exhaustive explorer (a later commit in this
+        // phase), not reasoned out in advance. Only an `Honest`
+        // validator's own resulting `Finalized` is ever asserted
+        // against the real safety property -- what a Byzantine one
+        // reports proves nothing about it.
         let mut finalized: Option<Digest> = None;
         let mut need_block: Option<(Digest, QuorumCertificate)> = None;
         for index in 0..self.validators.len() {
-            if self.validators[index].behavior != Behavior::Honest {
-                // A Byzantine validator's own "finalization" proves
-                // nothing about the real safety property.
+            let behavior = self.validators[index].behavior.clone();
+            if matches!(behavior, Behavior::Silent | Behavior::VoteForAnything(_)) {
                 continue;
             }
             let action = match &precommit_qc {
@@ -382,6 +397,9 @@ impl Network {
                     .state
                     .apply(ConsensusEvent::PrecommitTimeout { height, round })?,
             };
+            if behavior != Behavior::Honest {
+                continue;
+            }
             match action {
                 ConsensusAction::Finalized { block_hash, .. } => match finalized {
                     Some(existing) if existing != block_hash => {
@@ -409,9 +427,14 @@ impl Network {
 
         if let Some((needed_hash, _)) = need_block {
             // Resolves immediately: this simulator has no network
-            // layer to delay an ADR-0044 sync through.
+            // layer to delay an ADR-0044 sync through. Same
+            // drives-real-state criterion as above, for the same
+            // reason: a state-driven Byzantine validator left
+            // without this event would stay stuck at `Precommit`
+            // (`NeedBlock` never changes `step` on its own).
             for index in 0..self.validators.len() {
-                if self.validators[index].behavior != Behavior::Honest {
+                let behavior = self.validators[index].behavior.clone();
+                if matches!(behavior, Behavior::Silent | Behavior::VoteForAnything(_)) {
                     continue;
                 }
                 let action = self.validators[index]
@@ -419,6 +442,9 @@ impl Network {
                     .apply(ConsensusEvent::BlockFetched {
                         block_hash: needed_hash,
                     })?;
+                if behavior != Behavior::Honest {
+                    continue;
+                }
                 if let ConsensusAction::Finalized { block_hash, .. } = action {
                     match finalized {
                         Some(existing) if existing != block_hash => {
@@ -449,7 +475,7 @@ impl Network {
         &mut self,
         start_round: Round,
         max_rounds: u64,
-        delivery_for_round: impl Fn(Round) -> Delivery,
+        mut delivery_for_round: impl FnMut(Round) -> Delivery,
     ) -> TestResult<Digest> {
         let mut round = start_round;
         for _ in 0..max_rounds {
