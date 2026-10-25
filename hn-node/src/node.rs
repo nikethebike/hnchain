@@ -591,29 +591,20 @@ fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) ->
                 }
             }
             NodeEvent::ProposeTimeout { height, round } => {
-                if ctx.syncing.is_none()
-                    && is_current(ctx, height, round)
-                    && ctx.engine.state().step == hn_consensus::ConsensusStep::Propose
-                {
-                    let action = ctx.engine.propose_timeout()?;
+                if ctx.syncing.is_none() && ctx.engine.state().height.get() == height {
+                    let action = ctx.engine.propose_timeout(Round::new(round))?;
                     act_on(ctx, action)?;
                 }
             }
             NodeEvent::PrevoteTimeout { height, round } => {
-                if ctx.syncing.is_none()
-                    && is_current(ctx, height, round)
-                    && ctx.engine.state().step == hn_consensus::ConsensusStep::Prevote
-                {
-                    let action = ctx.engine.prevote_timeout()?;
+                if ctx.syncing.is_none() && ctx.engine.state().height.get() == height {
+                    let action = ctx.engine.prevote_timeout(Round::new(round))?;
                     act_on(ctx, action)?;
                 }
             }
             NodeEvent::PrecommitTimeout { height, round } => {
-                if ctx.syncing.is_none()
-                    && is_current(ctx, height, round)
-                    && ctx.engine.state().step == hn_consensus::ConsensusStep::Precommit
-                {
-                    let action = ctx.engine.precommit_timeout()?;
+                if ctx.syncing.is_none() && ctx.engine.state().height.get() == height {
+                    let action = ctx.engine.precommit_timeout(Round::new(round))?;
                     act_on(ctx, action)?;
                 }
             }
@@ -768,28 +759,20 @@ fn node_busy_response() -> HttpResponse {
     hn_rpc::error_response(RpcError::NodeBusy.status_code(), RpcError::NodeBusy.code())
 }
 
-fn is_current(ctx: &Ctx, height: u64, round: u64) -> bool {
-    ctx.engine.state().height.get() == height && ctx.engine.state().round.get() == round
-}
-
-// Every timeout branch above checks *both* `is_current` (height/round)
-// *and* the specific step the timeout is for -- (height, round) alone
-// is not enough: entering `Propose` always schedules a
-// `ProposeTimeout`, but a node that is also this round's proposer
-// self-proposes and casts a `Prevote` synchronously, in the same call,
-// before that timer ever fires -- leaving a stale `ProposeTimeout` for
-// the *same* (height, round) pending while the engine has already
-// moved on to `Prevote`. Found by running a genuinely slow round (a
-// single node with no peers, which can never reach quorum and so never
-// advances height/round quickly): `is_current` alone let the stale
-// timer through and `ConsensusEngine::propose_timeout` correctly
-// rejected it with `UnexpectedEvent { step: Prevote }` -- a real,
-// closed-state-machine safety net catching a genuine driving-loop bug,
-// not a false alarm. Multi-node happy-path runs hid this because a
-// real quorum typically arrives well within one timeout window, so by
-// the time a stale timer fires the round has already advanced past it
-// and the weaker `is_current`-only check already rejected it, just for
-// the wrong reason.
+// `is_current`/`expects_qc` (the old height+round+step caller-side
+// filter) are gone (ADR-0048, "Decided: Certificate Routing In
+// `hn-node`"): every timeout/vote-quorum/proposal handler below now
+// checks only height before calling into `ctx.engine`, and passes its
+// own real round straight through. Round and step scoping — including
+// the exact same-height/round, different-step staleness this file's
+// own history found this way (a self-proposing node that casts its
+// own prevote synchronously, before its just-scheduled `ProposeTimeout`
+// ever fires, leaving that timer stale for a step the engine already
+// left) — is the machine's own job now: every `ConsensusEngine` method
+// below returns `ConsensusAction::Ignored` for a stale round and/or
+// step rather than `ConsensusError::UnexpectedEvent`, since each one
+// was changed (ADR-0048, phases 1 and 4) to carry its own round instead
+// of silently substituting the engine's current one.
 
 fn send_hello(ctx: &Ctx, conn_id: u64, hello: &Hello) -> NodeResult<()> {
     let Some(link) = ctx.links.get(&conn_id) else {
@@ -855,7 +838,7 @@ fn handle_peer_message(
                     MessageType::QuorumCertificateMessage,
                     qc.encode()?,
                 )?;
-                if expects_qc(ctx, &qc) {
+                if qc_height_matches(ctx, &qc) {
                     let action =
                         ctx.engine
                             .handle_quorum_certificate(qc, &ctx.store, &ctx.ordered_ids)?;
@@ -869,7 +852,7 @@ fn handle_peer_message(
             if ctx.syncing.is_some() {
                 return Ok(());
             }
-            if expects_qc(ctx, &qc) {
+            if qc_height_matches(ctx, &qc) {
                 let action =
                     ctx.engine
                         .handle_quorum_certificate(qc, &ctx.store, &ctx.ordered_ids)?;
@@ -883,28 +866,28 @@ fn handle_peer_message(
             if ctx.syncing.is_some() {
                 return Ok(());
             }
-            // A proposal that does not target this engine's own exact
-            // current (height, round, step) is either stale (a round
-            // already left behind) or ahead of it -- either way it has
-            // no defined transition from wherever the engine actually
-            // is right now, so it is silently dropped rather than fed
-            // to `ConsensusEngine::handle_proposal` (ADR-0034's own
-            // closed, total `apply` would reject it as
-            // `UnexpectedEvent`). `BlockHeader.height`/`.round`
-            // (ADR-0039's own reason for self-describing height/round
-            // survives the move from a bare top-level field into the
-            // header itself, ADR-0042) make this an exact check, not
-            // the weaker step-only guard this branch used before
-            // ADR-0039.
-            if header.height.get() == ctx.engine.state().height.get()
-                && header.round.get() == ctx.engine.state().round.get()
-                && ctx.engine.state().step == hn_consensus::ConsensusStep::Propose
-            {
+            // ADR-0048, "Decided: Certificate Routing In `hn-node`":
+            // only height is filtered here. A proposal for a round the
+            // engine already left behind, or has not reached yet, is
+            // still fully verified below and handed to
+            // `ConsensusEngine::handle_proposal`, which owns round/step
+            // scoping itself (R2, R3) and returns `Ignored` for one
+            // that is not for its own current round/step -- but still
+            // records it as a *validated* proposal either way (R8's
+            // own "any round" decide needs exactly this, found while
+            // wiring this: an old-round proposal this validator
+            // genuinely verified must not be forgotten just because it
+            // did not arrive while the engine was still waiting on it).
+            if header.height.get() == ctx.engine.state().height.get() {
                 // Receiver-side verification (ADR-0042, "Decided:
                 // Receiver-Side Verification Rules") -- a failure here
                 // is a dropped, logged message, never a fatal error:
                 // this is externally-triggerable network input, and no
                 // externally-triggerable input may crash this process.
+                // `round_proposer` inside `verify_proposal` checks
+                // eligibility against `header.round` itself, so this is
+                // correct for any round of the current height, not
+                // just the engine's own current one.
                 match verify_proposal(
                     &message,
                     ctx.chain_id,
@@ -917,12 +900,25 @@ fn handle_peer_message(
                     Ok(block_hash) => {
                         ctx.pending_envelopes
                             .insert(block_hash, message.envelope.clone());
+                        let valid_round =
+                            message.envelope.justification.as_ref().map(|qc| qc.round);
                         let action = ctx.engine.handle_proposal(
+                            header.round,
                             block_hash,
                             message.envelope.body.transactions,
+                            valid_round,
                             message.envelope.justification,
+                            true,
                         )?;
                         act_on(ctx, action)?;
+                        // R8's "need block" half: a precommit quorum
+                        // for this exact block may already be pending
+                        // (received before this validator ever saw a
+                        // validated proposal for it) -- safe to call
+                        // unconditionally, a no-op `Ignored` when
+                        // nothing is pending.
+                        let retry_action = ctx.engine.block_fetched(block_hash)?;
+                        act_on(ctx, retry_action)?;
                     }
                     Err(reason) => {
                         log_line(&format!(
@@ -1581,28 +1577,20 @@ fn verify_and_commit_synced_block<S: StateReader + StateEnumerator + BlockStore>
     Ok(block_hash)
 }
 
-/// Whether `qc` still has a defined transition from the engine's
-/// *current* step. Two independent, honest nodes each aggregating
-/// their own [`QuorumCertificate`] from the same gossiped votes (see
-/// ADR-0037, "Decided: Vote Aggregation" — no designated aggregator)
-/// routinely produces more than one certificate for the same round: a
-/// node that already consumed its own self-built prevote quorum and
-/// moved on to `Precommit` will still receive the peer's broadcast
-/// prevote quorum a moment later. `hn_consensus::ConsensusState::apply`
-/// is deliberately a closed, total function that rejects rather than
-/// silently ignores an event with no transition (ADR-0034's own
-/// design), so this driving loop must filter out an already-redundant
-/// certificate itself before ever calling
-/// `ConsensusEngine::handle_quorum_certificate` — the same "stale
-/// event, not an error" handling already applied to timeout events.
-fn expects_qc(ctx: &Ctx, qc: &QuorumCertificate) -> bool {
-    if !is_current(ctx, qc.height.get(), qc.round.get()) {
-        return false;
-    }
-    match qc.certificate_type {
-        VoteType::Prevote => ctx.engine.state().step == hn_consensus::ConsensusStep::Prevote,
-        VoteType::Precommit => ctx.engine.state().step == hn_consensus::ConsensusStep::Precommit,
-    }
+/// ADR-0048, "Decided: Certificate Routing In `hn-node`" item 1: `qc`
+/// is dropped here only if its height differs from this engine's
+/// current height (or it is malformed, checked separately via
+/// `verify_signatures`). Every other certificate — any round of this
+/// same height, including one the engine already moved past — is
+/// passed straight to [`hn_consensus::ConsensusEngine::handle_quorum_certificate`],
+/// which owns all round and step scoping itself (R5, R6, R8, R9, R10)
+/// and returns `Ignored` rather than an error for a redundant or
+/// superseded one (e.g. two honest nodes each independently
+/// aggregating their own certificate from the same gossiped votes,
+/// ADR-0037's "no designated aggregator," routinely produces more
+/// than one certificate for the same target).
+fn qc_height_matches(ctx: &Ctx, qc: &QuorumCertificate) -> bool {
+    ctx.engine.state().height == qc.height
 }
 
 fn broadcast(
@@ -1808,6 +1796,31 @@ fn act_on_once(ctx: &mut Ctx, action: ConsensusAction) -> NodeResult<Option<Cons
         ConsensusAction::RoundAdvanced { .. } | ConsensusAction::NewHeight { .. } => {
             Some(ctx.engine.begin_round()?)
         }
+        // R8's "need block" half (ADR-0048): a precommit quorum
+        // already proves `block_hash` final, but this validator has
+        // no validated proposal for it yet. Nothing to do here but
+        // record the wait in the log -- the engine itself already
+        // remembers the pending certificate internally, and the
+        // proposal branch of `handle_peer_message` retries it via
+        // `ConsensusEngine::block_fetched` the moment a matching
+        // proposal is validated (by any means: ordinary gossip is
+        // enough, since the engine's own round scoping now accepts a
+        // validated proposal for any round of this height, not only
+        // the one currently being contested).
+        ConsensusAction::NeedBlock { block_hash, .. } => {
+            log_line(&format!(
+                "WAITING_FOR_BLOCK height={} round={} block={} (precommit quorum certified, no cached proposal yet)",
+                ctx.engine.state().height.get(),
+                ctx.engine.state().round.get(),
+                hex(&block_hash),
+            ));
+            None
+        }
+        // Well-formed but redundant (ADR-0048, "Decided: Certificate
+        // Routing In `hn-node`" item 3) -- nothing for this driving
+        // loop to do, same as `ConsensusAction::None`'s own "no vote to
+        // cast" case, just for a different reason.
+        ConsensusAction::Ignored { .. } => None,
     })
 }
 
@@ -1904,9 +1917,14 @@ fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<Option<ConsensusAction
             }
             .encode()?,
         )?;
-        let action = ctx
-            .engine
-            .handle_proposal(block_hash, transactions_for_engine, None)?;
+        let action = ctx.engine.handle_proposal(
+            round,
+            block_hash,
+            transactions_for_engine,
+            None,
+            None,
+            true,
+        )?;
         return Ok(Some(action));
     }
     Ok(None)
@@ -1983,7 +2001,7 @@ fn cast_vote(
             MessageType::QuorumCertificateMessage,
             qc.encode()?,
         )?;
-        if expects_qc(ctx, &qc) {
+        if qc_height_matches(ctx, &qc) {
             let action = ctx
                 .engine
                 .handle_quorum_certificate(qc, &ctx.store, &ctx.ordered_ids)?;
