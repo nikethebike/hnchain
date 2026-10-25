@@ -19,3 +19,4 @@ workspace = true
 
 [dev-dependencies]
 hn-storage = { path = "../hn-storage" }
+tempfile = "3.27.0"

@@ -411,6 +411,33 @@ pub fn decide_startup_action(
     }
 }
 
+/// Rule 2: "For a given (height, round, vote type), if the journal
+/// holds a vote, the node may re-send exactly that vote (same target)
+/// and never sign a different one. This also protects against a bug
+/// that tries to sign twice."
+///
+/// `journaled` is whatever [`VoteJournal::last_prevote`] or
+/// [`VoteJournal::last_precommit`] (matching the vote type actually
+/// being cast) already held *before* this call — the caller's own
+/// vote-casting site must consult this before signing anything new.
+/// Returns the target that must actually be signed and sent: the
+/// journaled one, verbatim, if it already covers this exact `(height,
+/// round)`; the freshly decided `proposed_target` otherwise (nothing
+/// was journaled for this round yet, so there is nothing to protect
+/// against re-signing differently).
+#[must_use]
+pub fn vote_to_send(
+    journaled: Option<&JournaledVote>,
+    height: BlockHeight,
+    round: Round,
+    proposed_target: ConsensusTarget,
+) -> ConsensusTarget {
+    match journaled {
+        Some(vote) if vote.height == height && vote.round == round => vote.target,
+        _ => proposed_target,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use hn_core::Epoch;
@@ -719,5 +746,55 @@ mod tests {
         )?;
         assert_eq!(action, JournalStartupAction::Restore(Box::new(journal)));
         Ok(())
+    }
+
+    // --- vote_to_send: rule 2 ---
+
+    #[test]
+    fn sends_the_proposed_target_when_nothing_was_journaled_for_this_round() {
+        let target = vote_to_send(
+            None,
+            BlockHeight::new(5),
+            Round::new(1),
+            ConsensusTarget::Nil,
+        );
+        assert_eq!(target, ConsensusTarget::Nil);
+    }
+
+    #[test]
+    fn sends_the_proposed_target_when_the_journaled_vote_is_for_a_different_round() {
+        let journaled = JournaledVote {
+            height: BlockHeight::new(5),
+            round: Round::new(0),
+            target: ConsensusTarget::Block(BLOCK_A),
+        };
+        let target = vote_to_send(
+            Some(&journaled),
+            BlockHeight::new(5),
+            Round::new(1),
+            ConsensusTarget::Nil,
+        );
+        assert_eq!(target, ConsensusTarget::Nil);
+    }
+
+    #[test]
+    fn re_sends_the_journaled_target_for_the_same_round_even_if_it_differs_from_what_was_just_decided()
+     {
+        let journaled = JournaledVote {
+            height: BlockHeight::new(5),
+            round: Round::new(1),
+            target: ConsensusTarget::Block(BLOCK_A),
+        };
+        // Whatever the state machine just decided this time (here,
+        // Nil) must never override an already-signed vote for the
+        // exact same (height, round) -- this is the entire protection
+        // rule 2 exists for.
+        let target = vote_to_send(
+            Some(&journaled),
+            BlockHeight::new(5),
+            Round::new(1),
+            ConsensusTarget::Nil,
+        );
+        assert_eq!(target, ConsensusTarget::Block(BLOCK_A));
     }
 }

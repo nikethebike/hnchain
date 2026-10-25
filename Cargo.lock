@@ -200,6 +200,7 @@ dependencies = [
  "hn-hncs",
  "hn-state",
  "hn-storage",
+ "tempfile",
 ]
 
 [[package]]

@@ -100,7 +100,7 @@ pub use error::{ConsensusError, ConsensusResult};
 pub use event::{ConsensusEvent, ConsensusTarget};
 pub use journal::{
     JOURNAL_VERSION_1, JournalDecodeError, JournalReadOutcome, JournalStartupAction, JournaledVote,
-    VoteJournal, decide_startup_action,
+    VoteJournal, decide_startup_action, vote_to_send,
 };
 pub use leader::round_proposer;
 pub use state::ConsensusState;
