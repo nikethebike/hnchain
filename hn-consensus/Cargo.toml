@@ -11,6 +11,7 @@ description = "HNChain consensus state machine boundaries."
 [dependencies]
 hn-core = { path = "../hn-core" }
 hn-crypto = { path = "../hn-crypto" }
+hn-hncs = { path = "../hn-hncs" }
 hn-state = { path = "../hn-state" }
 
 [lints]

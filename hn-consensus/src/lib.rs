@@ -70,11 +70,25 @@
 //! (ADR-0037, "Decided: Leader Election Scaffold") picks who proposes a
 //! given height/round — ADR-0011's own explicitly-sanctioned devnet
 //! baseline, not its still-open real formula.
+//!
+//! [`VoteJournal`] (ADR-0048, "Decided: Vote Journal (Write-Ahead
+//! Safety State)") is the persisted counterpart to `ConsensusState`'s
+//! own lock/valid state: this module owns its shape, its wire encoding,
+//! and [`decide_startup_action`]'s pure restore/abstain/fatal decision
+//! (rules 3 and 4) — but performs no file I/O itself, matching this
+//! crate's own "no network I/O, no node process lifecycle" boundary.
+//! The durable write/read (`hn_storage::write_atomically`/
+//! `read_optional`), the fatal exit, and the per-vote write-before-send
+//! hook (rules 1 and 2) are `hn-node`'s own job, wiring this module's
+//! pure pieces to a real data directory. Rule 5 (genesis bootstrap vs.
+//! a rejoining validator with a wiped data directory) is deferred — see
+//! [`JournalStartupAction::Vote`]'s own documentation.
 
 mod action;
 mod engine;
 mod error;
 mod event;
+mod journal;
 mod leader;
 mod state;
 mod step;
@@ -84,6 +98,10 @@ pub use action::ConsensusAction;
 pub use engine::ConsensusEngine;
 pub use error::{ConsensusError, ConsensusResult};
 pub use event::{ConsensusEvent, ConsensusTarget};
+pub use journal::{
+    JOURNAL_VERSION_1, JournalDecodeError, JournalReadOutcome, JournalStartupAction, JournaledVote,
+    VoteJournal, decide_startup_action,
+};
 pub use leader::round_proposer;
 pub use state::ConsensusState;
 pub use step::ConsensusStep;

@@ -39,11 +39,21 @@
 //! provide, and the reason nothing in this codebase called `StateWriter`
 //! from real protocol output until now
 //! (`hn-state::apply_and_commit_block` is the first caller).
+//!
+//! [`write_atomically`]/[`read_optional`] (ADR-0048, "Decided: Vote
+//! Journal (Write-Ahead Safety State)", rule 1) are a separate, plain
+//! bytes-in/bytes-out durability primitive — temp file, `fsync`,
+//! rename, directory `fsync` — for a small single-file record that
+//! lives outside the block/state store entirely (the vote journal is
+//! the first caller; nothing here is journal-specific or depends on
+//! `hn_state`'s traits).
 
+mod atomic_file;
 mod in_memory;
 mod redb_store;
 mod tx_index;
 
+pub use atomic_file::{read_optional, write_atomically};
 pub use in_memory::InMemoryStateStore;
 pub use redb_store::RedbStateStore;
 
