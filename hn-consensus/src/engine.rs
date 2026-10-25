@@ -68,15 +68,30 @@ impl ConsensusEngine {
     /// Records `transactions` under `block_hash` (so
     /// [`ConsensusEngine::commit_finalized_block`] can find them if
     /// this block goes on to finalize) and feeds a `Proposal` event,
-    /// for this engine's own current `(height, round)`, into the
-    /// state machine. Does not itself validate `transactions` against
-    /// `block_hash`, run `verify_proposal`, or check proposer
-    /// eligibility (ADR-0011) — all of that is the caller's job
-    /// before calling this; `validated` must be the real result of
-    /// that verification (ADR-0048, "Decided: Boundary"), never
-    /// assumed `true`.
+    /// at this engine's current height and the caller-supplied `round`,
+    /// into the state machine. Does not itself validate `transactions`
+    /// against `block_hash`, run `verify_proposal`, or check proposer
+    /// eligibility (ADR-0011) — all of that is the caller's job before
+    /// calling this; `validated` must be the real result of that
+    /// verification (ADR-0048, "Decided: Boundary"), never assumed
+    /// `true`.
+    ///
+    /// `round` is the proposal's **own** claimed round (e.g. a
+    /// proposal message's own header field) — not necessarily this
+    /// engine's current round. ADR-0048, "Decided: Certificate Routing
+    /// In `hn-node`" moves round scoping into the machine precisely so
+    /// a proposal for an older or newer round of the *same* height
+    /// still reaches [`ConsensusState::apply`] with its real round,
+    /// rather than the caller silently substituting its own current
+    /// round (which would make every such proposal look like it
+    /// targets the current round no matter what it actually claimed,
+    /// defeating that round scoping entirely). The caller still filters
+    /// by **height** before calling this (ADR-0048, "Decided: Boundary"
+    /// — `self.height` is the only part of an event's own position this
+    /// engine trusts the caller to have already matched).
     pub fn handle_proposal(
         &mut self,
+        round: Round,
         block_hash: Digest,
         transactions: Vec<TransactionEnvelope>,
         valid_round: Option<Round>,
@@ -86,7 +101,7 @@ impl ConsensusEngine {
         self.proposed_blocks.insert(block_hash, transactions);
         self.state.apply(ConsensusEvent::Proposal {
             height: self.state.height,
-            round: self.state.round,
+            round,
             block_hash,
             valid_round,
             justification,
@@ -96,10 +111,22 @@ impl ConsensusEngine {
 
     /// `Propose` -> `Prevote`, casting a nil prevote. See
     /// [`ConsensusEvent::ProposeTimeout`].
-    pub fn propose_timeout(&mut self) -> ConsensusResult<ConsensusAction> {
+    ///
+    /// `round` is the timer's **own** scheduled round, not necessarily
+    /// this engine's current one — same reasoning as
+    /// [`ConsensusEngine::handle_proposal`]'s own `round` parameter:
+    /// ADR-0048 "Decided: Certificate Routing In `hn-node`" item 4
+    /// ("the timer filter ... moves into the machine because timeouts
+    /// now carry their round") only holds if this method hands the
+    /// state machine the round the timer actually fired for, so a
+    /// timer left over from a round this engine already moved past is
+    /// `Ignored` rather than wrongly timing out whatever round the
+    /// engine happens to be at now just because it is also at step
+    /// `Propose` again.
+    pub fn propose_timeout(&mut self, round: Round) -> ConsensusResult<ConsensusAction> {
         self.state.apply(ConsensusEvent::ProposeTimeout {
             height: self.state.height,
-            round: self.state.round,
+            round,
         })
     }
 
@@ -134,21 +161,38 @@ impl ConsensusEngine {
     }
 
     /// `Prevote` -> `Precommit`, casting a nil precommit. See
-    /// [`ConsensusEvent::PrevoteTimeout`].
-    pub fn prevote_timeout(&mut self) -> ConsensusResult<ConsensusAction> {
+    /// [`ConsensusEvent::PrevoteTimeout`]. `round`: see
+    /// [`ConsensusEngine::propose_timeout`]'s own documentation.
+    pub fn prevote_timeout(&mut self, round: Round) -> ConsensusResult<ConsensusAction> {
         self.state.apply(ConsensusEvent::PrevoteTimeout {
             height: self.state.height,
-            round: self.state.round,
+            round,
         })
     }
 
     /// `Precommit` -> `Timeout`, advancing the round. See
-    /// [`ConsensusEvent::PrecommitTimeout`].
-    pub fn precommit_timeout(&mut self) -> ConsensusResult<ConsensusAction> {
+    /// [`ConsensusEvent::PrecommitTimeout`]. `round`: see
+    /// [`ConsensusEngine::propose_timeout`]'s own documentation.
+    pub fn precommit_timeout(&mut self, round: Round) -> ConsensusResult<ConsensusAction> {
         self.state.apply(ConsensusEvent::PrecommitTimeout {
             height: self.state.height,
-            round: self.state.round,
+            round,
         })
+    }
+
+    /// Retries a finalization [`ConsensusAction::NeedBlock`] could not
+    /// complete because this engine had no cached proposal for the
+    /// block at the time (ADR-0048 R8). The caller fetched and
+    /// validated `block_hash` in the meantime — most naturally, by
+    /// receiving (or re-receiving) the ordinary `Proposal` message for
+    /// it through [`ConsensusEngine::handle_proposal`], which this
+    /// engine's own round/step scoping already accepts regardless of
+    /// which round it arrives in. Safe to call even when nothing is
+    /// pending for `block_hash`: returns
+    /// [`ConsensusAction::Ignored`] rather than erroring.
+    pub fn block_fetched(&mut self, block_hash: Digest) -> ConsensusResult<ConsensusAction> {
+        self.state
+            .apply(ConsensusEvent::BlockFetched { block_hash })
     }
 
     /// Verifies one individual vote — [`ConsensusVote::verify`] (the
@@ -512,7 +556,7 @@ mod tests {
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         engine.begin_round()?;
 
-        let action = engine.handle_proposal(BLOCK_A, vec![], None, None, true)?;
+        let action = engine.handle_proposal(Round::FIRST, BLOCK_A, vec![], None, None, true)?;
         assert_eq!(
             action,
             ConsensusAction::Prevote(ConsensusTarget::Block(BLOCK_A))
@@ -533,7 +577,7 @@ mod tests {
 
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         engine.begin_round()?;
-        engine.handle_proposal(BLOCK_A, vec![], None, None, true)?;
+        engine.handle_proposal(Round::FIRST, BLOCK_A, vec![], None, None, true)?;
 
         let prevote_qc = signed_qc(
             VoteType::Prevote,
@@ -584,7 +628,7 @@ mod tests {
 
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         engine.begin_round()?;
-        engine.handle_proposal(BLOCK_A, vec![], None, None, true)?;
+        engine.handle_proposal(Round::FIRST, BLOCK_A, vec![], None, None, true)?;
 
         // Signed by the wrong key -- the store has `stored_keypair`'s
         // key on file for `validator_id`, not `signing_keypair`'s.
@@ -630,7 +674,7 @@ mod tests {
 
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         engine.begin_round()?;
-        engine.handle_proposal(BLOCK_A, vec![], None, None, true)?;
+        engine.handle_proposal(Round::FIRST, BLOCK_A, vec![], None, None, true)?;
         let prevote_qc = signed_qc(
             VoteType::Prevote,
             validator_id,
@@ -828,7 +872,7 @@ mod tests {
 
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         engine.begin_round()?;
-        engine.handle_proposal(BLOCK_A, vec![], None, None, true)?;
+        engine.handle_proposal(Round::FIRST, BLOCK_A, vec![], None, None, true)?;
 
         for (index, (keypair, validator_id)) in signers.iter().enumerate() {
             let vote = cast_vote(*validator_id, keypair, BLOCK_A)?;
@@ -865,7 +909,7 @@ mod tests {
 
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         engine.begin_round()?;
-        engine.handle_proposal(BLOCK_A, vec![], None, None, true)?;
+        engine.handle_proposal(Round::FIRST, BLOCK_A, vec![], None, None, true)?;
         assert!(matches!(
             engine.record_vote(&bad_vote, &store, &records),
             Err(ConsensusError::VoteInvalid(_))

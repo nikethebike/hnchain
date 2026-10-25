@@ -214,7 +214,8 @@ fn engine_finalizes_and_really_commits_a_transfer_through_a_real_backend() -> Te
     let mut engine = ConsensusEngine::new_height(BlockHeight::GENESIS);
     assert_eq!(engine.begin_round()?, ConsensusAction::None);
 
-    let action = engine.handle_proposal(BLOCK_HASH, vec![envelope], None, None, true)?;
+    let action =
+        engine.handle_proposal(Round::FIRST, BLOCK_HASH, vec![envelope], None, None, true)?;
     assert_eq!(
         action,
         ConsensusAction::Prevote(ConsensusTarget::Block(BLOCK_HASH))

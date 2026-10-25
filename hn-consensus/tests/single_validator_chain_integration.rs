@@ -192,7 +192,8 @@ fn produce_block<S: StateReader + BlockStore>(
     let ordered_active_set = vec![validator_id];
     let envelope = placeholder_envelope(height, round, transactions.clone())?;
 
-    let action = engine.handle_proposal(block_hash, transactions, None, None, true)?;
+    let action =
+        engine.handle_proposal(Round::FIRST, block_hash, transactions, None, None, true)?;
     assert_eq!(
         action,
         ConsensusAction::Prevote(ConsensusTarget::Block(block_hash))
