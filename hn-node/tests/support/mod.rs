@@ -152,6 +152,27 @@ impl NodeProcess {
             .map_err(|_| "node log mutex poisoned")?
             .clone())
     }
+
+    /// Waits up to `timeout` for this process to exit **on its own**
+    /// (never sends it any signal, unlike [`Self::kill_and_wait`]) and
+    /// returns its real exit code -- for asserting a specific
+    /// deliberate-exit scenario (ADR-0048 rule 3's fatal journal-vs-
+    /// store mismatch) rather than this module's usual "kill it, we're
+    /// done with it" cleanup.
+    pub fn wait_for_exit(&mut self, timeout: Duration) -> TestResult<i32> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.child.try_wait()? {
+                return status
+                    .code()
+                    .ok_or_else(|| "process exited with no status code".into());
+            }
+            if Instant::now() >= deadline {
+                return Err("process did not exit on its own within the deadline".into());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
 
 /// Spawns validator `validator_index` as a real child process running
@@ -346,6 +367,52 @@ pub fn reached_exact_height(line: &str, height: u64) -> bool {
 /// [`is_height_report`] recognizes.
 pub fn reached_at_least_height(line: &str, height: u64) -> bool {
     is_height_report(line) && height_field(line).is_ok_and(|reached| reached >= height)
+}
+
+/// Parses one `"VOTED height=H round=R type=T target=X"` line
+/// (ADR-0048's own Verification Requirement 4: "the node logs every
+/// signed vote; the test compares them") into `((height, round,
+/// vote_type), target)` -- `vote_type` is compared as plain text
+/// (whatever `{:?}` printed, `"Prevote"`/`"Precommit"`), since this
+/// module has no reason to depend on `hn_state` just for that.
+pub fn parse_voted_line(line: &str) -> TestResult<((u64, u64, String), String)> {
+    let height = line
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("height="))
+        .ok_or("VOTED line missing a height= field")?
+        .parse()?;
+    let round = line
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("round="))
+        .ok_or("VOTED line missing a round= field")?
+        .parse()?;
+    let vote_type = line
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("type="))
+        .ok_or("VOTED line missing a type= field")?
+        .to_string();
+    let target = line
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("target="))
+        .ok_or("VOTED line missing a target= field")?
+        .to_string();
+    Ok(((height, round, vote_type), target))
+}
+
+/// Every `"VOTED ..."` line in `log`, parsed via [`parse_voted_line`],
+/// keyed by `(height, round, vote_type)` -- the real key a vote can
+/// never conflict on (ADR-0048 rule 2).
+pub fn voted_targets_by_key(
+    log: &[String],
+) -> TestResult<std::collections::HashMap<(u64, u64, String), String>> {
+    let mut map = std::collections::HashMap::new();
+    for line in log {
+        if line.starts_with("VOTED ") {
+            let (key, target) = parse_voted_line(line)?;
+            map.insert(key, target);
+        }
+    }
+    Ok(map)
 }
 
 /// Extracts the hex `state_root=` value from a `FINALIZED ...` log

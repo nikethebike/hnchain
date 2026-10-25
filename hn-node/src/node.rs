@@ -674,6 +674,83 @@ fn stage_timeout(base_timeout_ms: u64, round: Round) -> Duration {
     Duration::from_millis(base_timeout_ms.saturating_mul(round.get().saturating_add(1)))
 }
 
+/// The real first-ever driving step, called exactly once, the moment
+/// enough peers are up (or the startup grace period elapses first).
+/// The common case is a fresh engine at step `NewHeight`/`Timeout`,
+/// where `begin_round()` is exactly right, same as it always was.
+///
+/// ADR-0048 rule 3's "restore" case means this engine can instead
+/// already be mid-round (`Propose`/`Prevote`/`Precommit`/`Finalize`) --
+/// calling `begin_round()` unconditionally here would hit
+/// `ConsensusError::UnexpectedEvent` for any of those, since
+/// `BeginRound` has no defined transition except from `NewHeight`/
+/// `Timeout`. Found while writing a real restart-then-re-vote test:
+/// a validator that restores mid-round and does *not* need historical
+/// sync (the common, intended restore case: its peers are still on
+/// the exact same round) would otherwise crash on its own very first
+/// peer connection instead of resuming.
+///
+/// Resuming at `Prevote`/`Precommit` re-sends this validator's own
+/// already-journaled vote for the current round (ADR-0048 rule 2:
+/// "the node may re-send exactly that vote" -- not only a defensive
+/// backstop for a hypothetical double-decision bug, but the real
+/// recovery for rule 1's own named "a crash between write and send
+/// loses a vote" window, where the broadcast genuinely never
+/// happened the first time). `cast_vote` is called with a throwaway
+/// `Nil` target rather than a freshly decided one: `vote_to_send`
+/// inside it always prefers whatever the journal already holds for
+/// this exact `(height, round)`, which this restored engine's own
+/// `step` guarantees is present and matches (a journal write and its
+/// matching step transition happen together, atomically, in the same
+/// `cast_vote` call that produced them) -- so the placeholder is
+/// always overridden, never actually sent.
+///
+/// Resuming at `Propose` just re-arms its own timeout: this process's
+/// vote journal names no proposal content at all, only votes, so
+/// silently rebuilding a new block here risks signing a *second*,
+/// different proposal for a (height, round) this validator may
+/// already have proposed for before it died (ADR-0048, "Decided:
+/// Proposer Duties": "a proposer may not send two different proposals
+/// for the same (height, round)"). `Finalize` resumes nothing:
+/// committing needs the real envelope this process no longer holds in
+/// memory, and this height will finalize this validator's own way
+/// regardless, through a later observed height (sync) or a fresh
+/// precommit certificate re-delivery.
+fn resume_or_begin_round(ctx: &mut Ctx) -> NodeResult<()> {
+    let height = ctx.engine.state().height;
+    let round = ctx.engine.state().round;
+    match ctx.engine.state().step {
+        ConsensusStep::NewHeight | ConsensusStep::Timeout => {
+            let action = ctx.engine.begin_round()?;
+            act_on(ctx, action)
+        }
+        ConsensusStep::Propose => {
+            spawn_after(
+                ctx.event_tx.clone(),
+                stage_timeout(ctx.base_timeout_ms, round),
+                NodeEvent::ProposeTimeout {
+                    height: height.get(),
+                    round: round.get(),
+                },
+            );
+            Ok(())
+        }
+        ConsensusStep::Prevote => {
+            if let Some(action) = cast_vote(ctx, VoteType::Prevote, ConsensusTarget::Nil)? {
+                act_on(ctx, action)?;
+            }
+            Ok(())
+        }
+        ConsensusStep::Precommit => {
+            if let Some(action) = cast_vote(ctx, VoteType::Precommit, ConsensusTarget::Nil)? {
+                act_on(ctx, action)?;
+            }
+            Ok(())
+        }
+        ConsensusStep::Finalize => Ok(()),
+    }
+}
+
 fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) -> NodeResult<()> {
     for event in event_rx {
         match event {
@@ -703,8 +780,7 @@ fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) ->
                     && ctx.established.len() >= required_peers
                 {
                     ctx.round_started = true;
-                    let action = ctx.engine.begin_round()?;
-                    act_on(ctx, action)?;
+                    resume_or_begin_round(ctx)?;
                 }
             }
             NodeEvent::ConnectionClosed { conn_id } => {
@@ -769,8 +845,7 @@ fn drive(ctx: &mut Ctx, event_rx: Receiver<NodeEvent>, required_peers: usize) ->
             NodeEvent::StartupGraceElapsed => {
                 if !ctx.round_started && ctx.syncing.is_none() {
                     ctx.round_started = true;
-                    let action = ctx.engine.begin_round()?;
-                    act_on(ctx, action)?;
+                    resume_or_begin_round(ctx)?;
                 }
             }
             NodeEvent::Rpc { call, reply } => {
@@ -2171,6 +2246,19 @@ fn cast_vote(
         MessageType::ConsensusVote,
         vote.encode()?,
     )?;
+    // ADR-0048's own Verification Requirement 4: "the node logs every
+    // signed vote; the test compares them" -- a real-process restart
+    // test's only way to check this validator never signs a different
+    // vote for a (height, round, vote_type) it already journaled.
+    log_line(&format!(
+        "VOTED height={} round={} type={vote_type:?} target={}",
+        height.get(),
+        round.get(),
+        match target {
+            ConsensusTarget::Block(hash) => hex(&hash),
+            ConsensusTarget::Nil => "NIL".to_string(),
+        },
+    ));
 
     let stage_round = round;
     let stage_height = height;
