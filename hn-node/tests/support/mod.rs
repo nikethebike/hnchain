@@ -645,6 +645,113 @@ fn run_dishonest_sync_peer(
     Ok(())
 }
 
+/// Spawns a background thread acting as a single peer at `addr`:
+/// completes a real `Hello` handshake, sends `qc_payload` (expected to
+/// be a real, validly-signed `QuorumCertificateMessage` the connecting
+/// node has no cached proposal for), waits `delay_before_block`, then
+/// sends `proposal_payload` (expected to be the real, validly-signed
+/// `ConsensusProposal` matching that same certificate's own target) --
+/// ADR-0048's own required proof that the old caller-side height/round/
+/// step filter is really gone: a node must still finalize a precommit
+/// certificate for a round it has already moved past, once the
+/// matching block shows up afterward, not only when both arrive
+/// already in order (R8's "decide at any round" plus its own
+/// `NeedBlock`/`BlockFetched` retry). Errors are swallowed (printed to
+/// stderr), same reasoning as [`spawn_dishonest_sync_peer`]: a caller
+/// observes this peer's effect only through the real node's own log
+/// lines.
+pub fn spawn_precommit_then_block_peer(
+    addr: SocketAddr,
+    chain_id: u8,
+    network_id: u16,
+    qc_payload: Vec<u8>,
+    delay_before_block: Duration,
+    proposal_payload: Vec<u8>,
+) -> TestResult<()> {
+    let listener = TcpListener::bind(addr)?;
+    std::thread::spawn(move || {
+        if let Err(error) = run_precommit_then_block_peer(
+            listener,
+            chain_id,
+            network_id,
+            qc_payload,
+            delay_before_block,
+            proposal_payload,
+        ) {
+            eprintln!("precommit-then-block peer exited: {error}");
+        }
+    });
+    Ok(())
+}
+
+fn run_precommit_then_block_peer(
+    listener: TcpListener,
+    chain_id: u8,
+    network_id: u16,
+    qc_payload: Vec<u8>,
+    delay_before_block: Duration,
+    proposal_payload: Vec<u8>,
+) -> TestResult<()> {
+    let (mut stream, _) = listener.accept()?;
+
+    let params = HandshakeParams {
+        protocol_version: test_protocol_version(),
+        chain_id,
+        network_id,
+        required_channels: vec![Channel::Handshake, Channel::Consensus],
+        required_message_types: vec![
+            MessageType::Hello,
+            MessageType::ConsensusProposal,
+            MessageType::ConsensusVote,
+            MessageType::QuorumCertificateMessage,
+        ],
+    };
+    let keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorNetwork, [0xCC; 32]);
+    let mut handshake = HandshakeState::new(params, keypair);
+
+    let HandshakeAction::Send(hello) = handshake.apply(HandshakeEvent::SendHello)? else {
+        return Err("expected to send a Hello first".into());
+    };
+    send_envelope(
+        &mut stream,
+        chain_id,
+        network_id,
+        Channel::Handshake,
+        MessageType::Hello,
+        hello.encode()?,
+    )?;
+
+    let request = read_frame(&mut stream)?;
+    let peer_hello = Hello::decode(&request.payload)?;
+    match handshake.apply(HandshakeEvent::ReceiveHello(peer_hello))? {
+        HandshakeAction::Accepted { .. } => {}
+        other => return Err(format!("handshake not accepted: {other:?}").into()),
+    }
+
+    send_envelope(
+        &mut stream,
+        chain_id,
+        network_id,
+        Channel::Consensus,
+        MessageType::QuorumCertificateMessage,
+        qc_payload,
+    )?;
+    std::thread::sleep(delay_before_block);
+    send_envelope(
+        &mut stream,
+        chain_id,
+        network_id,
+        Channel::Consensus,
+        MessageType::ConsensusProposal,
+        proposal_payload,
+    )?;
+
+    let mut drain = Vec::new();
+    let _ = stream.read_to_end(&mut drain);
+
+    Ok(())
+}
+
 /// A self-consistent (internally) but never-really-finalized
 /// `FinalizedBlock` at `height` -- `commit_qc` carries a well-formed
 /// but entirely fabricated signature, matching no real validator's
