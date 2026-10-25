@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -7,7 +8,9 @@ use std::thread;
 use std::time::Duration;
 
 use hn_consensus::{
-    ConsensusAction, ConsensusEngine, ConsensusError, ConsensusTarget, round_proposer,
+    ConsensusAction, ConsensusEngine, ConsensusError, ConsensusStep, ConsensusTarget,
+    JournalReadOutcome, JournalStartupAction, JournaledVote, VoteJournal, decide_startup_action,
+    round_proposer, vote_to_send,
 };
 use hn_core::{BlockHeight, Epoch, ProtocolEpoch, ProtocolVersion, Round, UnixTimeMillis};
 use hn_crypto::{Digest, Ed25519KeyPair, KeyRole, SignatureEnvelope, hash_profile_0x0001};
@@ -25,7 +28,7 @@ use hn_state::{
     ValidatorStatus, VoteSigningPayloadV1, VoteTargetType, VoteType, Write, active_key, active_set,
     apply_block, compute_post_state_root, list_empty_root, protocol_parameters_placeholder_hash,
 };
-use hn_storage::RedbStateStore;
+use hn_storage::{RedbStateStore, read_optional, write_atomically};
 
 use crate::config::NodeConfig;
 use crate::error::{NodeError, NodeResult};
@@ -41,6 +44,42 @@ use crate::mempool::Mempool;
 const DEVNET_VSC: [u8; 32] = [0x11; 32];
 
 const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 1, 0);
+
+/// Dedicated non-zero exit code for ADR-0048 rule 3's fatal case: this
+/// validator's own vote journal is for a height higher than the block
+/// store's `latest_finalized + 1`, meaning the store has lost data this
+/// validator already voted on. Fixed and documented here, per the
+/// ADR's own "the value is fixed in implementation and documented" —
+/// this process must never continue in any role once that is true.
+const JOURNAL_INCONSISTENT_EXIT_CODE: i32 = 78;
+
+/// A fresh journal for a validator that is starting (or resuming)
+/// with no usable prior voting record to restore — matches exactly
+/// what [`hn_consensus::ConsensusEngine::new_height`]'s own state
+/// looks like, so the two always agree on what "no vote cast yet"
+/// means.
+fn fresh_journal(
+    chain_id: u8,
+    network_id: u16,
+    validator_id: Digest,
+    height: BlockHeight,
+) -> VoteJournal {
+    VoteJournal {
+        chain_id,
+        network_id,
+        validator_id,
+        height,
+        round: Round::FIRST,
+        step: ConsensusStep::NewHeight,
+        locked_value: None,
+        locked_round: None,
+        valid_value: None,
+        valid_round: None,
+        valid_qc: None,
+        last_prevote: None,
+        last_precommit: None,
+    }
+}
 
 /// This node's own out-of-band genesis integrity marker key (ADR-0038,
 /// "Decided: DB Init") — deliberately outside ADR-0007's own domain
@@ -224,6 +263,24 @@ struct Ctx {
     /// else in this file reads it, since every other check already
     /// has its own chain-position fields (`last_block_hash`, ...).
     genesis_hash: Digest,
+    /// The vote journal file's own path (ADR-0048, "Decided: Vote
+    /// Journal") — a sibling of `state.redb` inside this node's own
+    /// `--data-dir`, not part of the block/state store itself.
+    journal_path: PathBuf,
+    /// This validator's own latest successfully-written journal
+    /// record — the in-memory mirror of whatever
+    /// [`Self::journal_path`] durably holds right now. [`cast_vote`]
+    /// is the only place that ever changes it, and always writes the
+    /// new value to disk first (ADR-0048 rule 1, "write before send").
+    journal: VoteJournal,
+    /// Set from [`hn_consensus::JournalStartupAction::AbstainThrough`]
+    /// at startup (ADR-0048 rule 4): while `Some(height)`, this
+    /// validator does not cast any vote and does not self-propose up
+    /// through and including `height` — it still applies finalized
+    /// blocks and syncs normally, exactly as if it held no voting
+    /// power at all for that one height. Cleared the moment this
+    /// engine's own height moves past it.
+    abstain_until: Option<BlockHeight>,
 }
 
 /// One in-progress historical sync attempt (ADR-0044, "Decided:
@@ -269,7 +326,8 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
     // last real height) is what Syncing (`observe_height`) exists to
     // close, not something `run` should ever paper over by pretending
     // genesis is still the starting point.
-    let (starting_height, last_block_hash, last_timestamp) = match store.latest_finalized_block()? {
+    let latest_finalized_block = store.latest_finalized_block()?;
+    let (starting_height, last_block_hash, last_timestamp) = match &latest_finalized_block {
         Some(block) => (
             block.envelope.header.height,
             block.envelope.block_hash()?,
@@ -281,6 +339,9 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
             genesis_header.timestamp,
         ),
     };
+    let latest_finalized_height = latest_finalized_block
+        .as_ref()
+        .map(|block| block.envelope.header.height);
 
     let records: Vec<ValidatorRecordV1> = manifest
         .validators
@@ -308,6 +369,80 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
                 "configured --consensus-key-seed does not match any genesis validator".to_string(),
             ))
         })?;
+
+    // ADR-0048, "Decided: Vote Journal (Write-Ahead Safety State)" --
+    // rules 3 and 4, decided before this node ever casts a vote this
+    // run. Rule 5 (genesis bootstrap vs. a validator rejoining with a
+    // wiped data directory) is deferred (no peer-height-at-handshake
+    // signal exists yet): an empty store with a missing/corrupt
+    // journal falls back to voting normally, same as before this ADR,
+    // a known and documented gap rather than a silent one (see
+    // `hn_consensus::JournalStartupAction::Vote`'s own doc).
+    let journal_path = config.data_dir.join("vote_journal");
+    let journal_read = match read_optional(&journal_path)? {
+        None => JournalReadOutcome::Missing,
+        Some(bytes) => match VoteJournal::decode(&bytes) {
+            Ok(journal) => JournalReadOutcome::Present(Box::new(journal)),
+            Err(error) => JournalReadOutcome::Corrupt(error),
+        },
+    };
+    let startup_action =
+        decide_startup_action(journal_read, latest_finalized_height).map_err(|error| {
+            NodeError::from(crate::config::ConfigError(format!(
+                "vote journal startup decision failed: {error}"
+            )))
+        })?;
+    let engine_height = BlockHeight::new(starting_height.get().saturating_add(1));
+    let (engine, journal, abstain_until) = match startup_action {
+        JournalStartupAction::Restore(journal) => {
+            log_line(&format!(
+                "RESTORED vote journal height={} round={} step={:?}",
+                journal.height.get(),
+                journal.round.get(),
+                journal.step,
+            ));
+            (ConsensusEngine::restore(&journal), *journal, None)
+        }
+        JournalStartupAction::Vote => (
+            ConsensusEngine::new_height(engine_height),
+            fresh_journal(
+                manifest.chain_id,
+                manifest.network_id,
+                own_validator_id,
+                engine_height,
+            ),
+            None,
+        ),
+        JournalStartupAction::AbstainThrough { abstain_through } => {
+            log_line(&format!(
+                "ABSTAINING from voting through height={} (missing or corrupt vote journal)",
+                abstain_through.get(),
+            ));
+            (
+                ConsensusEngine::new_height(engine_height),
+                fresh_journal(
+                    manifest.chain_id,
+                    manifest.network_id,
+                    own_validator_id,
+                    engine_height,
+                ),
+                Some(abstain_through),
+            )
+        }
+        JournalStartupAction::Fatal {
+            journal_height,
+            store_height,
+        } => {
+            log_line(&format!(
+                "FATAL: vote journal height={} exceeds this validator's own block store height={} + 1 \
+                 -- the store has lost data this validator already voted on. Exiting with code {}.",
+                journal_height.get(),
+                store_height.get(),
+                JOURNAL_INCONSISTENT_EXIT_CODE,
+            ));
+            std::process::exit(JOURNAL_INCONSISTENT_EXIT_CODE);
+        }
+    };
 
     let handshake_params = HandshakeParams {
         protocol_version: PROTOCOL_VERSION,
@@ -396,10 +531,10 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         // One past whatever this node's own durable store says it
         // already really reached (genesis, height 0, if nothing --
         // ADR-0043), keeping `height = parent.height + 1` true across
-        // both a genesis start and a real restart alike.
-        engine: ConsensusEngine::new_height(BlockHeight::new(
-            starting_height.get().saturating_add(1),
-        )),
+        // both a genesis start and a real restart alike -- unless the
+        // vote journal just restored a different, more specific state
+        // above.
+        engine,
         store,
         records,
         ordered_ids,
@@ -430,6 +565,9 @@ pub fn run(config: NodeConfig) -> NodeResult<()> {
         // admitted against `last_finalized_height + 1`.
         last_finalized_height: starting_height,
         genesis_hash: genesis_block_hash,
+        journal_path,
+        journal,
+        abstain_until,
     };
 
     drive(&mut ctx, event_rx, config.peers.len())
@@ -1845,7 +1983,16 @@ fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<Option<ConsensusAction
         },
     );
 
-    if round_proposer(&ctx.ordered_ids, height, round) == Some(ctx.own_validator_id) {
+    // ADR-0048 rule 4: "it ... may propose only from the resumed
+    // height" -- an abstaining validator still schedules its own
+    // propose timeout above (so its local round/step bookkeeping
+    // keeps advancing normally off real network traffic), it just
+    // never acts as proposer while abstaining.
+    let abstaining = ctx
+        .abstain_until
+        .is_some_and(|through| height.get() <= through.get());
+    if !abstaining && round_proposer(&ctx.ordered_ids, height, round) == Some(ctx.own_validator_id)
+    {
         // ADR-0045, "Decided: Block Building (Proposer)" -- select
         // from this node's own mempool, then actually run the result
         // through `apply_block` for real (not a second, separate
@@ -1937,17 +2084,65 @@ fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<Option<ConsensusAction
 /// action for [`act_on`]'s trampoline to drive next, the same
 /// never-call-`act_on`-directly discipline [`maybe_start_propose_stage`]
 /// now also follows.
+///
+/// ADR-0048 rules 1 and 2: `target` is first replaced with whatever
+/// this validator already journaled for this exact `(height, round,
+/// vote_type)`, if anything — protecting against ever signing a
+/// *different* vote than one already sent, including across a crash
+/// and restart. The journal reflecting that final target and this
+/// engine's own current lock/valid state is then written durably
+/// *before* anything is signed or sent ("the machine never signs;
+/// signing happens in `hn-node` after the vote journal write" --
+/// ADR-0048, "Decided: Boundary").
 fn cast_vote(
     ctx: &mut Ctx,
     vote_type: VoteType,
     target: ConsensusTarget,
 ) -> NodeResult<Option<ConsensusAction>> {
+    let height = ctx.engine.state().height;
+    let round = ctx.engine.state().round;
+
+    // ADR-0048 rule 4: abstain through the one height a missing or
+    // corrupt journal left this validator unsure what it already
+    // signed -- no vote, no journal write, nothing sent.
+    if let Some(abstain_through) = ctx.abstain_until {
+        if height.get() <= abstain_through.get() {
+            return Ok(None);
+        }
+        ctx.abstain_until = None;
+    }
+
+    let already_journaled = match vote_type {
+        VoteType::Prevote => ctx.journal.last_prevote.as_ref(),
+        VoteType::Precommit => ctx.journal.last_precommit.as_ref(),
+    };
+    let target = vote_to_send(already_journaled, height, round, target);
     let (target_type, target_hash) = match target {
         ConsensusTarget::Block(hash) => (VoteTargetType::Block, hash),
         ConsensusTarget::Nil => (VoteTargetType::Nil, [0_u8; 32]),
     };
-    let height = ctx.engine.state().height;
-    let round = ctx.engine.state().round;
+
+    let journaled_vote = JournaledVote {
+        height,
+        round,
+        target,
+    };
+    let mut new_journal = ctx.journal.clone();
+    new_journal.height = height;
+    new_journal.round = round;
+    new_journal.step = ctx.engine.state().step;
+    new_journal.locked_value = ctx.engine.state().locked_value;
+    new_journal.locked_round = ctx.engine.state().locked_round;
+    new_journal.valid_value = ctx.engine.state().valid_value;
+    new_journal.valid_round = ctx.engine.state().valid_round;
+    new_journal.valid_qc = ctx.engine.state().valid_qc.clone();
+    match vote_type {
+        VoteType::Prevote => new_journal.last_prevote = Some(journaled_vote),
+        VoteType::Precommit => new_journal.last_precommit = Some(journaled_vote),
+    }
+    let encoded_journal = new_journal.encode().map_err(NodeError::from)?;
+    write_atomically(&ctx.journal_path, &encoded_journal)?;
+    ctx.journal = new_journal;
 
     let payload = VoteSigningPayloadV1 {
         vote_type,

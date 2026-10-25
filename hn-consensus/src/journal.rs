@@ -117,6 +117,26 @@ pub enum JournalDecodeError {
     Encoding(HncsError),
 }
 
+impl std::fmt::Display for JournalDecodeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedVersion { value } => {
+                write!(formatter, "unsupported journal version: {value}")
+            }
+            Self::UnknownTag { field, value } => {
+                write!(formatter, "unknown tag 0x{value:02x} for {field}")
+            }
+            Self::NonCanonicalNilTarget => {
+                formatter.write_str("nil journaled-vote target_hash must be all-zero")
+            }
+            Self::ValidQc(error) => write!(formatter, "invalid valid_qc: {error}"),
+            Self::Encoding(error) => write!(formatter, "encoding error: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for JournalDecodeError {}
+
 impl VoteJournal {
     /// Encodes this value as canonical HNCS bytes.
     pub fn encode(&self) -> Result<Vec<u8>, StateError> {
