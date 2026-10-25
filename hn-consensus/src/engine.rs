@@ -53,6 +53,22 @@ impl ConsensusEngine {
         }
     }
 
+    /// Starts an engine from `journal` (see [`ConsensusState::restore`])
+    /// — a validator resuming after a restart whose vote journal
+    /// matched ADR-0048 rule 3's "restore" case. `proposed_blocks`/
+    /// `vote_pool` start empty, same as [`Self::new_height`]: neither
+    /// is part of what the journal persists, and both are the caller's
+    /// problem to repopulate through ordinary gossip, not this
+    /// constructor's.
+    #[must_use]
+    pub fn restore(journal: &crate::VoteJournal) -> Self {
+        Self {
+            state: ConsensusState::restore(journal),
+            proposed_blocks: HashMap::new(),
+            vote_pool: VotePool::new(),
+        }
+    }
+
     /// This engine's current state machine snapshot.
     #[must_use]
     pub fn state(&self) -> &ConsensusState {
@@ -547,6 +563,68 @@ mod tests {
         let mut engine = ConsensusEngine::new_height(BlockHeight::new(1));
         assert_eq!(engine.begin_round()?, ConsensusAction::None);
         assert_eq!(engine.state().step, ConsensusStep::Propose);
+        Ok(())
+    }
+
+    /// A restarted validator resumes exactly where its journal left
+    /// it -- still locked, and able to re-cast the same precommit for
+    /// the value it was locked on, without needing to see a fresh
+    /// proposal or polka again first (ADR-0048 rule 3).
+    #[test]
+    fn restore_resumes_with_the_lock_intact() -> Result<(), ConsensusError> {
+        let polka = signed_qc(
+            VoteType::Prevote,
+            [0x01; 32],
+            &keypair(0x01),
+            VoteTargetType::Block,
+            BLOCK_A,
+            0,
+        )
+        .map_err(ConsensusError::StateApplication)?;
+        let journal = crate::journal::VoteJournal {
+            chain_id: 1,
+            network_id: 1,
+            validator_id: [0x01; 32],
+            height: BlockHeight::new(1),
+            round: Round::new(0),
+            step: ConsensusStep::Precommit,
+            locked_value: Some(BLOCK_A),
+            locked_round: Some(Round::new(0)),
+            valid_value: Some(BLOCK_A),
+            valid_round: Some(Round::new(0)),
+            valid_qc: Some(polka),
+            last_prevote: None,
+            last_precommit: None,
+        };
+        let mut engine = ConsensusEngine::restore(&journal);
+        assert_eq!(engine.state().step, ConsensusStep::Precommit);
+        assert_eq!(engine.state().locked_value, Some(BLOCK_A));
+
+        let nil_precommit_quorum = signed_qc(
+            VoteType::Precommit,
+            [0x01; 32],
+            &keypair(0x01),
+            VoteTargetType::Nil,
+            [0_u8; 32],
+            0,
+        )
+        .map_err(ConsensusError::StateApplication)?;
+        let store = single_validator_store([0x01; 32], &keypair(0x01), ValidatorStatus::Active)
+            .map_err(ConsensusError::StateApplication)?;
+        // R9: a failed round advances without touching the lock -- the
+        // entire reason the journal persists it across a restart in
+        // the first place is so it survives exactly this.
+        let action =
+            engine.handle_quorum_certificate(nil_precommit_quorum, &store, &[[0x01; 32]])?;
+        assert_eq!(
+            action,
+            ConsensusAction::RoundAdvanced {
+                round: Round::new(1)
+            }
+        );
+        assert_eq!(engine.state().round, Round::new(1));
+        assert_eq!(engine.state().step, ConsensusStep::Timeout);
+        assert_eq!(engine.state().locked_value, Some(BLOCK_A));
         Ok(())
     }
 

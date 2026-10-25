@@ -108,6 +108,46 @@ impl ConsensusState {
         }
     }
 
+    /// Rebuilds a state machine from exactly the fields
+    /// [`crate::VoteJournal`] persists, after a restart whose journal
+    /// matched rule 3's "restore" case. The per-height bookkeeping the
+    /// journal does *not* persist (`validated_block_hashes`/
+    /// `validated_proposals`, `pending_finalization`) starts empty,
+    /// same as [`Self::new_height`] — a restarted validator that held
+    /// a validated proposal before it restarted must see that proposal
+    /// again (ordinary gossip re-delivers it in practice) before
+    /// R6/R8 can use it, exactly like a validator that never cached it
+    /// in the first place; nothing here claims otherwise.
+    ///
+    /// Trusts every field as already consistent (the caller's own
+    /// journal, not arbitrary input) — the same boundary
+    /// [`Self::apply`] already draws for events; checked anyway via
+    /// `debug_assert` by the same [`Self::invariants_hold`] `apply`
+    /// itself runs after every transition, so a corrupt-but-decodable
+    /// journal still fails loudly in a debug build rather than silently
+    /// running with an inconsistent lock/valid pair.
+    #[must_use]
+    pub fn restore(journal: &crate::VoteJournal) -> Self {
+        let restored = Self {
+            height: journal.height,
+            round: journal.round,
+            step: journal.step,
+            locked_value: journal.locked_value,
+            locked_round: journal.locked_round,
+            valid_value: journal.valid_value,
+            valid_round: journal.valid_round,
+            valid_qc: journal.valid_qc.clone(),
+            validated_block_hashes: BTreeSet::new(),
+            validated_proposals: BTreeMap::new(),
+            pending_finalization: None,
+        };
+        debug_assert!(
+            restored.invariants_hold(),
+            "restored ConsensusState invariant violated: {restored:?}"
+        );
+        restored
+    }
+
     /// Applies `event`, mutating `self` to the resulting state and
     /// returning what the local validator should do about it
     /// (ADR-0048, "Decided: Transition Rules" — R1 through R11 in
@@ -710,6 +750,70 @@ mod tests {
         assert_eq!(state.valid_value, None);
         assert_eq!(state.valid_round, None);
         assert_eq!(state.valid_qc, None);
+    }
+
+    fn journal_at(
+        round: Round,
+        step: ConsensusStep,
+        locked_value: Option<[u8; 32]>,
+        locked_round: Option<Round>,
+        valid_value: Option<[u8; 32]>,
+        valid_round: Option<Round>,
+        valid_qc: Option<QuorumCertificate>,
+    ) -> crate::VoteJournal {
+        crate::VoteJournal {
+            chain_id: 1,
+            network_id: 1,
+            validator_id: [0x01; 32],
+            height: height(),
+            round,
+            step,
+            locked_value,
+            locked_round,
+            valid_value,
+            valid_round,
+            valid_qc,
+            last_prevote: None,
+            last_precommit: None,
+        }
+    }
+
+    #[test]
+    fn restore_rebuilds_exactly_the_journaled_fields() {
+        let justification = qc(VoteType::Prevote, VoteTargetType::Block, BLOCK_A, 1);
+        let journal = journal_at(
+            Round::new(2),
+            ConsensusStep::Precommit,
+            Some(BLOCK_A),
+            Some(Round::new(1)),
+            Some(BLOCK_A),
+            Some(Round::new(1)),
+            Some(justification.clone()),
+        );
+        let state = ConsensusState::restore(&journal);
+        assert_eq!(state.height, height());
+        assert_eq!(state.round, Round::new(2));
+        assert_eq!(state.step, ConsensusStep::Precommit);
+        assert_eq!(state.locked_value, Some(BLOCK_A));
+        assert_eq!(state.locked_round, Some(Round::new(1)));
+        assert_eq!(state.valid_value, Some(BLOCK_A));
+        assert_eq!(state.valid_round, Some(Round::new(1)));
+        assert_eq!(state.valid_qc, Some(justification));
+    }
+
+    #[test]
+    fn restore_with_no_lock_or_valid_value_matches_a_fresh_height() {
+        let journal = journal_at(
+            Round::FIRST,
+            ConsensusStep::NewHeight,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let restored = ConsensusState::restore(&journal);
+        assert_eq!(restored, fresh());
     }
 
     #[test]
