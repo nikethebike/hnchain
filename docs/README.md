@@ -64,6 +64,7 @@ docs/
     ADR-0046-rpc-v1.md
     ADR-0047-cli-v1.md
     ADR-0048-byzantine-safe-consensus.md
+    ADR-0049-proposer-re-proposal-wire-support.md
 
   specs/
     core/

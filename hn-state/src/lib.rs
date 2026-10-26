@@ -376,6 +376,7 @@ mod permission_update_payload;
 mod permission_value;
 mod proposal_id;
 mod proposal_record;
+mod proposal_round_claim;
 mod proposal_vote_record;
 mod protocol_parameters;
 mod receipt;
@@ -467,6 +468,7 @@ pub use permission_value::{
 };
 pub use proposal_id::proposal_id;
 pub use proposal_record::{PROPOSAL_RECORD_VERSION_1, ProposalRecordV1, ProposalStatus};
+pub use proposal_round_claim::{PROPOSAL_ROUND_CLAIM_VERSION_1, ProposalRoundClaimV1};
 pub use proposal_vote_record::{PROPOSAL_VOTE_RECORD_VERSION_1, ProposalVoteRecordV1};
 pub use protocol_parameters::protocol_parameters_placeholder_hash;
 pub use receipt::{RECEIPT_VERSION_1, ReceiptStatus, ReceiptV1};

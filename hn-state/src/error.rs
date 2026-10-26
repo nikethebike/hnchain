@@ -517,6 +517,13 @@ pub enum StateError {
         /// The rejected version.
         value: u16,
     },
+    /// A decoded `ProposalRoundClaimV1`'s own version tag does not
+    /// match [`crate::proposal_round_claim::PROPOSAL_ROUND_CLAIM_VERSION_1`],
+    /// the only shape this implementation understands.
+    UnsupportedProposalRoundClaimVersion {
+        /// The rejected version.
+        value: u16,
+    },
     /// [`crate::BlockEnvelope::verify_body_matches_header`] (ADR-0042,
     /// "Receiver-Side Header Verification") found a header root/hash
     /// field that does not match the value independently recomputed
@@ -798,6 +805,12 @@ impl core::fmt::Display for StateError {
             }
             Self::UnsupportedBlockEnvelopeVersion { value } => {
                 write!(formatter, "unsupported block_version {value}")
+            }
+            Self::UnsupportedProposalRoundClaimVersion { value } => {
+                write!(
+                    formatter,
+                    "unsupported proposal_round_claim_version {value}"
+                )
             }
             Self::BlockBodyHeaderMismatch { field } => {
                 write!(

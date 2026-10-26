@@ -34,6 +34,15 @@ Referenced By:
   codebase builds today sets `justification: None`; this ADR adds a
   real `valid_value`/`justification` re-proposal path so a proposer
   can carry forward a polka instead of a fresh value every round)
+- ADR-0049: Proposer Re-Proposal Wire Support (narrows this ADR's own
+  "Decided: `ConsensusProposalMessageV1` Carries A Signed
+  `BlockEnvelope`, Not A Bare Claim": a re-proposal's own delivery
+  round and its header's original round are no longer always the same
+  value, so `ConsensusProposalMessageV1` gains back a `for_round`
+  field — not the redundant copy this ADR removed, since that
+  invariant no longer holds — and `proposer_signature` moves from a
+  bare `block_hash` digest to a new signed payload binding `for_round`
+  too)
 
 ## Context
 

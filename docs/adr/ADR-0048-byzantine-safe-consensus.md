@@ -22,7 +22,12 @@ Supersedes: ADR-0034's "Locking rule" and its "Explicitly Not Resolved:
 Not byzantine-safe as specified" (the rest of ADR-0034 stays in force
 unless this ADR says otherwise)
 
-Referenced By: None yet
+Referenced By:
+
+- ADR-0049: Proposer Re-Proposal Wire Support (wires R1 — "the
+  proposer re-proposes `valid_value` with its polka when it has
+  one" — into `hn-node`, the piece this ADR's own "Decided: Proposer
+  Duties" decided but did not implement)
 
 ## Revision Notes (0.2.0)
 
