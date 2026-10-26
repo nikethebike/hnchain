@@ -1,7 +1,7 @@
-use hn_core::BlockHeight;
+use hn_core::{BlockHeight, Round};
 use hn_crypto::{Digest, SignatureEnvelope};
 use hn_hncs::{Decoder, validate_count, write_bytes, write_fixed_bytes, write_u32, write_u64};
-use hn_state::{BlockEnvelope, FinalizedBlock, TransactionEnvelope};
+use hn_state::{BlockEnvelope, FinalizedBlock, ProposalRoundClaimV1, TransactionEnvelope};
 
 use crate::error::NetworkResult;
 
@@ -197,35 +197,54 @@ pub const MAX_BLOCK_ENVELOPE_BLOB_LEN: usize = 33_554_432;
 /// A consensus round proposal (ADR-0036, "Decided:
 /// Block/Transaction/Vote Propagation"; ADR-0039, "Decided: Proposals
 /// Self-Describe Their Height/Round"; ADR-0042, "Decided:
-/// `BlockEnvelope`, Not A Bare `block_hash` Claim") — the whole
+/// `BlockEnvelope`, Not A Bare `block_hash` Claim"; ADR-0049, "Decided:
+/// `ConsensusProposalMessageV1` Gains `for_round`") — the whole
 /// `hn_state::BlockEnvelope` a receiver needs to independently
 /// recompute `block_hash` and cross-check `header` against `body`,
-/// plus `proposer_signature`: a `SignatureEnvelope` over `envelope.
-/// block_hash()` from the registered consensus key of whichever
-/// validator `envelope.header.proposer` names. `height`/`round` are no
-/// longer separate top-level fields (ADR-0039's own reason for adding
-/// them — self-describing height/round for a receiver's own stale-
-/// round filter — is already satisfied by `envelope.header.height`/
-/// `.round` now that the full header travels on the wire; a redundant
-/// top-level copy would just be a second value that could disagree
-/// with the header's own).
+/// `for_round` (the round this specific delivery claims to be for —
+/// see below), and `proposer_signature`: a `SignatureEnvelope` over
+/// `ProposalRoundClaimV1 { chain_id, network_id, for_round, block_hash
+/// }`'s own signing digest, verified against the registered consensus
+/// key of whichever validator `envelope.header.proposer` names.
+///
+/// `height` is still not a separate top-level field: `envelope.header.
+/// height` already self-describes it (ADR-0039's own original reason
+/// for a top-level field, unaffected by this one), and nothing about
+/// re-proposal ever lets a message's real height disagree with its
+/// header's own. `round` is different: ADR-0042 removed a top-level
+/// round field reasoning that a redundant copy could only ever
+/// disagree with `envelope.header.round`, which held as long as a
+/// proposal's own round and its header's round were always the same
+/// value by construction. ADR-0049 breaks that invariant on purpose —
+/// re-proposing `valid_value` (ADR-0048, R1) means resending the
+/// *original* envelope unchanged, `header.round` included, while
+/// `for_round` names the round this validator is actually attempting
+/// right now. For a fresh proposal (`envelope.justification: None`),
+/// `for_round == envelope.header.round` always; the common case is
+/// unchanged in substance, just explicit on the wire now instead of
+/// implicit.
 ///
 /// `hn_consensus::ConsensusEvent::Proposal` itself still carries no
-/// height/round (it always targets whichever round the local
-/// `ConsensusState` is already attempting) and no signature (it is
-/// fed already-verified `block_hash`/`transactions`/`justification` by
-/// its caller) — this message type is `hn-node`'s own wire boundary
-/// around that trusted-input layer, not a change to the layer itself.
+/// signature (it is fed already-verified `block_hash`/`transactions`/
+/// `justification` by its caller) — this message type is `hn-node`'s
+/// own wire boundary around that trusted-input layer, not a change to
+/// the layer itself. Its own `round` parameter (ADR-0048's phase-4
+/// work) is this message's `for_round`, not `envelope.header.round`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConsensusProposalMessageV1 {
     /// The proposed block, in full — a receiver recomputes
     /// `block_hash` from `envelope.header` rather than trusting any
     /// separately-carried claimed value (ADR-0042).
     pub envelope: BlockEnvelope,
-    /// The proposer's own signature over `envelope.block_hash()`,
-    /// verified by a receiver against `envelope.header.proposer`'s
-    /// registered consensus key (ADR-0042, "Decided: Proposer
-    /// Authentication").
+    /// The round this delivery claims to be for (ADR-0049) — equal to
+    /// `envelope.header.round` for a fresh proposal, later than it for
+    /// a re-proposal of a locked/valid value.
+    pub for_round: Round,
+    /// The proposer's own signature over `ProposalRoundClaimV1 {
+    /// chain_id, network_id, for_round, block_hash }`'s own signing
+    /// digest (ADR-0049), verified by a receiver against
+    /// `envelope.header.proposer`'s registered consensus key
+    /// (ADR-0042, "Decided: Proposer Authentication").
     pub proposer_signature: SignatureEnvelope,
 }
 
@@ -238,6 +257,7 @@ impl ConsensusProposalMessageV1 {
             &self.envelope.encode()?,
             MAX_BLOCK_ENVELOPE_BLOB_LEN,
         )?;
+        write_u64(&mut out, self.for_round.get());
         self.proposer_signature.encode_into(&mut out)?;
         Ok(out)
     }
@@ -248,11 +268,28 @@ impl ConsensusProposalMessageV1 {
         let mut decoder = Decoder::new(bytes);
         let envelope_bytes = decoder.read_bytes(MAX_BLOCK_ENVELOPE_BLOB_LEN)?;
         let envelope = BlockEnvelope::decode(envelope_bytes)?;
+        let for_round = Round::new(decoder.read_u64()?);
         let proposer_signature = SignatureEnvelope::decode_from(&mut decoder)?;
         decoder.finish()?;
         Ok(Self {
             envelope,
+            for_round,
             proposer_signature,
+        })
+    }
+
+    /// This message's own `ProposalRoundClaimV1` — what
+    /// `proposer_signature` actually signs (ADR-0049). `chain_id`/
+    /// `network_id` are taken from `envelope.header`, not passed
+    /// separately: the header's own values are already part of
+    /// `block_hash`, so reusing them here cannot introduce a second,
+    /// disagreeing source of truth.
+    pub fn round_claim(&self) -> NetworkResult<ProposalRoundClaimV1> {
+        Ok(ProposalRoundClaimV1 {
+            chain_id: self.envelope.header.chain_id,
+            network_id: self.envelope.header.network_id,
+            for_round: self.for_round,
+            block_hash: self.envelope.block_hash()?,
         })
     }
 }
@@ -384,8 +421,9 @@ mod tests {
     use hn_crypto::{Ed25519KeyPair, KeyRole, SignatureEnvelope};
     use hn_state::{
         AccessListV1, BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader,
-        HEADER_VERSION_1, QuorumCertificate, TX_VERSION_1, TransactionEnvelope, TransferPayloadV1,
-        TxType, ValidityWindowV1, VoteTargetType, VoteType, list_empty_root,
+        HEADER_VERSION_1, ProposalRoundClaimV1, QuorumCertificate, TX_VERSION_1,
+        TransactionEnvelope, TransferPayloadV1, TxType, ValidityWindowV1, VoteTargetType, VoteType,
+        list_empty_root,
     };
 
     use super::{
@@ -565,9 +603,18 @@ mod tests {
         })
     }
 
-    fn sign_block_hash(envelope: &BlockEnvelope) -> NetworkResult<SignatureEnvelope> {
+    fn sign_round_claim(
+        envelope: &BlockEnvelope,
+        for_round: Round,
+    ) -> NetworkResult<SignatureEnvelope> {
         let keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, [0x07; 32]);
-        let digest = envelope.block_hash()?;
+        let claim = ProposalRoundClaimV1 {
+            chain_id: envelope.header.chain_id,
+            network_id: envelope.header.network_id,
+            for_round,
+            block_hash: envelope.block_hash()?,
+        };
+        let digest = claim.signing_digest()?;
         Ok(SignatureEnvelope {
             algorithm_id: keypair.key_descriptor().algorithm_id(),
             key_reference: None,
@@ -578,9 +625,11 @@ mod tests {
     #[test]
     fn consensus_proposal_round_trips_without_justification() -> NetworkResult<()> {
         let envelope = sample_block_envelope(vec![sample_envelope(0)?], None)?;
-        let proposer_signature = sign_block_hash(&envelope)?;
+        let for_round = envelope.header.round;
+        let proposer_signature = sign_round_claim(&envelope, for_round)?;
         let message = ConsensusProposalMessageV1 {
             envelope,
+            for_round,
             proposer_signature,
         };
         let decoded = ConsensusProposalMessageV1::decode(&message.encode()?)?;
@@ -591,13 +640,38 @@ mod tests {
     #[test]
     fn consensus_proposal_round_trips_with_justification() -> NetworkResult<()> {
         let envelope = sample_block_envelope(vec![sample_envelope(0)?], Some(sample_qc(0)))?;
-        let proposer_signature = sign_block_hash(&envelope)?;
+        let for_round = envelope.header.round;
+        let proposer_signature = sign_round_claim(&envelope, for_round)?;
         let message = ConsensusProposalMessageV1 {
             envelope,
+            for_round,
             proposer_signature,
         };
         let decoded = ConsensusProposalMessageV1::decode(&message.encode()?)?;
         assert_eq!(decoded, message);
+        Ok(())
+    }
+
+    /// The re-proposal shape ADR-0049 exists for: `for_round` is later
+    /// than the embedded envelope's own, unchanged `header.round` --
+    /// the round-trip must preserve that disagreement exactly, not
+    /// quietly collapse the two.
+    #[test]
+    fn consensus_proposal_round_trips_a_re_proposal_at_a_later_round() -> NetworkResult<()> {
+        let envelope = sample_block_envelope(vec![sample_envelope(0)?], Some(sample_qc(0)))?;
+        let original_round = envelope.header.round;
+        let for_round = Round::new(original_round.get() + 5);
+        let proposer_signature = sign_round_claim(&envelope, for_round)?;
+        let message = ConsensusProposalMessageV1 {
+            envelope,
+            for_round,
+            proposer_signature,
+        };
+        let decoded = ConsensusProposalMessageV1::decode(&message.encode()?)?;
+        assert_eq!(decoded, message);
+        assert_eq!(decoded.envelope.header.round, original_round);
+        assert_eq!(decoded.for_round, for_round);
+        assert_ne!(decoded.for_round, decoded.envelope.header.round);
         Ok(())
     }
 
