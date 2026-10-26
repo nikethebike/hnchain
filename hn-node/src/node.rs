@@ -24,9 +24,10 @@ use hn_rpc::{HttpResponse, ParsedRequest, RequestHandler, RpcError, ServerConfig
 use hn_state::{
     BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, BlockStore,
     ConsensusVote, EmptyHashTable, FinalizedBlock, HEADER_VERSION_1, MAX_TRANSACTION_SIZE,
-    QuorumCertificate, ReceiptV1, StateCommitter, StateEnumerator, StateReader, ValidatorRecordV1,
-    ValidatorStatus, VoteSigningPayloadV1, VoteTargetType, VoteType, Write, active_key, active_set,
-    apply_block, compute_post_state_root, list_empty_root, protocol_parameters_placeholder_hash,
+    ProposalRoundClaimV1, QuorumCertificate, ReceiptV1, StateCommitter, StateEnumerator,
+    StateReader, ValidatorRecordV1, ValidatorStatus, VoteSigningPayloadV1, VoteTargetType,
+    VoteType, Write, active_key, active_set, apply_block, compute_post_state_root, list_empty_root,
+    protocol_parameters_placeholder_hash,
 };
 use hn_storage::{RedbStateStore, read_optional, write_atomically};
 
@@ -1098,9 +1099,9 @@ fn handle_peer_message(
                 // this is externally-triggerable network input, and no
                 // externally-triggerable input may crash this process.
                 // `round_proposer` inside `verify_proposal` checks
-                // eligibility against `header.round` itself, so this is
-                // correct for any round of the current height, not
-                // just the engine's own current one.
+                // eligibility against `message.for_round` (ADR-0049),
+                // so this is correct for any round of the current
+                // height, not just the engine's own current one.
                 match verify_proposal(
                     &message,
                     ctx.chain_id,
@@ -1116,7 +1117,7 @@ fn handle_peer_message(
                         let valid_round =
                             message.envelope.justification.as_ref().map(|qc| qc.round);
                         let action = ctx.engine.handle_proposal(
-                            header.round,
+                            message.for_round,
                             block_hash,
                             message.envelope.body.transactions,
                             valid_round,
@@ -1137,7 +1138,7 @@ fn handle_peer_message(
                         log_line(&format!(
                             "REJECTED proposal height={} round={} reason=\"{reason}\"",
                             header.height.get(),
-                            header.round.get(),
+                            message.for_round.get(),
                         ));
                     }
                 }
@@ -1532,9 +1533,21 @@ fn finish_or_continue_sync(ctx: &mut Ctx, peer_conn_id: u64, target_height: u64)
 ///
 /// Checks, in order: header hash recomputation (implicit —
 /// `block_hash` is derived, never trusted as a separately-carried
-/// claim), chain/network binding, proposer eligibility
-/// (`round_proposer`), proposer signature (against that proposer's own
-/// registered consensus key), header-vs-body consistency
+/// claim), chain/network binding, proposer signature — resolved and
+/// verified against `round_proposer(height, message.for_round)`'s own
+/// registered consensus key (ADR-0049), **not** `envelope.header.
+/// proposer`: `for_round` is the round this delivery actually claims
+/// to be for, and for a re-proposal (`for_round` later than `header.
+/// round`) `header.proposer` legitimately names whichever validator
+/// first built the value, not whoever is re-delivering it now. The
+/// signature verifies over `message.round_claim()`'s own signing
+/// digest (binding `for_round` into what is actually signed, not just
+/// checked structurally, is what keeps a re-proposal's own round
+/// claim from being forgeable by a relay — see `ProposalRoundClaimV1`'s
+/// own doc) — there is no separate `header.proposer` identity
+/// comparison, since this signature check already ties the real
+/// sender to the real current round's own proposer on its own.
+/// Header-vs-body consistency
 /// (`BlockEnvelope::verify_body_matches_header`), a *real* re-execution
 /// of `body.transactions` against `store` (ADR-0045, "Decided:
 /// Validator Execution") — the body's own claimed `receipts` must
@@ -1573,19 +1586,34 @@ fn verify_proposal(
         return Err("header chain_id/network_id does not match this node's own".to_string());
     }
 
-    if round_proposer(ordered_ids, header.height, header.round) != Some(header.proposer) {
-        return Err(format!(
-            "{} is not this round's legitimate proposer",
-            hex(&header.proposer)
-        ));
-    }
-
-    let key = active_key(store, &header.proposer)
+    // ADR-0049: who must have sent *this delivery* is
+    // `round_proposer(height, for_round)` -- the round this message
+    // actually claims to be for, not `header.round` (which, for a
+    // re-proposal, still names whatever round the value was
+    // *originally* built for and cannot change without changing
+    // `block_hash`). `header.proposer` is not checked against this at
+    // all: for a re-proposal it legitimately names a *different*
+    // validator (whoever first built the value this one is now
+    // vouching for at a later round), and the signature check below
+    // already ties this specific delivery to the real current
+    // round's own proposer regardless of what `header.proposer`
+    // claims -- there is nothing left for a separate identity
+    // comparison to protect that the signature check does not already
+    // cover.
+    let round_sender = round_proposer(ordered_ids, header.height, message.for_round)
+        .ok_or_else(|| "no proposer exists for this round".to_string())?;
+    let key = active_key(store, &round_sender)
         .map_err(|error| format!("could not resolve the proposer's registered key: {error}"))?
         .ok_or_else(|| "the proposer has no registered consensus key".to_string())?;
+    let round_claim = message
+        .round_claim()
+        .map_err(|error| format!("could not build the round claim: {error}"))?;
+    let round_claim_digest = round_claim
+        .signing_digest()
+        .map_err(|error| format!("could not compute the round claim digest: {error}"))?;
     message
         .proposer_signature
-        .verify(&key, &block_hash)
+        .verify(&key, &round_claim_digest)
         .map_err(|error| format!("proposer signature invalid: {error}"))?;
 
     message
@@ -2068,88 +2096,184 @@ fn maybe_start_propose_stage(ctx: &mut Ctx) -> NodeResult<Option<ConsensusAction
         .is_some_and(|through| height.get() <= through.get());
     if !abstaining && round_proposer(&ctx.ordered_ids, height, round) == Some(ctx.own_validator_id)
     {
-        // ADR-0045, "Decided: Block Building (Proposer)" -- select
-        // from this node's own mempool, then actually run the result
-        // through `apply_block` for real (not a second, separate
-        // simulation): `select_for_block` already ran this exact check
-        // per candidate, but re-deriving `result` from the final
-        // selection here, rather than threading it out of
-        // `select_for_block` itself, keeps "what got selected" and
-        // "what the real receipts/roots are" from two different
-        // internal code paths that could silently drift apart.
-        let selected = ctx
-            .mempool
-            .select_for_block(&ctx.store, height, &ctx.records);
-        let application = apply_block(&selected, &ctx.store, height, &ctx.records)?;
-        let empty_table = EmptyHashTable::build()?;
-        let write_set: Vec<Write> = application
-            .applied
-            .iter()
-            .flat_map(|applied| applied.write_set.clone())
-            .collect();
-        let state_enumerator = ExcludingGenesisMarker {
-            inner: &ctx.store,
-            excluded: genesis_marker_key()?,
-        };
-        let state_root = compute_post_state_root(&state_enumerator, &write_set, &empty_table)?;
-
-        let body = BlockBody {
-            body_version: BODY_VERSION_1,
-            transactions: selected,
-            receipts: application
-                .applied
-                .iter()
-                .map(|applied| applied.receipt)
-                .collect(),
-            evidence: Vec::new(),
-            extra_data: Vec::new(),
-        };
-        let header = build_block_header(ctx, height, round, &body, state_root)?;
-        let block_hash = header.block_hash()?;
-        // `body` moves into `envelope` just below; the engine's own
-        // `proposed_blocks` cache (consulted later by
-        // `commit_finalized_block`, once this block actually
-        // finalizes) needs its own, separate copy of exactly the same
-        // transactions.
-        let transactions_for_engine = body.transactions.clone();
-        let envelope = BlockEnvelope {
-            block_version: BLOCK_VERSION_1,
-            header,
-            body,
-            // Re-proposing a value this node is itself locked on under
-            // a real `prevote` quorum certificate (`hn_consensus::
-            // ConsensusState`'s own "Locking rule") is not wired here
-            // -- unchanged from before this pass, a distinct, separate
-            // gap this ADR does not attempt to close.
-            justification: None,
-        };
-        ctx.pending_envelopes.insert(block_hash, envelope.clone());
-        let proposer_signature = SignatureEnvelope {
-            algorithm_id: ctx.consensus_keypair.key_descriptor().algorithm_id(),
-            key_reference: None,
-            signature: ctx.consensus_keypair.sign(&block_hash).to_vec(),
-        };
-        broadcast(
-            ctx,
-            Channel::Consensus,
-            MessageType::ConsensusProposal,
-            ConsensusProposalMessageV1 {
-                envelope,
-                proposer_signature,
-            }
-            .encode()?,
-        )?;
-        let action = ctx.engine.handle_proposal(
-            round,
-            block_hash,
-            transactions_for_engine,
-            None,
-            None,
-            true,
-        )?;
-        return Ok(Some(action));
+        return Ok(Some(propose_for_round(ctx, height, round)?));
     }
     Ok(None)
+}
+
+/// This round's own proposal content, once this validator has
+/// already decided it is this round's proposer: re-proposes
+/// `valid_value` with its own polka (ADR-0048 R1; ADR-0049 wires the
+/// wire-level mechanics this needs) when this engine holds one *and*
+/// still has that exact value's own envelope cached, falling back to
+/// building a fresh block otherwise -- including when `valid_value`
+/// is `Some` but its envelope was lost (a restarted validator's vote
+/// journal, ADR-0048 rule 1, restores `valid_value`/`valid_qc` but
+/// names no proposal content at all to repeat; `resume_or_begin_round`
+/// already makes the same documented trade-off for the
+/// restored-at-`Propose` case). Building fresh here never conflicts
+/// with "a proposer may not send two different proposals for the same
+/// (height, round)" (ADR-0048, "Decided: Proposer Duties"): nothing
+/// has been sent for *this* round yet either way.
+fn propose_for_round(
+    ctx: &mut Ctx,
+    height: BlockHeight,
+    round: Round,
+) -> NodeResult<ConsensusAction> {
+    let valid_value = ctx.engine.state().valid_value;
+    let valid_qc = ctx.engine.state().valid_qc.clone();
+    if let (Some(value_hash), Some(valid_qc)) = (valid_value, valid_qc)
+        && let Some(cached_envelope) = ctx.pending_envelopes.get(&value_hash).cloned()
+    {
+        return re_propose_valid_value(ctx, round, cached_envelope, valid_qc);
+    }
+    propose_fresh_block(ctx, height, round)
+}
+
+/// ADR-0049, "Decided: Proposer-Side Re-Proposal Logic": resends
+/// `envelope` with its own `header`/`body` completely unchanged
+/// (`block_hash` must stay exactly what `valid_qc` already certifies)
+/// except `justification`, updated to this engine's own *current*
+/// `valid_qc` -- not necessarily whatever `envelope` already carried
+/// when it was first cached, since a value can become `valid_value`
+/// through a polka that formed *after* it was originally proposed
+/// (`justification` is not part of `block_hash`, so changing it here
+/// is safe: `BlockEnvelope::block_hash` delegates to `header.
+/// block_hash` alone, and `verify_body_matches_header` never looks at
+/// `justification` either).
+fn re_propose_valid_value(
+    ctx: &mut Ctx,
+    for_round: Round,
+    mut envelope: BlockEnvelope,
+    valid_qc: QuorumCertificate,
+) -> NodeResult<ConsensusAction> {
+    envelope.justification = Some(valid_qc.clone());
+    let block_hash = envelope.block_hash()?;
+    let transactions_for_engine = envelope.body.transactions.clone();
+    ctx.pending_envelopes.insert(block_hash, envelope.clone());
+
+    let round_claim = ProposalRoundClaimV1 {
+        chain_id: envelope.header.chain_id,
+        network_id: envelope.header.network_id,
+        for_round,
+        block_hash,
+    };
+    let proposer_signature = SignatureEnvelope {
+        algorithm_id: ctx.consensus_keypair.key_descriptor().algorithm_id(),
+        key_reference: None,
+        signature: ctx
+            .consensus_keypair
+            .sign(&round_claim.signing_digest()?)
+            .to_vec(),
+    };
+    broadcast(
+        ctx,
+        Channel::Consensus,
+        MessageType::ConsensusProposal,
+        ConsensusProposalMessageV1 {
+            envelope,
+            for_round,
+            proposer_signature,
+        }
+        .encode()?,
+    )?;
+    let valid_round = valid_qc.round;
+    Ok(ctx.engine.handle_proposal(
+        for_round,
+        block_hash,
+        transactions_for_engine,
+        Some(valid_round),
+        Some(valid_qc),
+        true,
+    )?)
+}
+
+/// The pre-ADR-0049 path, unchanged in substance: build a brand new
+/// block from this node's own mempool and propose it fresh, with no
+/// `justification` (nothing has been validated/locked yet to justify
+/// at this round).
+fn propose_fresh_block(
+    ctx: &mut Ctx,
+    height: BlockHeight,
+    round: Round,
+) -> NodeResult<ConsensusAction> {
+    // ADR-0045, "Decided: Block Building (Proposer)" -- select from
+    // this node's own mempool, then actually run the result through
+    // `apply_block` for real (not a second, separate simulation):
+    // `select_for_block` already ran this exact check per candidate,
+    // but re-deriving `result` from the final selection here, rather
+    // than threading it out of `select_for_block` itself, keeps "what
+    // got selected" and "what the real receipts/roots are" from two
+    // different internal code paths that could silently drift apart.
+    let selected = ctx
+        .mempool
+        .select_for_block(&ctx.store, height, &ctx.records);
+    let application = apply_block(&selected, &ctx.store, height, &ctx.records)?;
+    let empty_table = EmptyHashTable::build()?;
+    let write_set: Vec<Write> = application
+        .applied
+        .iter()
+        .flat_map(|applied| applied.write_set.clone())
+        .collect();
+    let state_enumerator = ExcludingGenesisMarker {
+        inner: &ctx.store,
+        excluded: genesis_marker_key()?,
+    };
+    let state_root = compute_post_state_root(&state_enumerator, &write_set, &empty_table)?;
+
+    let body = BlockBody {
+        body_version: BODY_VERSION_1,
+        transactions: selected,
+        receipts: application
+            .applied
+            .iter()
+            .map(|applied| applied.receipt)
+            .collect(),
+        evidence: Vec::new(),
+        extra_data: Vec::new(),
+    };
+    let header = build_block_header(ctx, height, round, &body, state_root)?;
+    let block_hash = header.block_hash()?;
+    // `body` moves into `envelope` just below; the engine's own
+    // `proposed_blocks` cache (consulted later by
+    // `commit_finalized_block`, once this block actually finalizes)
+    // needs its own, separate copy of exactly the same transactions.
+    let transactions_for_engine = body.transactions.clone();
+    let envelope = BlockEnvelope {
+        block_version: BLOCK_VERSION_1,
+        header,
+        body,
+        justification: None,
+    };
+    ctx.pending_envelopes.insert(block_hash, envelope.clone());
+    let round_claim = ProposalRoundClaimV1 {
+        chain_id: envelope.header.chain_id,
+        network_id: envelope.header.network_id,
+        for_round: round,
+        block_hash,
+    };
+    let proposer_signature = SignatureEnvelope {
+        algorithm_id: ctx.consensus_keypair.key_descriptor().algorithm_id(),
+        key_reference: None,
+        signature: ctx
+            .consensus_keypair
+            .sign(&round_claim.signing_digest()?)
+            .to_vec(),
+    };
+    broadcast(
+        ctx,
+        Channel::Consensus,
+        MessageType::ConsensusProposal,
+        ConsensusProposalMessageV1 {
+            envelope,
+            for_round: round,
+            proposer_signature,
+        }
+        .encode()?,
+    )?;
+    Ok(ctx
+        .engine
+        .handle_proposal(round, block_hash, transactions_for_engine, None, None, true)?)
 }
 
 /// Casts and broadcasts `vote_type`, then — if this node's own vote
@@ -2574,10 +2698,16 @@ mod tests {
             justification: None,
         };
         let block_hash = envelope.block_hash()?;
+        let round_claim = ProposalRoundClaimV1 {
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            for_round: Round::new(ROUND),
+            block_hash,
+        };
         let signature = SignatureEnvelope {
             algorithm_id: keypair.key_descriptor().algorithm_id(),
             key_reference: None,
-            signature: keypair.sign(&block_hash).to_vec(),
+            signature: keypair.sign(&round_claim.signing_digest()?).to_vec(),
         };
         Ok((envelope, signature))
     }
@@ -2665,6 +2795,7 @@ mod tests {
         )?;
         let expected_hash = envelope.block_hash()?;
         let message = ConsensusProposalMessageV1 {
+            for_round: envelope.header.round,
             envelope,
             proposer_signature,
         };
@@ -2684,9 +2815,13 @@ mod tests {
     #[test]
     fn rejects_a_validator_that_is_not_this_rounds_legitimate_proposer() -> NodeResult<()> {
         let fixture = fixture()?;
-        // Validator A's own real key, correctly self-signed -- a valid
-        // signature from a real, registered validator who is simply
-        // not the proposer this exact (height, round) selects.
+        // A real, self-consistent signature from a validator who is simply
+        // not the proposer this exact (height, round) selects. ADR-0049:
+        // `verify_proposal` resolves the expected signer purely from
+        // (height, for_round) via `round_proposer`, then checks the
+        // signature against *that* validator's key -- so a different
+        // validator's otherwise-valid signature is rejected as a signature
+        // mismatch, the same path a tampered signature takes.
         let impostor_id = [0x10_u8; 32];
         let impostor_keypair = Ed25519KeyPair::from_seed(KeyRole::ValidatorConsensus, impostor_id);
         let (envelope, proposer_signature) = signed_envelope(
@@ -2698,6 +2833,7 @@ mod tests {
             Vec::new(),
         )?;
         let message = ConsensusProposalMessageV1 {
+            for_round: envelope.header.round,
             envelope,
             proposer_signature,
         };
@@ -2710,7 +2846,7 @@ mod tests {
             &[],
             (PARENT, UnixTimeMillis::from_millis(PARENT_TIMESTAMP_MS)),
         );
-        assert!(result.is_err_and(|reason| reason.contains("legitimate proposer")));
+        assert!(result.is_err_and(|reason| reason.contains("signature invalid")));
         Ok(())
     }
 
@@ -2727,6 +2863,7 @@ mod tests {
         )?;
         proposer_signature.signature[0] ^= 0xff;
         let message = ConsensusProposalMessageV1 {
+            for_round: envelope.header.round,
             envelope,
             proposer_signature,
         };
@@ -2761,12 +2898,22 @@ mod tests {
         // own body.
         envelope.header.transactions_root = [0xaa; 32];
         let block_hash = envelope.block_hash()?;
+        let round_claim = ProposalRoundClaimV1 {
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            for_round: envelope.header.round,
+            block_hash,
+        };
         let proposer_signature = SignatureEnvelope {
             algorithm_id: fixture.legitimate_proposer.key_descriptor().algorithm_id(),
             key_reference: None,
-            signature: fixture.legitimate_proposer.sign(&block_hash).to_vec(),
+            signature: fixture
+                .legitimate_proposer
+                .sign(&round_claim.signing_digest()?)
+                .to_vec(),
         };
         let message = ConsensusProposalMessageV1 {
+            for_round: envelope.header.round,
             envelope,
             proposer_signature,
         };
@@ -2801,12 +2948,22 @@ mod tests {
         // catch it, only the real recomputation this test exercises.
         envelope.header.state_root = [0xee; 32];
         let block_hash = envelope.block_hash()?;
+        let round_claim = ProposalRoundClaimV1 {
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            for_round: envelope.header.round,
+            block_hash,
+        };
         let proposer_signature = SignatureEnvelope {
             algorithm_id: fixture.legitimate_proposer.key_descriptor().algorithm_id(),
             key_reference: None,
-            signature: fixture.legitimate_proposer.sign(&block_hash).to_vec(),
+            signature: fixture
+                .legitimate_proposer
+                .sign(&round_claim.signing_digest()?)
+                .to_vec(),
         };
         let message = ConsensusProposalMessageV1 {
+            for_round: envelope.header.round,
             envelope,
             proposer_signature,
         };
@@ -2835,6 +2992,7 @@ mod tests {
             Vec::new(),
         )?;
         let message = ConsensusProposalMessageV1 {
+            for_round: envelope.header.round,
             envelope,
             proposer_signature,
         };
@@ -2863,6 +3021,7 @@ mod tests {
             Vec::new(),
         )?;
         let message = ConsensusProposalMessageV1 {
+            for_round: envelope.header.round,
             envelope,
             proposer_signature,
         };
@@ -2920,6 +3079,7 @@ mod tests {
             ],
         });
         let message = ConsensusProposalMessageV1 {
+            for_round: envelope.header.round,
             envelope,
             proposer_signature,
         };
@@ -2951,6 +3111,7 @@ mod tests {
         )?;
         let expected_hash = envelope.block_hash()?;
         let message = ConsensusProposalMessageV1 {
+            for_round: envelope.header.round,
             envelope,
             proposer_signature,
         };
@@ -2989,12 +3150,22 @@ mod tests {
         envelope.body.receipts[0].status = ReceiptStatus::Failed;
         envelope.header.receipts_root = envelope.body.receipts_root()?;
         let block_hash = envelope.block_hash()?;
+        let round_claim = ProposalRoundClaimV1 {
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            for_round: envelope.header.round,
+            block_hash,
+        };
         let proposer_signature = SignatureEnvelope {
             algorithm_id: fixture.legitimate_proposer.key_descriptor().algorithm_id(),
             key_reference: None,
-            signature: fixture.legitimate_proposer.sign(&block_hash).to_vec(),
+            signature: fixture
+                .legitimate_proposer
+                .sign(&round_claim.signing_digest()?)
+                .to_vec(),
         };
         let message = ConsensusProposalMessageV1 {
+            for_round: envelope.header.round,
             envelope,
             proposer_signature,
         };
@@ -3063,12 +3234,22 @@ mod tests {
             justification: None,
         };
         let block_hash = envelope.block_hash()?;
+        let round_claim = ProposalRoundClaimV1 {
+            chain_id: CHAIN_ID,
+            network_id: NETWORK_ID,
+            for_round: envelope.header.round,
+            block_hash,
+        };
         let proposer_signature = SignatureEnvelope {
             algorithm_id: fixture.legitimate_proposer.key_descriptor().algorithm_id(),
             key_reference: None,
-            signature: fixture.legitimate_proposer.sign(&block_hash).to_vec(),
+            signature: fixture
+                .legitimate_proposer
+                .sign(&round_claim.signing_digest()?)
+                .to_vec(),
         };
         let message = ConsensusProposalMessageV1 {
+            for_round: envelope.header.round,
             envelope,
             proposer_signature,
         };

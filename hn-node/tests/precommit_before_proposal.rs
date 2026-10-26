@@ -45,8 +45,8 @@ use hn_network::ConsensusProposalMessageV1;
 use hn_node::GenesisManifest;
 use hn_state::{
     BLOCK_VERSION_1, BODY_VERSION_1, BlockBody, BlockEnvelope, BlockHeader, HEADER_VERSION_1,
-    QuorumCertificate, VoteSigningPayloadV1, VoteTargetType, VoteType, extra_data_hash,
-    list_empty_root, protocol_parameters_placeholder_hash,
+    ProposalRoundClaimV1, QuorumCertificate, VoteSigningPayloadV1, VoteTargetType, VoteType,
+    extra_data_hash, list_empty_root, protocol_parameters_placeholder_hash,
 };
 
 use support::{
@@ -237,14 +237,24 @@ fn height_one_proposal(
 ) -> TestResult<ConsensusProposalMessageV1> {
     let envelope = height_one_envelope(manifest, genesis_block_hash)?;
     let block_hash = envelope.block_hash()?;
+    let for_round = envelope.header.round;
     let proposer_keypair = validator_keypair(PROPOSER_INDEX);
+    let round_claim = ProposalRoundClaimV1 {
+        chain_id: manifest.chain_id,
+        network_id: manifest.network_id,
+        for_round,
+        block_hash,
+    };
     let proposer_signature = SignatureEnvelope {
         algorithm_id: proposer_keypair.key_descriptor().algorithm_id(),
         key_reference: None,
-        signature: proposer_keypair.sign(&block_hash).to_vec(),
+        signature: proposer_keypair
+            .sign(&round_claim.signing_digest()?)
+            .to_vec(),
     };
     Ok(ConsensusProposalMessageV1 {
         envelope,
+        for_round,
         proposer_signature,
     })
 }
